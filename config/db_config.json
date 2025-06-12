@@ -1,0 +1,6 @@
+{
+  "username": "root",
+  "password": "amr2025",
+  "dsn": "192.168.102.192:1521/orcl",
+  "lib_dir": "C:/oracle/instantclient_19_26"
+}
