@@ -1,0 +1,46 @@
+export interface ContextFile {
+  path: string;
+  content: string;
+  sizeBytes: number;
+}
+
+export interface ConsultRequest {
+  prompt: string;
+  files?: string[];
+  model?: string;
+  systemPrompt?: string;
+  cwd?: string;
+  maxFileSizeBytes?: number;
+  previousResponseId?: string;
+}
+
+export interface TokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+}
+
+export interface ProviderResponse {
+  responseId?: string;
+  text: string;
+  usage: TokenUsage;
+}
+
+export interface ConsultResult {
+  sessionId: string;
+  status: "completed" | "error";
+  model: string;
+  files: string[];
+  responseId?: string;
+  output: string;
+  usage: TokenUsage;
+  error?: string;
+}
+
+export interface SessionRecord extends ConsultResult {
+  createdAt: string;
+  completedAt?: string;
+  cwd: string;
+  prompt: string;
+  bundlePath: string;
+}
