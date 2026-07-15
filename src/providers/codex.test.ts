@@ -1,6 +1,34 @@
 import fs from "node:fs/promises";
 import { describe, expect, test, vi } from "vitest";
-import { CodexCliProvider, type CommandRunner } from "./codex.js";
+import {
+  CodexCliProvider,
+  resolveCommandInvocation,
+  type CommandRunner
+} from "./codex.js";
+
+describe("resolveCommandInvocation", () => {
+  test("runs the Codex JavaScript entrypoint directly on Windows", () => {
+    expect(
+      resolveCommandInvocation("codex", ["--version"], {
+        platform: "win32",
+        execPath: "C:/Program Files/nodejs/node.exe",
+        appData: "C:/Users/Test/AppData/Roaming"
+      })
+    ).toEqual({
+      command: "C:/Program Files/nodejs/node.exe",
+      args: ["C:/Users/Test/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js", "--version"]
+    });
+  });
+
+  test("keeps the command unchanged outside Windows", () => {
+    expect(
+      resolveCommandInvocation("codex", ["--version"], {
+        platform: "linux",
+        execPath: "/usr/bin/node"
+      })
+    ).toEqual({ command: "codex", args: ["--version"] });
+  });
+});
 
 describe("CodexCliProvider", () => {
   test("runs Codex read-only and ephemeral with the prompt on stdin", async () => {

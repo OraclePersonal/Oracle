@@ -66,9 +66,43 @@ Sessions are stored at:
 
 ## MCP
 
+Generate project-local MCP configuration:
+
+```bash
+node dist/cli.js setup-mcp --client claude-code
+node dist/cli.js setup-mcp --client codex
+node dist/cli.js setup-mcp --print
+```
+
+Or start the server directly:
+
 ```bash
 node dist/mcp.js
 ```
+
+The server exposes four focused tools:
+
+- `oracle_consult` — analyze configured or explicitly selected project files
+- `oracle_sessions` — list compact recent session summaries
+- `oracle_session_get` — retrieve metadata and output for one session
+- `oracle_doctor` — check configuration, workspace, provider, and authentication
+
+Optional `.oracle/config.json`:
+
+```json
+{
+  "provider": "codex",
+  "model": "gpt-5.4",
+  "include": ["src/**/*", "README.md", "package.json"],
+  "exclude": ["**/*.test.ts", "**/dist/**"],
+  "maxFileSizeBytes": 1000000,
+  "maxInputBytes": 5000000
+}
+```
+
+`oracle_consult` supports `review`, `debug`, `architecture`, `tests`, and
+`security` presets. Expected failures return stable `ORACLE_*` codes with an
+actionable suggestion and never include detected secret values.
 
 Example `.mcp.json`:
 
