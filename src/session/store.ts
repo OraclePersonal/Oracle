@@ -22,6 +22,8 @@ export class FileSessionStore {
     cwd: string;
     prompt: string;
     model: string;
+    provider?: string;
+    preset?: string;
     files: string[];
     bundle: string;
   }): Promise<SessionRecord> {
@@ -35,6 +37,8 @@ export class FileSessionStore {
       sessionId: input.id,
       status: "error",
       model: input.model,
+      provider: input.provider,
+      preset: input.preset,
       files: input.files,
       output: "",
       usage: {},

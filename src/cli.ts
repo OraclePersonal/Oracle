@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import "dotenv/config";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { ConsultService } from "./core/consult.js";
 import {
@@ -8,6 +10,12 @@ import {
   parseProviderName
 } from "./providers/factory.js";
 import { FileSessionStore } from "./session/store.js";
+import {
+  ensureProjectConfig,
+  generateMcpSetup,
+  writeMcpSetup,
+  type McpClient
+} from "./setup/mcp.js";
 
 const program = new Command()
   .name("oracle")
@@ -54,6 +62,32 @@ program
       console.log(`${check.ok ? "OK" : "FAIL"}  ${check.name}: ${check.detail}`);
     }
     process.exitCode = checks.every((check) => check.ok) ? 0 : 1;
+  });
+
+program
+  .command("setup-mcp")
+  .option("--client <client>", "Client: claude-code or codex", "claude-code")
+  .option("--cwd <path>", "Project root", process.cwd())
+  .option("--print", "Print generated configuration without writing")
+  .option("--force", "Replace an existing configuration")
+  .action(async (options) => {
+    if (options.client !== "claude-code" && options.client !== "codex") {
+      throw new Error("Expected --client claude-code or codex.");
+    }
+    const serverPath = fileURLToPath(new URL("./mcp.js", import.meta.url));
+    const file = generateMcpSetup({
+      root: path.resolve(options.cwd),
+      client: options.client as McpClient,
+      serverPath
+    });
+    if (options.print) {
+      console.log(file.content.trimEnd());
+      return;
+    }
+    const projectConfigPath = await ensureProjectConfig(path.resolve(options.cwd));
+    await writeMcpSetup(file, options.force);
+    console.log(`Created ${projectConfigPath}`);
+    console.log(`Created ${file.path}`);
   });
 
 program

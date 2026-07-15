@@ -17,11 +17,47 @@ export type CommandRunner = (
   options: { input?: string; cwd?: string }
 ) => Promise<CommandResult>;
 
+interface CommandEnvironment {
+  platform: NodeJS.Platform;
+  execPath: string;
+  appData?: string;
+}
+
+export function resolveCommandInvocation(
+  command: string,
+  args: string[],
+  environment: CommandEnvironment
+): { command: string; args: string[] } {
+  if (environment.platform !== "win32" || command !== "codex" || !environment.appData) {
+    return { command, args };
+  }
+  return {
+    command: environment.execPath,
+    args: [
+      path.join(
+        environment.appData,
+        "npm",
+        "node_modules",
+        "@openai",
+        "codex",
+        "bin",
+        "codex.js"
+      ).replaceAll("\\", "/"),
+      ...args
+    ]
+  };
+}
+
 export const runCommand: CommandRunner = (command, args, options) =>
   new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const invocation = resolveCommandInvocation(command, args, {
+      platform: process.platform,
+      execPath: process.execPath,
+      appData: process.env.APPDATA
+    });
+    const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd,
-      shell: process.platform === "win32",
+      shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });
     let stdout = "";

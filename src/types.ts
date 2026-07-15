@@ -8,9 +8,12 @@ export interface ConsultRequest {
   prompt: string;
   files?: string[];
   model?: string;
+  provider?: string;
+  preset?: string;
   systemPrompt?: string;
   cwd?: string;
   maxFileSizeBytes?: number;
+  maxInputBytes?: number;
   previousResponseId?: string;
 }
 
@@ -30,6 +33,8 @@ export interface ConsultResult {
   sessionId: string;
   status: "completed" | "error";
   model: string;
+  provider?: string;
+  preset?: string;
   files: string[];
   responseId?: string;
   output: string;

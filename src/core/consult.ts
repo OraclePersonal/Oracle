@@ -9,6 +9,7 @@ import {
 } from "../context/bundle.js";
 import type { Provider } from "../providers/provider.js";
 import { FileSessionStore } from "../session/store.js";
+import { OracleError } from "../errors.js";
 
 function createSessionId(prompt: string): string {
   const slug =
@@ -33,12 +34,32 @@ export class ConsultService {
       cwd,
       maxFileSizeBytes: request.maxFileSizeBytes
     });
+    if (files.length === 0) {
+      throw new OracleError(
+        "ORACLE_NO_FILES",
+        "No files matched the consultation request.",
+        "Check the project include patterns or pass existing project files."
+      );
+    }
+
     const secretFindings = scanFilesForSecrets(files);
     if (secretFindings.length > 0) {
-      const summary = secretFindings
-        .map((finding) => `${finding.path}:${finding.line} (${finding.detector})`)
-        .join(", ");
-      throw new Error(`Potential secrets detected: ${summary}`);
+      throw new OracleError(
+        "ORACLE_SECRET_DETECTED",
+        "Potential secrets were detected in selected files.",
+        "Remove the files from the selection or replace credentials with placeholders.",
+        { findings: secretFindings }
+      );
+    }
+
+    const inputBytes = Buffer.byteLength(request.prompt) + files.reduce((sum, file) => sum + file.sizeBytes, 0);
+    if (inputBytes > (request.maxInputBytes ?? 5_000_000)) {
+      throw new OracleError(
+        "ORACLE_INPUT_TOO_LARGE",
+        "The selected input exceeds the configured size limit.",
+        "Select fewer or smaller files.",
+        { inputBytes, maxInputBytes: request.maxInputBytes ?? 5_000_000 }
+      );
     }
 
     const systemPrompt = request.systemPrompt?.trim() || DEFAULT_SYSTEM_PROMPT;
@@ -55,6 +76,8 @@ export class ConsultService {
       cwd,
       prompt: request.prompt,
       model,
+      provider: request.provider ?? this.provider.id,
+      preset: request.preset,
       files: files.map((file) => file.path),
       bundle
     });
