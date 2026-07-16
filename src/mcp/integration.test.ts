@@ -136,4 +136,34 @@ describe("Oracle MCP tools", () => {
       expect.arrayContaining([expect.objectContaining({ name: "provider" })])
     );
   });
+
+  test("identity_setup accepts a single freeform string as well as an array for list fields", async () => {
+    // Found via real usage: preferences/habits/goals are stored as arrays,
+    // but a single descriptive string is the natural first thing an agent
+    // tries — it must not hard-fail, and should split into discrete items
+    // rather than being stored as one giant entry.
+    const stringForm = await client.callTool({
+      name: "oracle_identity_setup",
+      arguments: { name: "string-agent", preferences: "prefers concise diffs, likes tabs" }
+    });
+    expect(stringForm.isError).not.toBe(true);
+
+    const shown = await client.callTool({ name: "oracle_identity_show", arguments: {} });
+    expect((shown.structuredContent as { identity: { preferences: string[] } }).identity.preferences).toEqual([
+      "prefers concise diffs",
+      "likes tabs"
+    ]);
+
+    const arrayForm = await client.callTool({
+      name: "oracle_identity_setup",
+      arguments: { name: "array-agent", goals: ["ship feature X", "fix bug Y"] }
+    });
+    expect(arrayForm.isError).not.toBe(true);
+
+    const shownArray = await client.callTool({ name: "oracle_identity_show", arguments: {} });
+    expect((shownArray.structuredContent as { identity: { goals: string[] } }).identity.goals).toEqual([
+      "ship feature X",
+      "fix bug Y"
+    ]);
+  });
 });

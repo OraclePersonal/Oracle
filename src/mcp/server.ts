@@ -29,6 +29,30 @@ interface OracleServerDependencies {
   providerChecks?: typeof checkProvider;
 }
 
+/**
+ * Accepts either a single string or an array of strings, always normalizing
+ * to an array. Free-text-shaped fields like "preferences"/"habits"/"goals"
+ * read naturally to an LLM caller as a single descriptive string ("prefers
+ * concise diffs") even though the stored shape is a list of discrete items
+ * — rejecting the string form with a bare type error is a common first-call
+ * failure. Splitting on commas/semicolons/newlines gives a single freeform
+ * sentence a reasonable chance of becoming several discrete items instead
+ * of one giant one, without forcing the caller to pre-structure it.
+ */
+function stringOrStringArray() {
+  return z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return undefined;
+      if (Array.isArray(value)) return value;
+      return value
+        .split(/[,;\n]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+    });
+}
+
 const MESSAGE_KINDS = [
   "message", "note", "question", "review-request", "review-result",
   "proposal", "proposal-response", "wake", "end", "task",
@@ -297,9 +321,9 @@ export function registerOracleTools({
         title: z.string().optional(),
         role: z.string().optional(),
         description: z.string().optional(),
-        preferences: z.array(z.string()).optional(),
-        habits: z.array(z.string()).optional(),
-        goals: z.array(z.string()).optional()
+        preferences: stringOrStringArray(),
+        habits: stringOrStringArray(),
+        goals: stringOrStringArray()
       }
     },
     async (params) => {
