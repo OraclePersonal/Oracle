@@ -39,7 +39,12 @@ export class OrchestratorFactory {
           port: info.port,
         });
         console.debug(`[orchestrator] memory: MCP backend ready at ${info.endpoint}`);
-        return new McpMemoryAdapter(info.endpoint);
+        try {
+          return new McpMemoryAdapter(info.endpoint);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          console.debug(`[orchestrator] memory MCP client init failed: ${reason} — falling back to file adapter`);
+        }
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -71,7 +76,12 @@ export class OrchestratorFactory {
           port: info.port,
         });
         console.debug(`[orchestrator] messages: MCP backend ready at ${info.endpoint}`);
-        return new McpMessagesAdapter(info.endpoint);
+        try {
+          return new McpMessagesAdapter(info.endpoint);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          console.debug(`[orchestrator] messages MCP client init failed: ${reason} — falling back to file adapter`);
+        }
       }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
