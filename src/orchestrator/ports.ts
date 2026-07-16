@@ -49,6 +49,15 @@ export interface MessagesPort {
   getUnread(agent: string, sinceId?: string): Promise<MessageStoreEntry[]>;
 
   getThread(rootId: string): Promise<MessageStoreEntry[]>;
+
+  /**
+   * Release any underlying resources (e.g. an open MCP HTTP/SSE transport).
+   * File-backed adapters have nothing to close and may omit this. Callers
+   * should invoke it in a `finally` after a command finishes: on Windows a
+   * still-open MCP streamable-http handle makes process teardown abort with a
+   * libuv "UV_HANDLE_CLOSING" assertion instead of exiting cleanly.
+   */
+  close?(): Promise<void>;
 }
 
 export type ServiceType = "memory" | "messages";

@@ -281,10 +281,14 @@ peerCmd
   .action(async (options) => {
     const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
     const mesh = await orchestrator.createMessagesAdapter();
-    const msg = await mesh.send(options.from, options.to, options.body, options.kind as any, {
-      subject: options.subject
-    });
-    console.log(`Sent: ${msg.id}`);
+    try {
+      const msg = await mesh.send(options.from, options.to, options.body, options.kind as any, {
+        subject: options.subject
+      });
+      console.log(`Sent: ${msg.id}`);
+    } finally {
+      await mesh.close?.();
+    }
   });
 
 peerCmd
@@ -296,13 +300,17 @@ peerCmd
   .action(async (options) => {
     const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
     const mesh = await orchestrator.createMessagesAdapter();
-    const msgs = await mesh.getMessages({
-      agent: options.agent,
-      kind: options.kind as any,
-      limit: Number(options.limit)
-    });
-    for (const m of msgs) {
-      console.log(`${m.id.slice(0, 22)}  ${m.sender.padEnd(12)} → ${m.recipient.padEnd(12)}  ${(m.subject ?? m.body).slice(0, 50)}`);
+    try {
+      const msgs = await mesh.getMessages({
+        agent: options.agent,
+        kind: options.kind as any,
+        limit: Number(options.limit)
+      });
+      for (const m of msgs) {
+        console.log(`${m.id.slice(0, 22)}  ${m.sender.padEnd(12)} → ${m.recipient.padEnd(12)}  ${(m.subject ?? m.body).slice(0, 50)}`);
+      }
+    } finally {
+      await mesh.close?.();
     }
   });
 
@@ -317,13 +325,17 @@ peerCmd
     const mesh = await orchestrator.createMessagesAdapter();
     let cursor = options.since;
     console.log(`Monitoring messages for ${options.agent}...`);
-    for (;;) {
-      const msgs = await mesh.getUnread(options.agent, cursor);
-      for (const m of msgs) {
-        console.log(`[${m.kind}] ${m.sender}: ${(m.subject ?? m.body).slice(0, 80)}`);
-        cursor = m.id;
+    try {
+      for (;;) {
+        const msgs = await mesh.getUnread(options.agent, cursor);
+        for (const m of msgs) {
+          console.log(`[${m.kind}] ${m.sender}: ${(m.subject ?? m.body).slice(0, 80)}`);
+          cursor = m.id;
+        }
+        await new Promise((r) => setTimeout(r, Number(options.interval)));
       }
-      await new Promise((r) => setTimeout(r, Number(options.interval)));
+    } finally {
+      await mesh.close?.();
     }
   });
 
@@ -510,4 +522,22 @@ identityCmd
     console.log("Identity cleared.");
   });
 
-await program.parseAsync(process.argv);
+try {
+  await program.parseAsync(process.argv);
+} catch (err) {
+  // A rejected command action would otherwise surface as a top-level
+  // unhandled rejection: Node prints the raw stack and, because orchestrated
+  // commands may leave an MCP HTTP transport/socket handle open, aborts with
+  // a libuv "UV_HANDLE_CLOSING" assertion instead of a clean exit. Convert it
+  // into a friendly one-line error and a non-zero exit. MCP errors from a
+  // sidecar (e.g. "Agent identity not specified" when listing the mesh with
+  // no --agent) are expected user-facing conditions, not crashes.
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`Error: ${message}`);
+  // Set exitCode and let the event loop drain instead of calling
+  // process.exit(): a synchronous exit while an MCP streamable-http handle is
+  // still tearing down triggers a libuv "UV_HANDLE_CLOSING" assertion on
+  // Windows. Command actions close their adapters in a `finally`, so the loop
+  // has nothing left to keep it alive and exits cleanly with this code.
+  process.exitCode = 1;
+}

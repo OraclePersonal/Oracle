@@ -254,4 +254,20 @@ export class McpMessagesAdapter implements MessagesPort {
     if (!parsed.success) throw new Error(parsed.error || "get_thread failed");
     return (parsed.messages || []) as MessageStoreEntry[];
   }
+
+  /**
+   * Close the MCP client and its streamable-http transport. Without this the
+   * open SSE handle keeps a libuv async handle alive, and process teardown on
+   * Windows aborts with a "UV_HANDLE_CLOSING" assertion. Best-effort: a close
+   * failure must never mask the command's own result/error.
+   */
+  async close(): Promise<void> {
+    if (!this.connected) return;
+    this.connected = false;
+    try {
+      await this.client.close();
+    } catch {
+      /* ignore — already gone or never fully connected */
+    }
+  }
 }
