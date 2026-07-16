@@ -164,6 +164,12 @@ export class ProcessSupervisor {
       const pid = proc.pid;
       if (!pid) throw new Error("Failed to get process ID");
 
+      // Handle unhandled errors from the spawned process (e.g., binary not found)
+      // Suppress them since we're checking health separately
+      proc.on("error", () => {
+        /* ignore spawn errors */
+      });
+
       // Unref so parent doesn't wait for this process
       proc.unref();
       this.activeProcesses.set(service, { process: proc, startTime: Date.now() });
