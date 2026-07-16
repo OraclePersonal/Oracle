@@ -257,7 +257,15 @@ export class ProcessSupervisor {
         env: {
           ...process.env,
           ...(service === "memory" && { ORACLE_MEMORY_PORT: String(port), ORACLE_MEMORY_TRANSPORT: "http" }),
-          ...(service === "messages" && { ORACLE_PORT: String(port), ORACLE_TRANSPORT: "http" }),
+          // Give the shared messages daemon a default agent identity so
+          // identity-scoped tools (sync_messages, etc.) resolve without every
+          // caller passing --agent. "oracle" matches the CLI's default sender.
+          // An explicit ORACLE_SELF in the environment still wins.
+          ...(service === "messages" && {
+            ORACLE_PORT: String(port),
+            ORACLE_TRANSPORT: "http",
+            ORACLE_SELF: process.env.ORACLE_SELF || "oracle",
+          }),
         },
       });
 
