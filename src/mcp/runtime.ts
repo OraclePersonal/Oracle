@@ -6,7 +6,7 @@ import { ConsultService } from "../core/consult.js";
 import { createProvider } from "../providers/factory.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
-import { AgoyaAdapter } from "../memory/adapter.js";
+import { MemoryAdapter } from "../memory/adapter.js";
 import { registerOracleTools } from "./server.js";
 
 export async function createOracleMcpServer(
@@ -27,7 +27,7 @@ export async function createOracleMcpServer(
     providerId: config.provider,
     skills,
     oracles,
-    memory: new AgoyaAdapter(workspaceRoot)
+    memory: new MemoryAdapter(workspaceRoot)
   });
   return server;
 }

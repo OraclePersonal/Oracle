@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 
-// ponytail: writes directly to .agora/ format — compatible with oracle-messages bus.
+// ponytail: writes directly to .oracle/messages/ format — compatible with oracle-messages bus.
 // oracle-messages server reads the same files, so mesh is shared transparently.
 
 export type MessageKind =
@@ -10,7 +10,7 @@ export type MessageKind =
   | "proposal" | "proposal-response" | "wake" | "end" | "task"
   | "task-assign" | "task-update" | "task-complete" | "task-fail";
 
-export interface AgoraMessage {
+export interface MessageStoreEntry {
   id: string;
   sender: string;
   recipient: string;
@@ -32,11 +32,11 @@ function generateId(): string {
   return `${date}-${time}-${micros}-${rand}`;
 }
 
-export class AgoraMeshAdapter {
+export class MessagesAdapter {
   constructor(private readonly rootDir: string) {}
 
   private messagesDir(): string {
-    return path.join(this.rootDir, ".agora", "messages");
+    return path.join(this.rootDir, ".oracle", "messages");
   }
 
   private async ensureDir(): Promise<void> {
@@ -49,9 +49,9 @@ export class AgoraMeshAdapter {
     body: string,
     kind: MessageKind = "message",
     opts?: { subject?: string; parentId?: string }
-  ): Promise<AgoraMessage> {
+  ): Promise<MessageStoreEntry> {
     await this.ensureDir();
-    const msg: AgoraMessage = {
+    const msg: MessageStoreEntry = {
       id: generateId(),
       sender,
       recipient,
@@ -72,21 +72,21 @@ export class AgoraMeshAdapter {
     body: string,
     kind: MessageKind = "note",
     opts?: { subject?: string }
-  ): Promise<AgoraMessage> {
+  ): Promise<MessageStoreEntry> {
     return this.send(sender, "*", body, kind, opts);
   }
 
   async getMessages(
     filter?: { agent?: string; kind?: MessageKind; limit?: number }
-  ): Promise<AgoraMessage[]> {
+  ): Promise<MessageStoreEntry[]> {
     const dir = this.messagesDir();
     try {
       const files = await fs.readdir(dir);
-      const messages: AgoraMessage[] = [];
+      const messages: MessageStoreEntry[] = [];
       for (const file of files.slice(-100)) {
         if (!file.endsWith(".json")) continue;
         try {
-          const msg = JSON.parse(await fs.readFile(path.join(dir, file), "utf8")) as AgoraMessage;
+          const msg = JSON.parse(await fs.readFile(path.join(dir, file), "utf8")) as MessageStoreEntry;
           if (filter?.agent && msg.recipient !== filter.agent && msg.recipient !== "*") continue;
           if (filter?.kind && msg.kind !== filter.kind) continue;
           messages.push(msg);
@@ -99,13 +99,13 @@ export class AgoraMeshAdapter {
     }
   }
 
-  async getUnread(agent: string, sinceId?: string): Promise<AgoraMessage[]> {
+  async getUnread(agent: string, sinceId?: string): Promise<MessageStoreEntry[]> {
     const all = await this.getMessages({ agent });
     if (!sinceId) return all.slice(-10);
     return all.filter((m) => m.id > sinceId);
   }
 
-  async getThread(rootId: string): Promise<AgoraMessage[]> {
+  async getThread(rootId: string): Promise<MessageStoreEntry[]> {
     const all = await this.getMessages();
     return all.filter((m) => m.id === rootId || m.parent_id === rootId || m.in_reply_to === rootId);
   }

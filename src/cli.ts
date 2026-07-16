@@ -22,13 +22,13 @@ import { AnthropicOAuthClient } from "./auth/anthropic-oauth.js";
 import { TokenStore } from "./auth/store.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { OracleRegistry } from "./oracles/registry.js";
-import { AgoyaAdapter } from "./memory/adapter.js";
-import { AgoraMeshAdapter } from "./peer/mesh.js";
+import { MemoryAdapter } from "./memory/adapter.js";
+import { MessagesAdapter } from "./peer/mesh.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import * as peer from "./peer/peer.js";
 
 function agoyaDir(cwd?: string): string {
-  return process.env.AGOYA_ROOT_DIR ?? cwd ?? process.cwd();
+  return process.env.AGOYA_ROOT_DIR ?? process.env.ORACLE_MEMORY_ROOT_DIR ?? cwd ?? process.cwd();
 }
 
 const homeDir = (): string =>
@@ -85,7 +85,7 @@ program
 
     const service = new ConsultService(createProvider(parsedProvider));
     const systemPrompt = skillReg.compose(skillName, DEFAULT_SYSTEM_PROMPT);
-    const agoya = new AgoyaAdapter(cwd);
+    const agoya = new MemoryAdapter(cwd);
 
     // Build memory context if oracle has memory enabled
     let finalSystemPrompt = systemPrompt;
@@ -221,7 +221,7 @@ memCmd
   .argument("[agent]", "Agent name (default: all)")
   .option("-n, --limit <number>", "Entries", "10")
   .action(async (agent, options) => {
-    const agoya = new AgoyaAdapter(process.cwd());
+    const agoya = new MemoryAdapter(process.cwd());
     const entries = await agoya.recall(undefined, agent ?? undefined, Number(options.limit));
     if (!entries.length) { console.log("No memory entries."); return; }
     for (const e of entries) {
@@ -234,7 +234,7 @@ memCmd
   .description("Clear working memory for an agent (or all)")
   .argument("[agent]", "Agent name (omit for all)")
   .action(async (agent) => {
-    const agoya = new AgoyaAdapter(process.cwd());
+    const agoya = new MemoryAdapter(process.cwd());
     const count = await agoya.clearWorking(agent ?? undefined);
     console.log(`Cleared ${count} working memory entries.`);
   });
@@ -273,7 +273,7 @@ peerCmd
   .option("--kind <kind>", "Message kind", "message")
   .option("--subject <subject>", "Message subject")
   .action(async (options) => {
-    const mesh = new AgoraMeshAdapter(process.cwd());
+    const mesh = new MessagesAdapter(process.cwd());
     const msg = await mesh.send(options.from, options.to, options.body, options.kind as any, {
       subject: options.subject
     });
@@ -287,7 +287,7 @@ peerCmd
   .option("--kind <kind>", "Filter by kind")
   .option("-n, --limit <number>", "Messages", "20")
   .action(async (options) => {
-    const mesh = new AgoraMeshAdapter(process.cwd());
+    const mesh = new MessagesAdapter(process.cwd());
     const msgs = await mesh.getMessages({
       agent: options.agent,
       kind: options.kind as any,
@@ -305,7 +305,7 @@ peerCmd
   .option("--since <id>", "Start from message id")
   .option("-i, --interval <ms>", "Poll interval (ms)", "5000")
   .action(async (options) => {
-    const mesh = new AgoraMeshAdapter(process.cwd());
+    const mesh = new MessagesAdapter(process.cwd());
     let cursor = options.since;
     console.log(`Monitoring messages for ${options.agent}...`);
     for (;;) {

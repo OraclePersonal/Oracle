@@ -10,7 +10,7 @@ import { OracleError, serializeOracleError } from "../errors.js";
 import { checkProvider } from "../providers/factory.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
-import { AgoyaAdapter } from "../memory/adapter.js";
+import { MemoryAdapter } from "../memory/adapter.js";
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -20,7 +20,7 @@ interface OracleServerDependencies {
   providerId: string;
   skills: SkillRegistry;
   oracles: OracleRegistry;
-  memory: AgoyaAdapter;
+  memory: MemoryAdapter;
   providerChecks?: typeof checkProvider;
 }
 
@@ -229,7 +229,7 @@ export function registerOracleTools({
     "oracle_memory_list",
     {
       title: "List Memory",
-      description: "Show memory entries from the .agoya store.",
+      description: "Show memory entries from the .oracle-memory store.",
       inputSchema: { agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(100).default(10) }
     },
     async ({ agent, type, limit }) => {

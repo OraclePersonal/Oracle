@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 
-// ponytail: writes directly to .agoya/ format — zero deps, no MCP needed.
+// ponytail: writes directly to .oracle-memory/ format — zero deps, no MCP needed.
 // oracle-memory server reads the same files, so memory is shared transparently.
 
 export type MemoryType = "fact" | "insight" | "chunk" | "working";
 
-export interface AgoyaMemoryEntry {
+export interface MemoryStoreEntry {
   id: string;
   ts: string;
   agent: string;
@@ -22,6 +22,7 @@ export interface AgoyaMemoryEntry {
   consolidatedBy?: string;
 }
 
+const DATA_DIR = ".oracle-memory";
 const TYPE_DIR: Record<MemoryType, string> = {
   fact: "facts",
   insight: "insights",
@@ -38,21 +39,21 @@ function generateId(): string {
   return `${date}-${time}-${micros}-${rand}`;
 }
 
-export class AgoyaAdapter {
+export class MemoryAdapter {
   constructor(private readonly rootDir: string) {}
 
-  private agoyaDir(): string {
-    return path.join(this.rootDir, ".agoya");
+  private dataDir(): string {
+    return path.join(this.rootDir, DATA_DIR);
   }
 
   private typeDir(type: MemoryType): string {
-    return path.join(this.agoyaDir(), TYPE_DIR[type]);
+    return path.join(this.dataDir(), TYPE_DIR[type]);
   }
 
   private async ensureDirs(): Promise<void> {
-    await fs.mkdir(this.agoyaDir(), { recursive: true });
+    await fs.mkdir(this.dataDir(), { recursive: true });
     for (const dir of Object.values(TYPE_DIR)) {
-      await fs.mkdir(path.join(this.agoyaDir(), dir), { recursive: true });
+      await fs.mkdir(path.join(this.dataDir(), dir), { recursive: true });
     }
   }
 
@@ -61,9 +62,9 @@ export class AgoyaAdapter {
     type: MemoryType,
     content: string,
     opts?: { tags?: string[]; meta?: Record<string, unknown>; importance?: number }
-  ): Promise<AgoyaMemoryEntry> {
+  ): Promise<MemoryStoreEntry> {
     await this.ensureDirs();
-    const entry: AgoyaMemoryEntry = {
+    const entry: MemoryStoreEntry = {
       id: generateId(),
       ts: new Date().toISOString(),
       agent,
@@ -80,19 +81,22 @@ export class AgoyaAdapter {
     return entry;
   }
 
-  async recall(type?: MemoryType, agent?: string, limit = 20): Promise<AgoyaMemoryEntry[]> {
-    const dirs = type ? [this.typeDir(type)] : Object.values(TYPE_DIR).map((d) => path.join(this.agoyaDir(), d));
-    const entries: AgoyaMemoryEntry[] = [];
+  async recall(type?: MemoryType, agent?: string, limit = 20): Promise<MemoryStoreEntry[]> {
+    const dirs = type
+      ? [this.typeDir(type)]
+      : Object.values(TYPE_DIR).map((d) => path.join(this.dataDir(), d));
+    const entries: MemoryStoreEntry[] = [];
     for (const dir of dirs) {
       try {
         const files = await fs.readdir(dir);
-        for (const file of files.slice(-limit)) {
+        for (const file of files.slice(-(limit * 2))) {
           if (!file.endsWith(".json")) continue;
-          const raw = await fs.readFile(path.join(dir, file), "utf8");
-          const entry = JSON.parse(raw) as AgoyaMemoryEntry;
-          if (entry.archived) continue;
-          if (agent && entry.agent !== agent) continue;
-          entries.push(entry);
+          try {
+            const entry = JSON.parse(await fs.readFile(path.join(dir, file), "utf8")) as MemoryStoreEntry;
+            if (entry.archived) continue;
+            if (agent && entry.agent !== agent) continue;
+            entries.push(entry);
+          } catch { /* skip corrupt */ }
         }
       } catch { /* dir not ready */ }
     }
@@ -113,9 +117,10 @@ export class AgoyaAdapter {
       for (const file of files) {
         if (!file.endsWith(".json")) continue;
         if (agent) {
-          const raw = await fs.readFile(path.join(dir, file), "utf8");
-          const entry = JSON.parse(raw) as AgoyaMemoryEntry;
-          if (entry.agent !== agent) continue;
+          try {
+            const entry = JSON.parse(await fs.readFile(path.join(dir, file), "utf8")) as MemoryStoreEntry;
+            if (entry.agent !== agent) continue;
+          } catch { continue; }
         }
         await fs.unlink(path.join(dir, file));
         count++;

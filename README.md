@@ -117,7 +117,7 @@ oracle consult -p "Review" --provider anthropic --model claude-sonnet-4-20250514
 
 ### Peer mesh (oracle-messages)
 
-Messages are stored in `.agora/` format, compatible with
+Messages are stored in `.oracle/messages/` format, compatible with
 [oracle-messages](https://github.com/JonusNattapong/oracle-messages) message bus.
 
 ```bash
@@ -130,7 +130,7 @@ oracle peer import oracle.json
 
 ### Memory (oracle-memory)
 
-Memory entries stored in `.agoya/` format, compatible with
+Memory entries stored in `.oracle-memory/` format, compatible with
 [oracle-memory](https://github.com/JonusNattapong/oracle-memory) memory server.
 
 ```bash
@@ -159,7 +159,7 @@ oracle setup-mcp --client codex
 | `oracle_skills` | List available skills |
 | `oracle_oracle_list` | List registered oracle profiles |
 | `oracle_oracle_register` | Create a named oracle |
-| `oracle_memory_list` | List memory entries from `.agoya` |
+| `oracle_memory_list` | List memory entries from `.oracle-memory` |
 | `oracle_memory_clear` | Clear working memory |
 | `oracle_sessions` | List recent sessions |
 | `oracle_session_get` | Get session details |
@@ -198,12 +198,12 @@ oracle setup-mcp --client codex
 │   ├── config.json
 │   ├── workshop.json
 │   └── skills/      # Project-local skills
-├── .agoya/          # Memory (compatible with oracle-memory)
+├── .oracle-memory/  # Memory (compatible with oracle-memory)
 │   ├── facts/
 │   ├── insights/
 │   ├── chunks/
 │   └── working/
-└── .agora/          # Messages (compatible with oracle-messages)
+└── .oracle/messages/ # Messages (compatible with oracle-messages)
     └── messages/
 ```
 
@@ -216,11 +216,11 @@ oracle setup-mcp --client codex
 | `OPENAI_API_KEY` | — | OpenAI provider |
 | `ANTHROPIC_API_KEY` | — | Anthropic provider |
 | `ANTHROPIC_CLIENT_ID` | — | Anthropic OAuth client ID |
-| `AGOYA_ROOT_DIR` | `cwd` | Memory root (oracle-memory compatible) |
+| `AGOYA_ROOT_DIR` / `ORACLE_MEMORY_ROOT_DIR` | `cwd` | Memory root (oracle-memory compatible) |
 
 ## Integrated projects
 
-Oracle reads/writes `.agoya/` and `.agora/` formats natively,
+Oracle reads/writes `.oracle-memory/` and `.oracle/messages/` formats natively,
 making it interoperable with:
 
 - [oracle-memory](https://github.com/JonusNattapong/oracle-memory) — Memory MCP Server

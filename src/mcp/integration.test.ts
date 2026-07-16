@@ -11,7 +11,7 @@ import type { Provider } from "../providers/provider.js";
 import { FileSessionStore } from "../session/store.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
-import { AgoyaAdapter } from "../memory/adapter.js";
+import { MemoryAdapter } from "../memory/adapter.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -42,7 +42,7 @@ beforeAll(async () => {
     providerId: "codex",
     skills,
     oracles,
-    memory: new AgoyaAdapter(root),
+    memory: new MemoryAdapter(root),
     providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
