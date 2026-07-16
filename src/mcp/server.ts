@@ -11,6 +11,7 @@ import { checkProvider } from "../providers/factory.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
+import { ProfileStore } from "../identity/profile.js";
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -21,6 +22,7 @@ interface OracleServerDependencies {
   skills: SkillRegistry;
   oracles: OracleRegistry;
   memory: MemoryAdapter;
+  profile: ProfileStore;
   providerChecks?: typeof checkProvider;
 }
 
@@ -46,6 +48,7 @@ export function registerOracleTools({
   skills,
   oracles,
   memory,
+  profile,
   providerChecks = checkProvider
 }: OracleServerDependencies): void {
   server.registerTool(
@@ -81,6 +84,9 @@ export function registerOracleTools({
           const prev = await service.session(previousSessionId);
           previousResponseId = prev?.responseId;
         }
+        const basePrompt = skills.compose(skillName, DEFAULT_SYSTEM_PROMPT);
+        const personalCtx = await profile.buildPersonalContext();
+        const systemPrompt = personalCtx ? `${personalCtx}\n\n${basePrompt}` : basePrompt;
         const result = await service.consult({
           prompt,
           preset: skillName,
@@ -91,7 +97,7 @@ export function registerOracleTools({
           maxFileSizeBytes: config.maxFileSizeBytes,
           maxInputBytes: config.maxInputBytes,
           previousResponseId,
-          systemPrompt: skills.compose(skillName, DEFAULT_SYSTEM_PROMPT)
+          systemPrompt
         });
         await progress(3, "Session persisted");
         return success(result.output, {
@@ -251,6 +257,78 @@ export function registerOracleTools({
       try {
         const count = await memory.clearWorking(agent ?? undefined);
         return success(`Cleared ${count} working memory entries.`, { cleared: count });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_identity_show",
+    {
+      title: "Show Identity",
+      description: "Show your identity profile and Oracle's persona.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const identity = await profile.getIdentity();
+        const persona = await profile.getPersona();
+        return success(JSON.stringify({ identity, persona }, null, 2), { identity, persona });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_identity_setup",
+    {
+      title: "Set Identity",
+      description: "Set up your identity profile.",
+      inputSchema: {
+        name: z.string().min(1),
+        title: z.string().optional(),
+        role: z.string().optional(),
+        description: z.string().optional(),
+        preferences: z.array(z.string()).optional(),
+        habits: z.array(z.string()).optional(),
+        goals: z.array(z.string()).optional()
+      }
+    },
+    async (params) => {
+      try {
+        await profile.saveIdentity({
+          name: params.name,
+          title: params.title,
+          role: params.role,
+          description: params.description,
+          preferences: params.preferences,
+          habits: params.habits,
+          goals: params.goals
+        });
+        return success(`Identity saved for ${params.name}.`, { name: params.name });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_persona_set",
+    {
+      title: "Set Persona",
+      description: "Set Oracle's voice and personality.",
+      inputSchema: {
+        name: z.string().default("Oracle"),
+        tone: z.enum(["professional", "casual", "friendly", "witty"]).default("professional"),
+        style: z.string().optional(),
+        greeting: z.string().optional()
+      }
+    },
+    async (params) => {
+      try {
+        await profile.savePersona({
+          name: params.name,
+          tone: params.tone as any,
+          style: params.style,
+          greeting: params.greeting
+        });
+        return success(`Persona saved: ${params.name}`, { name: params.name });
       } catch (error) { return failure(error); }
     }
   );

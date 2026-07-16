@@ -12,6 +12,7 @@ import { FileSessionStore } from "../session/store.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
+import { ProfileStore } from "../identity/profile.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -43,6 +44,7 @@ beforeAll(async () => {
     skills,
     oracles,
     memory: new MemoryAdapter(root),
+    profile: new ProfileStore(root),
     providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
@@ -66,6 +68,9 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_oracle_register");
     expect(tools).toContain("oracle_memory_list");
     expect(tools).toContain("oracle_memory_clear");
+    expect(tools).toContain("oracle_identity_show");
+    expect(tools).toContain("oracle_identity_setup");
+    expect(tools).toContain("oracle_persona_set");
   });
 
   test("consults, lists, retrieves, and diagnoses", async () => {

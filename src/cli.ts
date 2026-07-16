@@ -26,10 +26,7 @@ import { MemoryAdapter } from "./memory/adapter.js";
 import { MessagesAdapter } from "./peer/mesh.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import * as peer from "./peer/peer.js";
-
-function agoyaDir(cwd?: string): string {
-  return process.env.AGOYA_ROOT_DIR ?? process.env.ORACLE_MEMORY_ROOT_DIR ?? cwd ?? process.cwd();
-}
+import { ProfileStore } from "./identity/profile.js";
 
 const homeDir = (): string =>
   process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
@@ -85,14 +82,17 @@ program
 
     const service = new ConsultService(createProvider(parsedProvider));
     const systemPrompt = skillReg.compose(skillName, DEFAULT_SYSTEM_PROMPT);
-    const agoya = new MemoryAdapter(cwd);
+    const profile = new ProfileStore(homeDir());
+    const personalCtx = await profile.buildPersonalContext();
+    const personalizedPrompt = personalCtx ? `${personalCtx}\n\n${systemPrompt}` : systemPrompt;
+    const memory = new MemoryAdapter(cwd);
 
     // Build memory context if oracle has memory enabled
-    let finalSystemPrompt = systemPrompt;
+    let finalSystemPrompt = personalizedPrompt;
     if (options.oracle) {
       const profile = await oracleReg.getOracle(options.oracle);
       if (profile?.memory) {
-        const entries = await agoya.recall(undefined, options.oracle);
+        const entries = await memory.recall(undefined, options.oracle);
         if (entries.length > 0) {
           const ctx = entries.map((e) => `[${e.type}] ${e.content.slice(0, 200)}`).join("\n\n");
           finalSystemPrompt = `${systemPrompt}\n\n[PREVIOUS CONTEXT]\n${ctx}`;
@@ -128,7 +128,7 @@ program
     if (options.oracle) {
       const profile = await oracleReg.getOracle(options.oracle);
       if (profile?.memory && result.status === "completed") {
-        await agoya.remember(options.oracle, "insight", result.output.slice(0, 500), {
+        await memory.remember(options.oracle, "insight", result.output.slice(0, 500), {
           tags: [skillName, "consult"],
           meta: { sessionId: result.sessionId, prompt: options.prompt }
         });
@@ -221,8 +221,8 @@ memCmd
   .argument("[agent]", "Agent name (default: all)")
   .option("-n, --limit <number>", "Entries", "10")
   .action(async (agent, options) => {
-    const agoya = new MemoryAdapter(process.cwd());
-    const entries = await agoya.recall(undefined, agent ?? undefined, Number(options.limit));
+    const memory = new MemoryAdapter(process.cwd());
+    const entries = await memory.recall(undefined, agent ?? undefined, Number(options.limit));
     if (!entries.length) { console.log("No memory entries."); return; }
     for (const e of entries) {
       console.log(`${e.ts.slice(0, 19)}  [${e.type.padEnd(8)}]  ${e.agent.padEnd(12)}  ${e.content.slice(0, 60)}`);
@@ -234,8 +234,8 @@ memCmd
   .description("Clear working memory for an agent (or all)")
   .argument("[agent]", "Agent name (omit for all)")
   .action(async (agent) => {
-    const agoya = new MemoryAdapter(process.cwd());
-    const count = await agoya.clearWorking(agent ?? undefined);
+    const memory = new MemoryAdapter(process.cwd());
+    const count = await memory.clearWorking(agent ?? undefined);
     console.log(`Cleared ${count} working memory entries.`);
   });
 
@@ -266,7 +266,7 @@ peerCmd
 
 peerCmd
   .command("send")
-  .description("Send a message via agora mesh")
+  .description("Send a message via Oracle-messages mesh")
   .requiredOption("--to <agent>", "Recipient agent name (or * for broadcast)")
   .requiredOption("-b, --body <text>", "Message body")
   .option("--from <agent>", "Sender name", "oracle")
@@ -282,7 +282,7 @@ peerCmd
 
 peerCmd
   .command("list")
-  .description("List messages from agora mesh")
+  .description("List messages from Oracle-messages mesh")
   .option("--agent <agent>", "Filter by recipient")
   .option("--kind <kind>", "Filter by kind")
   .option("-n, --limit <number>", "Messages", "20")
@@ -433,6 +433,71 @@ program
     } else {
       throw new Error(`Unknown action: ${action}. Use list or install.`);
     }
+  });
+
+// ── identity ────────────────────────────────────────────────────
+const identityCmd = program.command("identity").description("Manage your personal identity");
+
+identityCmd
+  .command("show")
+  .description("Show identity profile")
+  .action(async () => {
+    const store = new ProfileStore(homeDir());
+    const identity = await store.getIdentity();
+    const persona = await store.getPersona();
+    console.log("Persona:", JSON.stringify(persona, null, 2));
+    console.log("Identity:", JSON.stringify(identity ?? "not set", null, 2));
+  });
+
+identityCmd
+  .command("setup")
+  .description("Set up your identity profile")
+  .requiredOption("-n, --name <name>", "Your name")
+  .option("--title <title>", "Your title")
+  .option("--role <role>", "Your role")
+  .option("-d, --description <text>", "About you")
+  .option("--prefs <items>", "Preferences (comma-separated)")
+  .option("--habits <items>", "Habits (comma-separated)")
+  .option("--goals <items>", "Goals (comma-separated)")
+  .action(async (options) => {
+    const store = new ProfileStore(homeDir());
+    await store.saveIdentity({
+      name: options.name,
+      title: options.title,
+      role: options.role,
+      description: options.description,
+      preferences: options.prefs?.split(",").map((s: string) => s.trim()),
+      habits: options.habits?.split(",").map((s: string) => s.trim()),
+      goals: options.goals?.split(",").map((s: string) => s.trim())
+    });
+    console.log(`Identity saved for ${options.name}. Every consult now knows who you are.`);
+  });
+
+identityCmd
+  .command("persona")
+  .description("Set Oracle's voice/personality")
+  .option("--name <name>", "Oracle's name", "Oracle")
+  .option("--tone <tone>", "professional | casual | friendly | witty", "professional")
+  .option("--style <text>", "Custom style description")
+  .option("--greeting <text>", "Greeting message")
+  .action(async (options) => {
+    const store = new ProfileStore(homeDir());
+    await store.savePersona({
+      name: options.name,
+      tone: options.tone,
+      style: options.style,
+      greeting: options.greeting
+    });
+    console.log(`Persona saved: ${options.name}`);
+  });
+
+identityCmd
+  .command("forget")
+  .description("Clear your identity profile")
+  .action(async () => {
+    const store = new ProfileStore(homeDir());
+    await store.saveIdentity({ name: "" });
+    console.log("Identity cleared.");
   });
 
 await program.parseAsync(process.argv);

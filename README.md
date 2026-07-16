@@ -99,7 +99,7 @@ oracle consult --oracle senior-review -p "Review this"
 ```
 
 When `--memory` is enabled, each consult saves a summary (`insight`) via
-[oracle-memory](https://github.com/JonusNattapong/oracle-memory) (`.agoya/` format). Past
+[oracle-memory](https://github.com/JonusNattapong/oracle-memory) (`.oracle-memory/` format). Past
 insights are injected into the system prompt on subsequent calls.
 
 ### Providers
@@ -216,7 +216,7 @@ oracle setup-mcp --client codex
 | `OPENAI_API_KEY` | — | OpenAI provider |
 | `ANTHROPIC_API_KEY` | — | Anthropic provider |
 | `ANTHROPIC_CLIENT_ID` | — | Anthropic OAuth client ID |
-| `AGOYA_ROOT_DIR` / `ORACLE_MEMORY_ROOT_DIR` | `cwd` | Memory root (oracle-memory compatible) |
+| `ORACLE_MEMORY_ROOT_DIR` | `cwd` | Memory root (oracle-memory compatible) |
 
 ## Integrated projects
 

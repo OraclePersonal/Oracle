@@ -3,7 +3,7 @@ import path from "node:path";
 import type { OracleProfile, Workshop } from "./types.js";
 
 // ponytail: flat JSON files for oracle profiles only.
-// Memory moved to memory adapter (writes .agoya/ format).
+// Memory moved to memory adapter (writes .oracle-memory/ format).
 
 export class OracleRegistry {
   constructor(
