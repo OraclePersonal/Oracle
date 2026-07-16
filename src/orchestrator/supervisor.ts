@@ -45,8 +45,68 @@ export class ProcessSupervisor {
       await this.removeLockFile(service);
     }
 
-    // No existing process or it's dead — spawn new one
-    return this.spawnService(service);
+    // No existing process or it's dead — spawn new one, guarded by a
+    // cross-process lock so two `oracle` invocations racing at once don't
+    // both allocate a port and spawn duplicate daemons.
+    return this.spawnServiceExclusive(service);
+  }
+
+  private async spawnServiceExclusive(
+    service: "memory" | "messages"
+  ): Promise<{ endpoint: string; pid: number; port: number } | null> {
+    const lockPath = path.join(this.runDir, `${service}.spawn.lock`);
+    await fs.mkdir(this.runDir, { recursive: true });
+
+    let handle: fs.FileHandle;
+    try {
+      // "wx" = exclusive create, fails if the file already exists — the
+      // atomic primitive that makes this a real cross-process mutex.
+      handle = await fs.open(lockPath, "wx");
+    } catch {
+      // Another process is already spawning. Wait for it to finish (or the
+      // lock to go stale) and adopt whatever it ends up writing.
+      return this.waitForSibling(service, lockPath);
+    }
+
+    try {
+      await handle.close();
+      // Re-check: a sibling may have finished spawning between our initial
+      // readLockFile() and acquiring this lock.
+      const existing = await this.readLockFile(service);
+      if (existing && (await this.healthCheck(service, existing.endpoint))) {
+        return existing;
+      }
+      return await this.spawnService(service);
+    } finally {
+      await fs.unlink(lockPath).catch(() => undefined);
+    }
+  }
+
+  private async waitForSibling(
+    service: "memory" | "messages",
+    lockPath: string
+  ): Promise<{ endpoint: string; pid: number; port: number } | null> {
+    const STALE_MS = 30_000;
+    for (let waited = 0; waited < 15_000; waited += 300) {
+      await sleep(300);
+      const existing = await this.readLockFile(service);
+      if (existing && (await this.healthCheck(service, existing.endpoint))) {
+        return existing;
+      }
+      try {
+        const stat = await fs.stat(lockPath);
+        if (Date.now() - stat.mtimeMs > STALE_MS) {
+          // Sibling died mid-spawn without cleaning up its lock — break the
+          // deadlock and take over.
+          await fs.unlink(lockPath).catch(() => undefined);
+          return this.spawnServiceExclusive(service);
+        }
+      } catch {
+        // Lock file gone but no healthy lockfile appeared yet — sibling
+        // likely failed; fall through and retry the loop.
+      }
+    }
+    return null;
   }
 
   private async readLockFile(

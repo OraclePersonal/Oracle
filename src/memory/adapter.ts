@@ -89,7 +89,10 @@ export class MemoryAdapter implements MemoryPort {
     const entries: MemoryStoreEntry[] = [];
     for (const dir of dirs) {
       try {
-        const files = await fs.readdir(dir);
+        // Filenames are timestamp-prefixed, so lexical sort == chronological order.
+        // readdir() gives no ordering guarantee — sort before slicing or the most
+        // recent entries can be silently dropped once a dir exceeds the slice window.
+        const files = (await fs.readdir(dir)).sort();
         for (const file of files.slice(-(limit * 2))) {
           if (!file.endsWith(".json")) continue;
           try {

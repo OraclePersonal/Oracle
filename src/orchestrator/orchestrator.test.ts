@@ -115,6 +115,24 @@ describe("OrchestratorFactory", () => {
     expect(afterForget.some((e) => e.id === entry.id)).toBe(false);
   });
 
+  it("recall returns the most recent entries even when readdir order is scrambled", async () => {
+    const memAdapter = await factory.createMemoryAdapter();
+
+    // Write more entries than the internal slice window would keep if an
+    // unsorted (OS-dependent) readdir() order were used directly.
+    const written = [];
+    for (let i = 0; i < 5; i++) {
+      written.push(await memAdapter.remember("agent", "fact", `memory-${i}`));
+      await new Promise((r) => setTimeout(r, 5)); // ensure distinct timestamp prefixes
+    }
+
+    const recalled = await memAdapter.recall("fact", "agent", 2);
+    expect(recalled).toHaveLength(2);
+    // Most recent two, newest first.
+    expect(recalled[0].id).toBe(written[4].id);
+    expect(recalled[1].id).toBe(written[3].id);
+  });
+
   it("file-based message adapters should work correctly", async () => {
     const msgAdapter = await factory.createMessagesAdapter();
 

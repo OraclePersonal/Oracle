@@ -82,7 +82,10 @@ export class MessagesAdapter implements MessagesPort {
   ): Promise<MessageStoreEntry[]> {
     const dir = this.messagesDir();
     try {
-      const files = await fs.readdir(dir);
+      // Filenames are timestamp-prefixed, so lexical sort == chronological order.
+      // readdir() gives no ordering guarantee — sort before slicing or the most
+      // recent messages can be silently dropped once the mailbox exceeds 100 files.
+      const files = (await fs.readdir(dir)).sort();
       const messages: MessageStoreEntry[] = [];
       for (const file of files.slice(-100)) {
         if (!file.endsWith(".json")) continue;

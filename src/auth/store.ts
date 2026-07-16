@@ -5,6 +5,7 @@ export interface TokenEntry {
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
+  planTier?: string;
 }
 
 export class TokenStore {
@@ -23,8 +24,14 @@ export class TokenStore {
   }
 
   async write(provider: string, entry: TokenEntry): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath(provider)), { recursive: true });
-    await fs.writeFile(this.filePath(provider), JSON.stringify(entry, null, 2), "utf8");
+    const filePath = this.filePath(provider);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    // Atomic write via temp file + rename — concurrent CLI invocations (e.g. two
+    // commands racing a token refresh) must never observe a partially-written
+    // or truncated token file.
+    const tmp = `${filePath}.${process.pid}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(entry, null, 2), "utf8");
+    await fs.rename(tmp, filePath);
   }
 
   async delete(provider: string): Promise<void> {

@@ -12,6 +12,8 @@ type ToolResult = { content: Array<{ type: string; text?: string }>; [key: strin
 export class McpMemoryAdapter implements MemoryPort {
   private client: Client;
   private url: URL;
+  private connected = false;
+  private connecting: Promise<void> | null = null;
 
   constructor(endpoint: string) {
     this.url = new URL(endpoint);
@@ -19,15 +21,23 @@ export class McpMemoryAdapter implements MemoryPort {
   }
 
   private async ensureConnected(): Promise<void> {
-    // Check if already connected
-    if ((this.client as any)._transport) return;
+    if (this.connected) return;
+    // Concurrent calls (e.g. parallel remember/recall) must share one connect
+    // attempt instead of racing multiple `client.connect()` calls on the same client.
+    if (this.connecting) return this.connecting;
 
-    try {
-      const transport = new StreamableHTTPClientTransport(this.url);
-      await this.client.connect(transport);
-    } catch (err) {
-      throw new Error(`Failed to connect to oracle-memory at ${this.url}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    this.connecting = (async () => {
+      try {
+        const transport = new StreamableHTTPClientTransport(this.url);
+        await this.client.connect(transport);
+        this.connected = true;
+      } catch (err) {
+        throw new Error(`Failed to connect to oracle-memory at ${this.url}: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        this.connecting = null;
+      }
+    })();
+    return this.connecting;
   }
 
   private extractText(result: ToolResult): string {
@@ -115,6 +125,8 @@ export class McpMemoryAdapter implements MemoryPort {
 export class McpMessagesAdapter implements MessagesPort {
   private client: Client;
   private url: URL;
+  private connected = false;
+  private connecting: Promise<void> | null = null;
 
   constructor(endpoint: string) {
     this.url = new URL(endpoint);
@@ -122,15 +134,21 @@ export class McpMessagesAdapter implements MessagesPort {
   }
 
   private async ensureConnected(): Promise<void> {
-    // Check if already connected
-    if ((this.client as any)._transport) return;
+    if (this.connected) return;
+    if (this.connecting) return this.connecting;
 
-    try {
-      const transport = new StreamableHTTPClientTransport(this.url);
-      await this.client.connect(transport);
-    } catch (err) {
-      throw new Error(`Failed to connect to oracle-messages at ${this.url}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    this.connecting = (async () => {
+      try {
+        const transport = new StreamableHTTPClientTransport(this.url);
+        await this.client.connect(transport);
+        this.connected = true;
+      } catch (err) {
+        throw new Error(`Failed to connect to oracle-messages at ${this.url}: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        this.connecting = null;
+      }
+    })();
+    return this.connecting;
   }
 
   private extractText(result: ToolResult): string {

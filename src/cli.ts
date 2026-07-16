@@ -411,7 +411,8 @@ program
     console.log(`\nOpen: ${session.verificationUri}\nCode: ${session.userCode}\n`);
     console.log("Waiting for authorization...");
     await oauth.pollForToken(session.deviceCode, session.interval);
-    console.log("Authenticated.");
+    const tier = await oauth.getPlanTier();
+    console.log(`Authenticated. Plan: ${tier}`);
   });
 
 program

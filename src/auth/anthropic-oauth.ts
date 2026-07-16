@@ -2,6 +2,30 @@ import { TokenStore } from "./store.js";
 
 const AUTH_BASE = "https://auth.anthropic.com";
 
+/** Anthropic subscription tier tied to an OAuth session. "api" = pay-per-token API key/OAuth with no subscription. */
+export type PlanTier = "api" | "pro" | "max";
+
+/**
+ * Best-effort tier extraction from an OAuth access token's JWT claims.
+ * Not signature-verified — used only as a client-side routing/UX hint, never
+ * for authorization decisions (the API itself enforces entitlements).
+ */
+function decodePlanTier(accessToken: string): PlanTier {
+  try {
+    const parts = accessToken.split(".");
+    if (parts.length !== 3) return "api";
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as Record<string, unknown>;
+    const raw = String(
+      payload.subscription_type ?? payload.plan ?? payload.tier ?? payload.plan_type ?? ""
+    ).toLowerCase();
+    if (raw.includes("max")) return "max";
+    if (raw.includes("pro")) return "pro";
+    return "api";
+  } catch {
+    return "api";
+  }
+}
+
 interface DeviceCodeResponse {
   device_code: string;
   user_code: string;
@@ -33,6 +57,10 @@ export interface DeviceFlowSession {
 }
 
 export class AnthropicOAuthClient {
+  // Single-flight guard: dedupes concurrent refreshes triggered within this
+  // process (e.g. parallel provider calls) onto one network request.
+  private refreshInFlight: Promise<string> | null = null;
+
   constructor(
     private readonly clientId: string,
     private readonly store: TokenStore
@@ -46,6 +74,14 @@ export class AnthropicOAuthClient {
       return null;
     }
     return entry.accessToken;
+  }
+
+  /** Returns the subscription tier for the current session, refreshing the token first if needed. */
+  async getPlanTier(): Promise<PlanTier> {
+    const token = await this.getValidToken();
+    if (!token) return "api";
+    const entry = await this.store.read("anthropic");
+    return (entry?.planTier as PlanTier | undefined) ?? decodePlanTier(token);
   }
 
   async startDeviceFlow(): Promise<DeviceFlowSession> {
@@ -80,7 +116,8 @@ export class AnthropicOAuthClient {
         await this.store.write("anthropic", {
           accessToken: data.access_token,
           refreshToken: data.refresh_token,
-          expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined
+          expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
+          planTier: decodePlanTier(data.access_token)
         });
         return;
       }
@@ -102,13 +139,46 @@ export class AnthropicOAuthClient {
     await this.store.delete("anthropic");
   }
 
+  /**
+   * Refresh tokens are typically single-use — if another `oracle` process
+   * refreshed concurrently, our refresh_token is already burned and the
+   * network call would 400/401. Guard against that in two layers:
+   * 1. In-process: concurrent callers share one in-flight refresh.
+   * 2. Cross-process: re-read the token file first; if it already carries a
+   *    non-expired access token newer than what we started with, another
+   *    process beat us to it — adopt its result instead of refreshing again.
+   */
   private async refresh(refreshToken: string): Promise<string> {
+    if (this.refreshInFlight) return this.refreshInFlight;
+    this.refreshInFlight = this.doRefresh(refreshToken);
+    try {
+      return await this.refreshInFlight;
+    } finally {
+      this.refreshInFlight = null;
+    }
+  }
+
+  private async doRefresh(refreshToken: string): Promise<string> {
+    const onDisk = await this.store.read("anthropic");
+    if (onDisk && onDisk.refreshToken !== refreshToken && onDisk.expiresAt && Date.now() < onDisk.expiresAt) {
+      // Another process already rotated the refresh token and wrote a fresh
+      // access token — use it instead of racing a second refresh call.
+      return onDisk.accessToken;
+    }
+
     const res = await post("/oauth/token", {
       client_id: this.clientId,
       refresh_token: refreshToken,
       grant_type: "refresh_token"
     });
     if (!res.ok) {
+      // The refresh call failed — before giving up, check whether a sibling
+      // process already refreshed and wrote a valid token while we were in
+      // flight (this is the common cause of a 400 invalid_grant here).
+      const latest = await this.store.read("anthropic");
+      if (latest && latest.refreshToken !== refreshToken && latest.expiresAt && Date.now() < latest.expiresAt) {
+        return latest.accessToken;
+      }
       await this.store.delete("anthropic");
       throw new Error(`Token refresh failed (${res.status}), run "oracle login" again.`);
     }
@@ -116,7 +186,8 @@ export class AnthropicOAuthClient {
     await this.store.write("anthropic", {
       accessToken: data.access_token,
       refreshToken: data.refresh_token ?? refreshToken,
-      expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined
+      expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
+      planTier: decodePlanTier(data.access_token)
     });
     return data.access_token;
   }
