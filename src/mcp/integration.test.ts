@@ -13,6 +13,7 @@ import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
+import { MessagesAdapter } from "../peer/mesh.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -45,6 +46,7 @@ beforeAll(async () => {
     oracles,
     memory: new MemoryAdapter(root),
     profile: new ProfileStore(root),
+    messages: new MessagesAdapter(root),
     providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
@@ -71,6 +73,42 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_identity_show");
     expect(tools).toContain("oracle_identity_setup");
     expect(tools).toContain("oracle_persona_set");
+    expect(tools).toContain("oracle_peer_send");
+    expect(tools).toContain("oracle_peer_broadcast");
+    expect(tools).toContain("oracle_peer_list");
+    expect(tools).toContain("oracle_peer_unread");
+    expect(tools).toContain("oracle_peer_thread");
+  });
+
+  test("sends and lists peer messages", async () => {
+    const sent = await client.callTool({
+      name: "oracle_peer_send",
+      arguments: { to: "codex", from: "claude", body: "hello", subject: "greeting" }
+    });
+    expect(sent.isError).not.toBe(true);
+    const sentId = (sent.structuredContent as { message: { id: string } }).message.id;
+
+    const list = await client.callTool({ name: "oracle_peer_list", arguments: { agent: "codex" } });
+    expect(list.isError).not.toBe(true);
+    expect((list.structuredContent as { messages: Array<{ id: string }> }).messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: sentId })])
+    );
+
+    const unread = await client.callTool({ name: "oracle_peer_unread", arguments: { agent: "codex" } });
+    expect(unread.isError).not.toBe(true);
+    expect((unread.structuredContent as { messages: Array<{ id: string }> }).messages.length).toBeGreaterThan(0);
+
+    const broadcast = await client.callTool({
+      name: "oracle_peer_broadcast",
+      arguments: { from: "claude", body: "team update" }
+    });
+    expect(broadcast.isError).not.toBe(true);
+
+    const thread = await client.callTool({ name: "oracle_peer_thread", arguments: { rootId: sentId } });
+    expect(thread.isError).not.toBe(true);
+    expect((thread.structuredContent as { messages: Array<{ id: string }> }).messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: sentId })])
+    );
   });
 
   test("consults, lists, retrieves, and diagnoses", async () => {

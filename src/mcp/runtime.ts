@@ -8,6 +8,7 @@ import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
+import { MessagesAdapter } from "../peer/mesh.js";
 import { registerOracleTools } from "./server.js";
 
 export async function createOracleMcpServer(
@@ -29,7 +30,8 @@ export async function createOracleMcpServer(
     skills,
     oracles,
     memory: new MemoryAdapter(workspaceRoot),
-    profile: new ProfileStore(homeDir)
+    profile: new ProfileStore(homeDir),
+    messages: new MessagesAdapter(workspaceRoot)
   });
   return server;
 }

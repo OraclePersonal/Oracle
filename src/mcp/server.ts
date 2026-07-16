@@ -12,6 +12,7 @@ import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
+import { MessagesAdapter, type MessageKind } from "../peer/mesh.js";
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -23,8 +24,15 @@ interface OracleServerDependencies {
   oracles: OracleRegistry;
   memory: MemoryAdapter;
   profile: ProfileStore;
+  messages: MessagesAdapter;
   providerChecks?: typeof checkProvider;
 }
+
+const MESSAGE_KINDS = [
+  "message", "note", "question", "review-request", "review-result",
+  "proposal", "proposal-response", "wake", "end", "task",
+  "task-assign", "task-update", "task-complete", "task-fail"
+] as const;
 
 function success(text: string, structuredContent: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text }], structuredContent };
@@ -49,6 +57,7 @@ export function registerOracleTools({
   oracles,
   memory,
   profile,
+  messages,
   providerChecks = checkProvider
 }: OracleServerDependencies): void {
   server.registerTool(
@@ -364,6 +373,100 @@ export function registerOracleTools({
       } catch (error) {
         return failure(error);
       }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_send",
+    {
+      title: "Send Peer Message",
+      description: "Send a message to another agent (or * for broadcast) via the oracle-messages mesh.",
+      inputSchema: {
+        to: z.string().min(1),
+        body: z.string().min(1),
+        from: z.string().default("oracle"),
+        kind: z.enum(MESSAGE_KINDS).default("message"),
+        subject: z.string().optional(),
+        parentId: z.string().optional()
+      }
+    },
+    async ({ to, body, from, kind, subject, parentId }) => {
+      try {
+        const msg = await messages.send(from, to, body, kind as MessageKind, { subject, parentId });
+        return success(`Sent: ${msg.id}`, { message: msg });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_broadcast",
+    {
+      title: "Broadcast Peer Message",
+      description: "Broadcast a message to all agents via the oracle-messages mesh.",
+      inputSchema: {
+        body: z.string().min(1),
+        from: z.string().default("oracle"),
+        kind: z.enum(MESSAGE_KINDS).default("note"),
+        subject: z.string().optional()
+      }
+    },
+    async ({ body, from, kind, subject }) => {
+      try {
+        const msg = await messages.broadcast(from, body, kind as MessageKind, { subject });
+        return success(`Broadcast: ${msg.id}`, { message: msg });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_list",
+    {
+      title: "List Peer Messages",
+      description: "List messages from the oracle-messages mesh.",
+      inputSchema: {
+        agent: z.string().optional(),
+        kind: z.enum(MESSAGE_KINDS).optional(),
+        limit: z.number().int().min(1).max(100).default(20)
+      }
+    },
+    async ({ agent, kind, limit }) => {
+      try {
+        const msgs = await messages.getMessages({ agent, kind: kind as MessageKind | undefined, limit });
+        return success(JSON.stringify(msgs, null, 2), { messages: msgs });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_unread",
+    {
+      title: "Get Unread Peer Messages",
+      description: "Get unread messages for an agent, optionally since a message id.",
+      inputSchema: {
+        agent: z.string().min(1),
+        sinceId: z.string().optional()
+      }
+    },
+    async ({ agent, sinceId }) => {
+      try {
+        const msgs = await messages.getUnread(agent, sinceId);
+        return success(JSON.stringify(msgs, null, 2), { messages: msgs });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_thread",
+    {
+      title: "Get Peer Message Thread",
+      description: "Get all messages belonging to a thread by root message id.",
+      inputSchema: { rootId: z.string().min(1) }
+    },
+    async ({ rootId }) => {
+      try {
+        const msgs = await messages.getThread(rootId);
+        return success(JSON.stringify(msgs, null, 2), { messages: msgs });
+      } catch (error) { return failure(error); }
     }
   );
 }
