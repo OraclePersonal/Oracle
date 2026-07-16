@@ -163,10 +163,14 @@ export class ProcessSupervisor {
       const controller = new AbortController();
       const timeoutHandle = setTimeout(() => controller.abort(), 3000);
 
-      const url =
-        service === "memory"
-          ? `${endpoint.replace("/mcp", "")}/health`
-          : `${endpoint.replace("/mcp", "")}/ping`;
+      // oracle-memory exposes a real /health route (200 when up) — check it
+      // strictly. oracle-messages has no dedicated health route; its /mcp
+      // endpoint answers a bare GET with 406 (wrong Accept header for the
+      // MCP streamable-http protocol) rather than 200, so *any* HTTP
+      // response — not just 2xx — proves the process is up and listening.
+      // Only a network-level failure (connection refused, timeout) means
+      // "not running".
+      const url = service === "memory" ? `${endpoint.replace("/mcp", "")}/health` : endpoint;
 
       const resp = await fetch(url, {
         method: "GET",
@@ -174,7 +178,7 @@ export class ProcessSupervisor {
       });
 
       clearTimeout(timeoutHandle);
-      return resp.ok;
+      return service === "memory" ? resp.ok : true;
     } catch {
       return false;
     }
@@ -207,11 +211,25 @@ export class ProcessSupervisor {
 
   private async spawnService(service: "memory" | "messages"): Promise<{ endpoint: string; pid: number; port: number } | null> {
     const port = await this.findFreePort();
-    const command = service === "memory" ? "oracle-memory" : "oracle-messages-mcp";
+    // oracle-messages' cargo bin is literally named "oracle" (collides with
+    // this CLI's own bin name — see Oracle-skill/SKILL.md), so there is no
+    // safe default bare command for it: spawning "oracle" could invoke the
+    // wrong binary if this CLI's own `oracle` happens to resolve first on
+    // PATH. ORACLE_MESSAGES_BIN lets a workspace point at the exact built
+    // binary; ORACLE_MEMORY_BIN is the equivalent override for symmetry,
+    // though oracle-memory's npm bin name matches the default already.
+    const command =
+      service === "memory"
+        ? process.env.ORACLE_MEMORY_BIN || "oracle-memory"
+        : process.env.ORACLE_MESSAGES_BIN || "oracle-messages-mcp";
 
     try {
-      // Spawn detached process
-      const proc = spawn(command, ["--transport", "http", "--port", String(port)], {
+      // Both binaries take zero CLI args and read transport/port purely from
+      // env vars — oracle-memory (Node) would silently ignore stray argv,
+      // but oracle-messages (Rust/clap) hard-errors and exits immediately on
+      // any unrecognized flag, which used to make every spawn attempt fail
+      // the health check without ever actually starting the server.
+      const proc = spawn(command, [], {
         detached: true,
         stdio: "ignore",
         env: {
@@ -221,14 +239,18 @@ export class ProcessSupervisor {
         },
       });
 
+      // Attach the error handler BEFORE checking pid. spawn() failures (e.g.
+      // binary not found) emit 'error' asynchronously on the next tick — if
+      // no listener is attached yet, Node's default unhandled-'error'
+      // behavior is to throw and crash the whole process. This must be the
+      // very next line after spawn() returns, not after any check that
+      // could throw/return first.
+      proc.on("error", () => {
+        /* ignore spawn errors — surfaced via the health-check retry loop below */
+      });
+
       const pid = proc.pid;
       if (!pid) throw new Error("Failed to get process ID");
-
-      // Handle unhandled errors from the spawned process (e.g., binary not found)
-      // Suppress them since we're checking health separately
-      proc.on("error", () => {
-        /* ignore spawn errors */
-      });
 
       // Unref so parent doesn't wait for this process
       proc.unref();
