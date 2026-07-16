@@ -13,6 +13,7 @@ import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
 import { MessagesAdapter, type MessageKind } from "../peer/mesh.js";
+import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -22,9 +23,9 @@ interface OracleServerDependencies {
   providerId: string;
   skills: SkillRegistry;
   oracles: OracleRegistry;
-  memory: MemoryAdapter;
+  memory: MemoryPort;
   profile: ProfileStore;
-  messages: MessagesAdapter;
+  messages: MessagesPort;
   providerChecks?: typeof checkProvider;
 }
 

@@ -24,6 +24,7 @@ import { SkillRegistry } from "./skills/registry.js";
 import { OracleRegistry } from "./oracles/registry.js";
 import { MemoryAdapter } from "./memory/adapter.js";
 import { MessagesAdapter } from "./peer/mesh.js";
+import { OrchestratorFactory } from "./orchestrator/factory.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import * as peer from "./peer/peer.js";
 import { ProfileStore } from "./identity/profile.js";
@@ -85,7 +86,10 @@ program
     const profile = new ProfileStore(homeDir());
     const personalCtx = await profile.buildPersonalContext();
     const personalizedPrompt = personalCtx ? `${personalCtx}\n\n${systemPrompt}` : systemPrompt;
-    const memory = new MemoryAdapter(cwd);
+
+    // Create memory adapter via orchestrator (MCP-backed or file fallback)
+    const orchestrator = new OrchestratorFactory(cwd, homeDir());
+    const memory = await orchestrator.createMemoryAdapter();
 
     // Build memory context if oracle has memory enabled
     let finalSystemPrompt = personalizedPrompt;
@@ -221,7 +225,8 @@ memCmd
   .argument("[agent]", "Agent name (default: all)")
   .option("-n, --limit <number>", "Entries", "10")
   .action(async (agent, options) => {
-    const memory = new MemoryAdapter(process.cwd());
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const memory = await orchestrator.createMemoryAdapter();
     const entries = await memory.recall(undefined, agent ?? undefined, Number(options.limit));
     if (!entries.length) { console.log("No memory entries."); return; }
     for (const e of entries) {
@@ -234,7 +239,8 @@ memCmd
   .description("Clear working memory for an agent (or all)")
   .argument("[agent]", "Agent name (omit for all)")
   .action(async (agent) => {
-    const memory = new MemoryAdapter(process.cwd());
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const memory = await orchestrator.createMemoryAdapter();
     const count = await memory.clearWorking(agent ?? undefined);
     console.log(`Cleared ${count} working memory entries.`);
   });
@@ -273,7 +279,8 @@ peerCmd
   .option("--kind <kind>", "Message kind", "message")
   .option("--subject <subject>", "Message subject")
   .action(async (options) => {
-    const mesh = new MessagesAdapter(process.cwd());
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const mesh = await orchestrator.createMessagesAdapter();
     const msg = await mesh.send(options.from, options.to, options.body, options.kind as any, {
       subject: options.subject
     });
@@ -287,7 +294,8 @@ peerCmd
   .option("--kind <kind>", "Filter by kind")
   .option("-n, --limit <number>", "Messages", "20")
   .action(async (options) => {
-    const mesh = new MessagesAdapter(process.cwd());
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const mesh = await orchestrator.createMessagesAdapter();
     const msgs = await mesh.getMessages({
       agent: options.agent,
       kind: options.kind as any,
@@ -305,7 +313,8 @@ peerCmd
   .option("--since <id>", "Start from message id")
   .option("-i, --interval <ms>", "Poll interval (ms)", "5000")
   .action(async (options) => {
-    const mesh = new MessagesAdapter(process.cwd());
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const mesh = await orchestrator.createMessagesAdapter();
     let cursor = options.since;
     console.log(`Monitoring messages for ${options.agent}...`);
     for (;;) {

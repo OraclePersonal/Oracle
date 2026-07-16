@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import type { MessagesPort } from "../orchestrator/ports.js";
 
 // ponytail: writes directly to .oracle/messages/ format — compatible with oracle-messages bus.
 // oracle-messages server reads the same files, so mesh is shared transparently.
@@ -32,7 +33,7 @@ function generateId(): string {
   return `${date}-${time}-${micros}-${rand}`;
 }
 
-export class MessagesAdapter {
+export class MessagesAdapter implements MessagesPort {
   constructor(private readonly rootDir: string) {}
 
   private messagesDir(): string {

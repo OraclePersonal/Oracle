@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import type { MemoryPort } from "../orchestrator/ports.js";
 
 // ponytail: writes directly to .oracle-memory/ format — zero deps, no MCP needed.
 // oracle-memory server reads the same files, so memory is shared transparently.
@@ -39,7 +40,7 @@ function generateId(): string {
   return `${date}-${time}-${micros}-${rand}`;
 }
 
-export class MemoryAdapter {
+export class MemoryAdapter implements MemoryPort {
   constructor(private readonly rootDir: string) {}
 
   private dataDir(): string {
