@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+import { VERSION } from "./version.js";
 import { ConsultService } from "./core/consult.js";
 import {
   checkProvider,
@@ -35,7 +36,7 @@ const homeDir = (): string =>
 const program = new Command()
   .name("oracle")
   .description("Oracle — MCP-powered AI coding consultant")
-  .version("0.4.0");
+  .version(VERSION);
 
 // ── consult ──────────────────────────────────────────────────────
 program

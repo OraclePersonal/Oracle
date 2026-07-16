@@ -10,6 +10,7 @@ import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
 import { MessagesAdapter } from "../peer/mesh.js";
 import { OrchestratorFactory } from "../orchestrator/factory.js";
+import { VERSION } from "../version.js";
 import { registerOracleTools } from "./server.js";
 
 export async function createOracleMcpServer(
@@ -21,7 +22,7 @@ export async function createOracleMcpServer(
   const skills = new SkillRegistry(homeDir, path.join(workspaceRoot, ".oracle", "skills"));
   await skills.load();
   const oracles = new OracleRegistry(homeDir, workspaceRoot);
-  const server = new McpServer({ name: "oracle", version: "0.4.0" });
+  const server = new McpServer({ name: "oracle", version: VERSION });
 
   // Use OrchestratorFactory to create adapters with MCP support
   const orchestrator = new OrchestratorFactory(workspaceRoot, homeDir);
