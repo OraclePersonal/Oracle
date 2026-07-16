@@ -223,5 +223,5 @@ oracle setup-mcp --client codex
 Oracle reads/writes `.oracle-memory/` and `.oracle/messages/` formats natively,
 making it interoperable with:
 
-- [oracle-memory](https://github.com/JonusNattapong/oracle-memory) — Memory MCP Server
-- [oracle-messages](https://github.com/JonusNattapong/oracle-messages) — Multi-agent message bus
+- [Oracle Memory](https://github.com/JonusNattapong/oracle-memory) — Persistent memory layer
+- [Oracle Messages](https://github.com/JonusNattapong/oracle-messages) — Multi-agent message bus
