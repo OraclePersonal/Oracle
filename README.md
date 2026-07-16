@@ -1,79 +1,93 @@
 # Oracle
 
-**MCP-powered AI coding consultant** — skills, named oracles, memory layer, and peer mesh.
+> A senior engineer you can summon with one command. It reads your code, thinks with a real model, remembers what it learned, and can talk to other agents while it works.
+
+**Oracle** is an MCP-powered AI coding consultant. Point it at some files, ask a question, and it bundles the right context, sends it to the model of your choice (Codex, OpenAI, or Anthropic), and hands back a real review — not a vibe. Give it a **skill** to sharpen its focus, a **named oracle** to give it a personality and a memory, and a **peer mesh** so it can coordinate with your other agents.
 
 ```
-CLI + MCP server → bundle project context → analyze with AI → persist sessions
-                   Skills | Oracles | Memory (oracle-memory) | Mesh (oracle-messages)
+   you ──▶ oracle consult ──▶ bundle context ──▶ think (AI) ──▶ answer
+                  │                                              │
+            skills · oracles                              saved as a session
+                  │                                              │
+        memory (oracle-memory)  ◀───────────────────────▶  mesh (oracle-messages)
 ```
 
-## Requirements
+---
 
-- Node.js 24+
-- One provider: Codex CLI (`codex login`), OpenAI key (`OPENAI_API_KEY`), or
-  Anthropic key (`ANTHROPIC_API_KEY` / OAuth)
+## Meet the family
 
-## Quick start
+Oracle is the brain. It's happiest with its two siblings, but works fine alone:
+
+- 🧠 **[oracle-memory](https://github.com/JonusNattapong/oracle-memory)** — the notebook it never forgets.
+- 📮 **[oracle-messages](https://github.com/JonusNattapong/oracle-messages)** — the group chat where agents coordinate.
+- 📖 **[oracle-skill](https://github.com/JonusNattapong/oracle-skill)** — the manual that teaches *any* agent how to use the two above.
+
+Oracle reads and writes their on-disk formats (`.oracle-memory/`, `.oracle/messages/`) directly, so everything interoperates with zero glue code.
+
+---
+
+## 60-second start
+
+You need **Node.js 24+** and **one** provider:
+
+| Provider | How to authenticate | Env var |
+|----------|---------------------|---------|
+| `codex` *(default)* | `codex login` | — |
+| `openai` | API key | `OPENAI_API_KEY` |
+| `anthropic` | API key **or** OAuth | `ANTHROPIC_API_KEY` / `ANTHROPIC_CLIENT_ID` |
 
 ```bash
 npm install && npm run build
 
-# Check provider
+# Is anyone home? (checks your provider is wired up)
 node dist/cli.js doctor
 
-# Consult
-node dist/cli.js consult -p "Review this code" -f "src/**/*.ts"
+# Ask the oracle something real
+node dist/cli.js consult -p "Review this for edge cases" -f "src/**/*.ts"
 ```
 
-## CLI
+That's it. The oracle gathers the files, thinks, and answers.
 
-```
-oracle consult   -p <prompt> [--skill <name>] [--oracle <name>] [--diff [target]] [-f <pattern...>]
-oracle doctor    [--provider <name>]
-oracle oracle    list|register|unregister|show
-oracle memory    list|clear
-oracle skill     list|install <file.json>
-oracle peer      export|import|send|list|monitor
-oracle login     [--provider anthropic] [--client-id <id>]
-oracle logout
-oracle session   <id>
-oracle status    [-n <limit>]
-oracle setup-mcp [--client claude-code|codex]
-```
+---
 
-### consult
+## The one command you'll actually use: `consult`
 
 ```bash
-# Basic
+# Plain review
 oracle consult -p "Review for edge cases" -f "src/**/*.ts"
 
-# With skill
+# Sharpen the focus with a skill
 oracle consult -p "Find bugs" --skill debug
 
-# With named oracle (auto-loads skill + memory)
+# Summon a named oracle (auto-loads its skill + memory)
 oracle consult --oracle senior-review -p "Review this PR"
 
-# With git diff context (default: HEAD~1)
-oracle consult -p "Review changes" --diff
+# Feed it a git diff instead of whole files
+oracle consult -p "Review my changes" --diff          # default: HEAD~1
 oracle consult -p "Review against main" --diff main
 
-# With vision (image files auto-detected)
+# It has eyes, too — images are auto-detected
 oracle consult -p "What does this diagram show?" -f "diagram.png"
 
-# With multi-turn
-oracle consult -p "Follow up question" --previous-session-id <id>
+# Keep the conversation going
+oracle consult -p "Follow-up question" --previous-session-id <id>
 ```
 
-### Skills
+Every consult is saved as a **session** you can revisit (`oracle session <id>`, `oracle status`).
 
-5 built-in: `review`, `debug`, `architecture`, `tests`, `security`
+---
+
+## Skills — give the oracle a specialty
+
+Five come built in: `review`, `debug`, `architecture`, `tests`, `security`.
 
 ```bash
 oracle skill list
 oracle skill install ./my-skill.json
 ```
 
-Custom skill format (`~/.oracle/skills/<name>.json`):
+Roll your own (`~/.oracle/skills/<name>.json`):
+
 ```json
 {
   "name": "my-skill",
@@ -84,41 +98,27 @@ Custom skill format (`~/.oracle/skills/<name>.json`):
 }
 ```
 
-### Named Oracles
+## Named oracles — a specialty *with a memory*
+
+A named oracle = a skill + a persistent memory. It remembers the last time it looked at your code.
 
 ```bash
-# Register
 oracle oracle register --name senior-review --skill review --memory
 oracle oracle register --name debugger --skill debug --model claude-sonnet-4-20250514
-
-# List
 oracle oracle list
 
-# Consult with oracle (auto-injects memory context)
 oracle consult --oracle senior-review -p "Review this"
 ```
 
-When `--memory` is enabled, each consult saves a summary (`insight`) via
-[oracle-memory](https://github.com/JonusNattapong/oracle-memory) (`.oracle-memory/` format). Past
-insights are injected into the system prompt on subsequent calls.
+With `--memory`, each consult tucks away a summary (`insight`) via [oracle-memory](https://github.com/JonusNattapong/oracle-memory), and past insights are injected into the next prompt. The oracle gets smarter about *your* project over time.
 
-### Providers
+---
 
-| Provider | Auth | Env var |
-|----------|------|---------|
-| `codex` (default) | `codex login` | — |
-| `openai` | API key | `OPENAI_API_KEY` |
-| `anthropic` | API key or OAuth | `ANTHROPIC_API_KEY` / `ANTHROPIC_CLIENT_ID` |
+## Talking to the rest of the swarm
 
-```bash
-oracle login --provider anthropic --client-id <id>
-oracle consult -p "Review" --provider anthropic --model claude-sonnet-4-20250514
-```
+### 📮 Peer mesh (via oracle-messages)
 
-### Peer mesh (oracle-messages)
-
-Messages are stored in `.oracle/messages/` format, compatible with
-[oracle-messages](https://github.com/JonusNattapong/oracle-messages) message bus.
+Messages live in `.oracle/messages/`, the exact format [oracle-messages](https://github.com/JonusNattapong/oracle-messages) speaks.
 
 ```bash
 oracle peer send --to claude --body "Review complete" --kind review-result
@@ -128,10 +128,9 @@ oracle peer export senior-review -o oracle.json
 oracle peer import oracle.json
 ```
 
-### Memory (oracle-memory)
+### 🧠 Memory (via oracle-memory)
 
-Memory entries stored in `.oracle-memory/` format, compatible with
-[oracle-memory](https://github.com/JonusNattapong/oracle-memory) memory server.
+Entries live in `.oracle-memory/`, shared with the memory server.
 
 ```bash
 oracle memory list
@@ -140,21 +139,23 @@ oracle memory clear
 oracle memory clear senior-review
 ```
 
-## MCP Server
+---
+
+## Running as an MCP server
+
+Prefer to drive Oracle from inside Claude Code or Codex? Serve it over MCP.
 
 ```bash
-# Start directly
-node dist/mcp.js
+node dist/mcp.js                       # start the server
 
-# Generate client config
-oracle setup-mcp --client claude-code
+oracle setup-mcp --client claude-code  # generate client config
 oracle setup-mcp --client codex
 ```
 
-### MCP tools (14)
+Tools exposed to the client:
 
-| Tool | Description |
-|------|-------------|
+| Tool | What it does |
+|------|--------------|
 | `oracle_consult` | Analyze project files with a skill |
 | `oracle_skills` | List available skills |
 | `oracle_oracle_list` | List registered oracle profiles |
@@ -165,9 +166,30 @@ oracle setup-mcp --client codex
 | `oracle_session_get` | Get session details |
 | `oracle_doctor` | Check configuration and provider |
 
+---
+
+## Command cheat-sheet
+
+```
+oracle consult   -p <prompt> [--skill <name>] [--oracle <name>] [--diff [target]] [-f <pattern...>]
+oracle doctor    [--provider <name>]
+oracle oracle    list | register | unregister | show
+oracle memory    list | clear
+oracle skill     list | install <file.json>
+oracle peer      export | import | send | list | monitor
+oracle login     [--provider anthropic] [--client-id <id>]
+oracle logout
+oracle session   <id>
+oracle status    [-n <limit>]
+oracle setup-mcp [--client claude-code | codex]
+```
+
+---
+
 ## Configuration
 
-`.oracle/config.json`:
+Per-project settings in `.oracle/config.json`:
+
 ```json
 {
   "provider": "codex",
@@ -179,35 +201,22 @@ oracle setup-mcp --client codex
 }
 ```
 
-## Storage layout
+Where everything lives:
 
 ```
 ~/.oracle/
-├── oracles/         # Named oracle profiles
-├── skills/          # Custom skill files
-├── sessions/        # Consult session history
-│   └── <id>/
-│       ├── bundle.md
-│       ├── output.md
-│       └── session.json
-├── auth/            # OAuth tokens
-│   └── anthropic.json
+├── oracles/          # named oracle profiles
+├── skills/           # custom skills
+├── sessions/<id>/    # bundle.md · output.md · session.json
+└── auth/             # OAuth tokens
 
 <project>/
-├── .oracle/
-│   ├── config.json
-│   ├── workshop.json
-│   └── skills/      # Project-local skills
-├── .oracle-memory/  # Memory (compatible with oracle-memory)
-│   ├── facts/
-│   ├── insights/
-│   ├── chunks/
-│   └── working/
-└── .oracle/messages/ # Messages (compatible with oracle-messages)
-    └── messages/
+├── .oracle/config.json · skills/       # project-local config & skills
+├── .oracle-memory/   facts · insights · chunks · working
+└── .oracle/messages/ # the shared mailbox
 ```
 
-## Environment
+Environment knobs:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -218,10 +227,14 @@ oracle setup-mcp --client codex
 | `ANTHROPIC_CLIENT_ID` | — | Anthropic OAuth client ID |
 | `ORACLE_MEMORY_ROOT_DIR` | `cwd` | Memory root (oracle-memory compatible) |
 
-## Integrated projects
+> **Windows note:** the memory sidecar ships as a Node script and the messages sidecar as a native binary. If you auto-manage them, point `ORACLE_MEMORY_BIN` / `ORACLE_MESSAGES_BIN` at the exact built files — Oracle knows how to launch each correctly.
 
-Oracle reads/writes `.oracle-memory/` and `.oracle/messages/` formats natively,
-making it interoperable with:
+---
 
-- [Oracle Memory](https://github.com/JonusNattapong/oracle-memory) — Persistent memory layer
-- [Oracle Messages](https://github.com/JonusNattapong/oracle-messages) — Multi-agent message bus
+## The rest of the family
+
+- 🧠 [Oracle Memory](https://github.com/JonusNattapong/oracle-memory) — persistent memory layer
+- 📮 [Oracle Messages](https://github.com/JonusNattapong/oracle-messages) — multi-agent message bus
+- 📖 [Oracle Skill](https://github.com/JonusNattapong/oracle-skill) — the skill that teaches agents to use both
+
+*One brain, one notebook, one group chat — no database in sight.*
