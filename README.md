@@ -4,7 +4,7 @@
 
 ```
 CLI + MCP server → bundle project context → analyze with AI → persist sessions
-                   Skills | Oracles | Memory (Agoya) | Mesh (Agora)
+                   Skills | Oracles | Memory (oracle-memory) | Mesh (oracle-messages)
 ```
 
 ## Requirements
@@ -99,7 +99,7 @@ oracle consult --oracle senior-review -p "Review this"
 ```
 
 When `--memory` is enabled, each consult saves a summary (`insight`) via
-[Agoya](https://github.com/JonusNattapong/agoya) (`.agoya/` format). Past
+[oracle-memory](https://github.com/JonusNattapong/oracle-memory) (`.agoya/` format). Past
 insights are injected into the system prompt on subsequent calls.
 
 ### Providers
@@ -115,10 +115,10 @@ oracle login --provider anthropic --client-id <id>
 oracle consult -p "Review" --provider anthropic --model claude-sonnet-4-20250514
 ```
 
-### Peer mesh (Agora)
+### Peer mesh (oracle-messages)
 
 Messages are stored in `.agora/` format, compatible with
-[Agora](https://github.com/JonusNattapong/agora) message bus.
+[oracle-messages](https://github.com/JonusNattapong/oracle-messages) message bus.
 
 ```bash
 oracle peer send --to claude --body "Review complete" --kind review-result
@@ -128,10 +128,10 @@ oracle peer export senior-review -o oracle.json
 oracle peer import oracle.json
 ```
 
-### Memory (Agoya)
+### Memory (oracle-memory)
 
 Memory entries stored in `.agoya/` format, compatible with
-[Agoya](https://github.com/JonusNattapong/agoya) memory server.
+[oracle-memory](https://github.com/JonusNattapong/oracle-memory) memory server.
 
 ```bash
 oracle memory list
@@ -198,12 +198,12 @@ oracle setup-mcp --client codex
 │   ├── config.json
 │   ├── workshop.json
 │   └── skills/      # Project-local skills
-├── .agoya/          # Memory (compatible with Agoya)
+├── .agoya/          # Memory (compatible with oracle-memory)
 │   ├── facts/
 │   ├── insights/
 │   ├── chunks/
 │   └── working/
-└── .agora/          # Messages (compatible with Agora)
+└── .agora/          # Messages (compatible with oracle-messages)
     └── messages/
 ```
 
@@ -216,12 +216,12 @@ oracle setup-mcp --client codex
 | `OPENAI_API_KEY` | — | OpenAI provider |
 | `ANTHROPIC_API_KEY` | — | Anthropic provider |
 | `ANTHROPIC_CLIENT_ID` | — | Anthropic OAuth client ID |
-| `AGOYA_ROOT_DIR` | `cwd` | Agoya memory root |
+| `AGOYA_ROOT_DIR` | `cwd` | Memory root (oracle-memory compatible) |
 
 ## Integrated projects
 
 Oracle reads/writes `.agoya/` and `.agora/` formats natively,
 making it interoperable with:
 
-- [Agoya](https://github.com/JonusNattapong/agoya) — File-backed Memory MCP Server
-- [Agora](https://github.com/JonusNattapong/agora) — Multi-agent message bus
+- [oracle-memory](https://github.com/JonusNattapong/oracle-memory) — Memory MCP Server
+- [oracle-messages](https://github.com/JonusNattapong/oracle-messages) — Multi-agent message bus

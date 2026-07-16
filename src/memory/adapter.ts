@@ -3,7 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 // ponytail: writes directly to .agoya/ format — zero deps, no MCP needed.
-// Agoya server reads the same files, so memory is shared transparently.
+// oracle-memory server reads the same files, so memory is shared transparently.
 
 export type MemoryType = "fact" | "insight" | "chunk" | "working";
 

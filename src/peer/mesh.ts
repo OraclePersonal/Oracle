@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 
-// ponytail: writes directly to .agora/ format — compatible with agora message bus.
-// Agora server reads the same files, so mesh is shared transparently.
+// ponytail: writes directly to .agora/ format — compatible with oracle-messages bus.
+// oracle-messages server reads the same files, so mesh is shared transparently.
 
 export type MessageKind =
   | "message" | "note" | "question" | "review-request" | "review-result"
