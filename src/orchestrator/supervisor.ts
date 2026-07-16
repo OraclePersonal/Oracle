@@ -223,15 +223,37 @@ export class ProcessSupervisor {
         ? process.env.ORACLE_MEMORY_BIN || "oracle-memory"
         : process.env.ORACLE_MESSAGES_BIN || "oracle-messages-mcp";
 
+    // Resolve how to actually launch the command cross-platform. A bare
+    // ".exe"/POSIX binary spawns directly, but two common install shapes need
+    // special handling — otherwise spawn() fails with no pid on Windows and
+    // orchestration silently falls back to the file adapter even though the
+    // sidecar *is* installed:
+    //   - A Node entry script (oracle-memory ships as dist/index.js): launch it
+    //     with the current node executable so a bare "*.js" path works when
+    //     ORACLE_MEMORY_BIN points straight at the built file.
+    //   - An npm shim (.cmd/.bat/.ps1 on Windows): modern Node refuses to spawn
+    //     these without a shell for security, so route them through a shell.
+    const lower = command.toLowerCase();
+    let execCommand = command;
+    let execArgs: string[] = [];
+    let useShell = false;
+    if (/\.(js|mjs|cjs)$/.test(lower)) {
+      execCommand = process.execPath;
+      execArgs = [command];
+    } else if (/\.(cmd|bat|ps1)$/.test(lower)) {
+      useShell = true;
+    }
+
     try {
       // Both binaries take zero CLI args and read transport/port purely from
       // env vars — oracle-memory (Node) would silently ignore stray argv,
       // but oracle-messages (Rust/clap) hard-errors and exits immediately on
       // any unrecognized flag, which used to make every spawn attempt fail
       // the health check without ever actually starting the server.
-      const proc = spawn(command, [], {
+      const proc = spawn(execCommand, execArgs, {
         detached: true,
         stdio: "ignore",
+        shell: useShell,
         env: {
           ...process.env,
           ...(service === "memory" && { ORACLE_MEMORY_PORT: String(port), ORACLE_MEMORY_TRANSPORT: "http" }),
@@ -256,9 +278,17 @@ export class ProcessSupervisor {
       proc.unref();
       this.activeProcesses.set(service, { process: proc, startTime: Date.now() });
 
-      // Wait for health check to pass (with retry)
+      // Wait for health check to pass (with retry). The budget must cover a
+      // cold start, not just a warm ping: oracle-memory (Node + SQLite, with
+      // optional vector search) measurably takes ~3s to bind its HTTP server
+      // and answer /health, so the old 2s (10×200ms) window missed it by ~1s
+      // and orchestration fell back to the file adapter *every* time even
+      // though the sidecar was installed and starting fine. 60×200ms = 12s
+      // comfortably covers cold start; this cost is paid only on the very
+      // first spawn — the daemon then persists (idle-timeout) and later CLI
+      // invocations reconnect via the lockfile without re-spawning.
       const endpoint = `http://127.0.0.1:${port}/mcp`;
-      let retries = 10;
+      let retries = 60;
       while (retries > 0) {
         await sleep(200);
         if (await this.healthCheck(service, endpoint)) {
@@ -272,7 +302,13 @@ export class ProcessSupervisor {
       return null;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      console.error(`Failed to spawn ${service}: ${reason}`);
+      // Expected, designed condition: the sidecar binary may simply not be
+      // installed, in which case the caller (factory) transparently falls back
+      // to the file adapter. Keep this at debug level so it matches the
+      // factory's fallback logging instead of surfacing a scary error line
+      // (on Windows/PowerShell a bare console.error renders as a
+      // NativeCommandError). The null return is the real signal.
+      console.debug(`[orchestrator] failed to spawn ${service}: ${reason}`);
       return null;
     }
   }
