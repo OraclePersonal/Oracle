@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import "dotenv/config";
+import fs from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { ConsultService } from "./core/consult.js";
@@ -16,46 +18,310 @@ import {
   writeMcpSetup,
   type McpClient
 } from "./setup/mcp.js";
+import { AnthropicOAuthClient } from "./auth/anthropic-oauth.js";
+import { TokenStore } from "./auth/store.js";
+import { SkillRegistry } from "./skills/registry.js";
+import { OracleRegistry } from "./oracles/registry.js";
+import { AgoyaAdapter } from "./memory/adapter.js";
+import { AgoraMeshAdapter } from "./peer/mesh.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
+import * as peer from "./peer/peer.js";
+
+function agoyaDir(cwd?: string): string {
+  return process.env.AGOYA_ROOT_DIR ?? cwd ?? process.cwd();
+}
+
+const homeDir = (): string =>
+  process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
 
 const program = new Command()
   .name("oracle")
-  .description("Bundle a prompt and project files, then ask an expert model.")
-  .version("0.1.0");
+  .description("Oracle — MCP-powered AI coding consultant")
+  .version("0.4.0");
 
+// ── consult ──────────────────────────────────────────────────────
 program
   .command("consult")
+  .description("Consult an oracle with a prompt and project context")
   .requiredOption("-p, --prompt <text>", "Consultation prompt")
+  .option("--oracle <name>", "Oracle profile to use")
+  .option("--skill <name>", "Skill to apply (default: review)")
   .option("-f, --file <pattern...>", "File paths or glob patterns", [])
-  .option("-m, --model <model>", "Model", "gpt-5.4")
-  .option("--provider <provider>", "Provider: codex or openai", "codex")
+  .option("--diff [target]", "Include git diff (against branch, default: HEAD~1)")
+  .option("-m, --model <model>", "Model override")
+  .option("--provider <provider>", "Provider override")
   .option("--cwd <path>", "Working directory", process.cwd())
   .option("--json", "Print JSON result")
   .action(async (options) => {
-    const providerName = parseProviderName(options.provider);
-    const checks = await checkProvider(providerName);
-    const failedCheck = checks.find((check) => !check.ok);
+    const cwd = path.resolve(options.cwd);
+    const skillReg = new SkillRegistry(homeDir(), cwd);
+    await skillReg.load();
+    const oracleReg = new OracleRegistry(homeDir(), cwd);
+
+    let skillName = options.skill ?? "review";
+    let model = options.model;
+    let providerName = options.provider;
+
+    // Load oracle profile if specified
+    if (options.oracle) {
+      const profile = await oracleReg.getOracle(options.oracle);
+      if (!profile) throw new Error(`Oracle not found: ${options.oracle}`);
+      skillName = profile.skill;
+      model = model ?? profile.model;
+      providerName = providerName ?? profile.provider;
+      if (profile.systemPrompt) {
+        // prepend custom system prompt
+      }
+    }
+
+    const skill = skillReg.get(skillName);
+    if (!skill) throw new Error(`Unknown skill: ${skillName}. Available: ${skillReg.names().join(", ")}`);
+
+    const finalProvider = providerName ?? "codex";
+    const parsedProvider = parseProviderName(finalProvider);
+    const checks = await checkProvider(parsedProvider);
+    const failedCheck = checks.find((chk) => !chk.ok);
     if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
-    const service = new ConsultService(createProvider(providerName));
+
+    const service = new ConsultService(createProvider(parsedProvider));
+    const systemPrompt = skillReg.compose(skillName, DEFAULT_SYSTEM_PROMPT);
+    const agoya = new AgoyaAdapter(cwd);
+
+    // Build memory context if oracle has memory enabled
+    let finalSystemPrompt = systemPrompt;
+    if (options.oracle) {
+      const profile = await oracleReg.getOracle(options.oracle);
+      if (profile?.memory) {
+        const entries = await agoya.recall(undefined, options.oracle);
+        if (entries.length > 0) {
+          const ctx = entries.map((e) => `[${e.type}] ${e.content.slice(0, 200)}`).join("\n\n");
+          finalSystemPrompt = `${systemPrompt}\n\n[PREVIOUS CONTEXT]\n${ctx}`;
+        }
+      }
+    }
+
+    // Include git diff if --diff is passed
+    if (options.diff !== undefined) {
+      const target = options.diff || "HEAD~1";
+      try {
+        const { execFileSync } = await import("node:child_process");
+        const diff = execFileSync("git", ["diff", target], { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 });
+        if (diff.trim()) {
+          options.prompt = `${options.prompt}\n\n[GIT DIFF: ${target}]\n\`\`\`\n${diff.trim()}\n\`\`\``;
+        }
+      } catch (e: any) {
+        console.error(`Warning: git diff failed: ${e.message}`);
+      }
+    }
+
     const result = await service.consult({
       prompt: options.prompt,
+      preset: skillName,
+      provider: finalProvider,
       files: options.file,
-      model: options.model,
-      cwd: options.cwd
+      model: model ?? skill.model ?? "gpt-5.4",
+      cwd,
+      systemPrompt: finalSystemPrompt
     });
+
+    // Save memory if oracle has memory enabled
+    if (options.oracle) {
+      const profile = await oracleReg.getOracle(options.oracle);
+      if (profile?.memory && result.status === "completed") {
+        await agoya.remember(options.oracle, "insight", result.output.slice(0, 500), {
+          tags: [skillName, "consult"],
+          meta: { sessionId: result.sessionId, prompt: options.prompt }
+        });
+      }
+    }
 
     if (options.json) console.log(JSON.stringify(result, null, 2));
     else {
       console.log(`Session: ${result.sessionId}`);
       console.log(`Status: ${result.status}`);
+      const tokens = result.estimatedInputTokens
+        ? `~${result.estimatedInputTokens.toLocaleString()} in`
+        : "";
+      if (result.usage?.totalTokens) {
+        console.log(`Tokens: ${tokens} | ${result.usage.totalTokens.toLocaleString()} total`);
+      } else if (result.estimatedInputTokens) {
+        console.log(`Tokens: ${tokens}`);
+      }
       if (result.error) console.error(`Error: ${result.error}`);
       if (result.output) console.log(`\n${result.output}`);
     }
     process.exitCode = result.status === "completed" ? 0 : 1;
   });
 
+// ── oracle ───────────────────────────────────────────────────────
+const oracleCmd = program.command("oracle").description("Manage oracle profiles");
+
+oracleCmd
+  .command("list")
+  .description("List registered oracles")
+  .action(async () => {
+    const reg = new OracleRegistry(homeDir());
+    const list = await reg.listOracles();
+    if (!list.length) { console.log("No oracles registered."); return; }
+    for (const o of list) {
+      const mem = o.memory ? " +memory" : "";
+      console.log(`${o.name.padEnd(20)} skill=${o.skill}${mem}`);
+    }
+  });
+
+oracleCmd
+  .command("register")
+  .description("Register a new oracle profile")
+  .requiredOption("-n, --name <name>", "Oracle name")
+  .requiredOption("-s, --skill <skill>", "Assigned skill")
+  .option("-d, --description <text>", "Description")
+  .option("-m, --model <model>", "Default model")
+  .option("-p, --provider <provider>", "Default provider")
+  .option("--memory", "Enable memory", false)
+  .action(async (options) => {
+    const reg = new OracleRegistry(homeDir());
+    await reg.registerOracle({
+      name: options.name,
+      skill: options.skill,
+      description: options.description,
+      model: options.model,
+      provider: options.provider,
+      memory: options.memory
+    });
+    console.log(`Registered oracle: ${options.name}`);
+  });
+
+oracleCmd
+  .command("unregister")
+  .description("Remove an oracle profile")
+  .argument("<name>", "Oracle name")
+  .action(async (name) => {
+    const reg = new OracleRegistry(homeDir());
+    await reg.unregisterOracle(name);
+    console.log(`Unregistered oracle: ${name}`);
+  });
+
+oracleCmd
+  .command("show")
+  .description("Show oracle profile details")
+  .argument("<name>", "Oracle name")
+  .action(async (name) => {
+    const reg = new OracleRegistry(homeDir());
+    const profile = await reg.getOracle(name);
+    if (!profile) throw new Error(`Oracle not found: ${name}`);
+    console.log(JSON.stringify(profile, null, 2));
+  });
+
+// ── memory ───────────────────────────────────────────────────────
+const memCmd = program.command("memory").description("Manage oracle memory");
+
+memCmd
+  .command("list")
+  .description("Show memory entries for an agent")
+  .argument("[agent]", "Agent name (default: all)")
+  .option("-n, --limit <number>", "Entries", "10")
+  .action(async (agent, options) => {
+    const agoya = new AgoyaAdapter(process.cwd());
+    const entries = await agoya.recall(undefined, agent ?? undefined, Number(options.limit));
+    if (!entries.length) { console.log("No memory entries."); return; }
+    for (const e of entries) {
+      console.log(`${e.ts.slice(0, 19)}  [${e.type.padEnd(8)}]  ${e.agent.padEnd(12)}  ${e.content.slice(0, 60)}`);
+    }
+  });
+
+memCmd
+  .command("clear")
+  .description("Clear working memory for an agent (or all)")
+  .argument("[agent]", "Agent name (omit for all)")
+  .action(async (agent) => {
+    const agoya = new AgoyaAdapter(process.cwd());
+    const count = await agoya.clearWorking(agent ?? undefined);
+    console.log(`Cleared ${count} working memory entries.`);
+  });
+
+// ── peer ─────────────────────────────────────────────────────────
+const peerCmd = program.command("peer").description("Share oracles and messages between instances");
+
+peerCmd
+  .command("export")
+  .description("Export oracle(s) to a shareable file")
+  .requiredOption("-o, --output <file>", "Output file path")
+  .argument("<names...>", "Oracle name(s) to export")
+  .action(async (names, options) => {
+    const reg = new OracleRegistry(homeDir());
+    const pkg = await peer.exportPeerPackage(reg, names);
+    await fs.writeFile(options.output, JSON.stringify(pkg, null, 2), "utf8");
+    console.log(`Exported ${names.length} oracle(s) to ${options.output}`);
+  });
+
+peerCmd
+  .command("import")
+  .description("Import oracle(s) from a peer file")
+  .argument("<file>", "Peer package file path")
+  .action(async (file) => {
+    const reg = new OracleRegistry(homeDir());
+    const imported = await peer.importPeerPackage(reg, file);
+    console.log(`Imported: ${imported.join(", ")}`);
+  });
+
+peerCmd
+  .command("send")
+  .description("Send a message via agora mesh")
+  .requiredOption("--to <agent>", "Recipient agent name (or * for broadcast)")
+  .requiredOption("-b, --body <text>", "Message body")
+  .option("--from <agent>", "Sender name", "oracle")
+  .option("--kind <kind>", "Message kind", "message")
+  .option("--subject <subject>", "Message subject")
+  .action(async (options) => {
+    const mesh = new AgoraMeshAdapter(process.cwd());
+    const msg = await mesh.send(options.from, options.to, options.body, options.kind as any, {
+      subject: options.subject
+    });
+    console.log(`Sent: ${msg.id}`);
+  });
+
+peerCmd
+  .command("list")
+  .description("List messages from agora mesh")
+  .option("--agent <agent>", "Filter by recipient")
+  .option("--kind <kind>", "Filter by kind")
+  .option("-n, --limit <number>", "Messages", "20")
+  .action(async (options) => {
+    const mesh = new AgoraMeshAdapter(process.cwd());
+    const msgs = await mesh.getMessages({
+      agent: options.agent,
+      kind: options.kind as any,
+      limit: Number(options.limit)
+    });
+    for (const m of msgs) {
+      console.log(`${m.id.slice(0, 22)}  ${m.sender.padEnd(12)} → ${m.recipient.padEnd(12)}  ${(m.subject ?? m.body).slice(0, 50)}`);
+    }
+  });
+
+peerCmd
+  .command("monitor")
+  .description("Follow incoming messages live (poll-based)")
+  .option("--agent <agent>", "Your agent name", "oracle")
+  .option("--since <id>", "Start from message id")
+  .option("-i, --interval <ms>", "Poll interval (ms)", "5000")
+  .action(async (options) => {
+    const mesh = new AgoraMeshAdapter(process.cwd());
+    let cursor = options.since;
+    console.log(`Monitoring messages for ${options.agent}...`);
+    for (;;) {
+      const msgs = await mesh.getUnread(options.agent, cursor);
+      for (const m of msgs) {
+        console.log(`[${m.kind}] ${m.sender}: ${(m.subject ?? m.body).slice(0, 80)}`);
+        cursor = m.id;
+      }
+      await new Promise((r) => setTimeout(r, Number(options.interval)));
+    }
+  });
+
+// ── existing commands ────────────────────────────────────────────
 program
   .command("doctor")
-  .option("--provider <provider>", "Provider: codex or openai", "codex")
+  .option("--provider <provider>", "Provider: codex, openai, or anthropic", "codex")
   .action(async (options) => {
     const checks = await checkProvider(parseProviderName(options.provider));
     for (const check of checks) {
@@ -112,6 +378,60 @@ program
       console.log(
         `${item.createdAt}  ${item.status.padEnd(9)}  ${item.model.padEnd(16)}  ${item.sessionId}`
       );
+    }
+  });
+
+program
+  .command("login")
+  .description("Authenticate with an OAuth provider")
+  .option("--provider <provider>", "Provider", "anthropic")
+  .option("--client-id <id>", "OAuth client ID")
+  .option("--force", "Re-authenticate")
+  .action(async (options) => {
+    const store = new TokenStore(homeDir());
+    const existing = await store.read(options.provider);
+    if (existing && !options.force) {
+      console.log(`Already logged in to ${options.provider}. Use --force to re-authenticate.`);
+      return;
+    }
+    if (options.provider !== "anthropic") throw new Error(`Login not supported for provider: ${options.provider}`);
+    const clientId = options.clientId ?? process.env.ANTHROPIC_CLIENT_ID;
+    if (!clientId) throw new Error("ANTHROPIC_CLIENT_ID is required.");
+    const oauth = new AnthropicOAuthClient(clientId, store);
+    const session = await oauth.startDeviceFlow();
+    console.log(`\nOpen: ${session.verificationUri}\nCode: ${session.userCode}\n`);
+    console.log("Waiting for authorization...");
+    await oauth.pollForToken(session.deviceCode, session.interval);
+    console.log("Authenticated.");
+  });
+
+program
+  .command("logout")
+  .description("Clear OAuth session")
+  .option("--provider <provider>", "Provider", "anthropic")
+  .action(async (options) => {
+    await new TokenStore(homeDir()).delete(options.provider);
+    console.log(`Logged out of ${options.provider}.`);
+  });
+
+program
+  .command("skill")
+  .description("Manage skills")
+  .argument("[action]", "list, install", "list")
+  .argument("[arg]", "Skill name or file path")
+  .action(async (action, arg) => {
+    const reg = new SkillRegistry(homeDir());
+    await reg.load();
+    if (action === "list") {
+      for (const skill of reg.list()) {
+        console.log(`${skill.name.padEnd(20)} ${skill.description}`);
+      }
+    } else if (action === "install") {
+      if (!arg) throw new Error("Usage: oracle skill install <file.json>");
+      const name = await reg.install(arg);
+      console.log(`Installed skill: ${name}`);
+    } else {
+      throw new Error(`Unknown action: ${action}. Use list or install.`);
     }
   });
 

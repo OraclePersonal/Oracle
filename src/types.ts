@@ -2,6 +2,8 @@ export interface ContextFile {
   path: string;
   content: string;
   sizeBytes: number;
+  base64?: string;
+  mimeType?: string;
 }
 
 export interface ConsultRequest {
@@ -36,6 +38,7 @@ export interface ConsultResult {
   provider?: string;
   preset?: string;
   files: string[];
+  estimatedInputTokens?: number;
   responseId?: string;
   output: string;
   usage: TokenUsage;

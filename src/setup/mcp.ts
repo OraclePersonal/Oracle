@@ -43,7 +43,7 @@ export function generateMcpSetup(input: GenerateInput): SetupFile {
       content: `${JSON.stringify(
         {
           mcpServers: {
-            "mini-oracle": {
+            "oracle": {
               command: process.execPath,
               args: [serverPath],
               env: { ORACLE_WORKSPACE_ROOT: root }
@@ -58,11 +58,11 @@ export function generateMcpSetup(input: GenerateInput): SetupFile {
   return {
     path: path.join(root, ".codex", "config.toml"),
     content: [
-      "[mcp_servers.mini-oracle]",
+      "[mcp_servers.oracle]",
       `command = ${tomlString(process.execPath)}`,
       `args = [${tomlString(serverPath)}]`,
       "",
-      "[mcp_servers.mini-oracle.env]",
+      "[mcp_servers.oracle.env]",
       `ORACLE_WORKSPACE_ROOT = ${tomlString(root)}`,
       ""
     ].join("\n")
@@ -73,7 +73,7 @@ function conflict(filePath: string): OracleError {
   return new OracleError(
     "ORACLE_CONFIG_INVALID",
     `Mini Oracle MCP configuration already differs: ${filePath}`,
-    "Review the existing mini-oracle entry or rerun setup-mcp with --force."
+    "Review the existing oracle entry or rerun setup-mcp with --force."
   );
 }
 
@@ -85,15 +85,15 @@ function mergeClaudeConfig(existing: string, generated: string, force: boolean, 
     throw conflict(filePath);
   }
   const wanted = JSON.parse(generated) as { mcpServers: Record<string, unknown> };
-  const currentEntry = current.mcpServers?.["mini-oracle"];
-  const wantedEntry = wanted.mcpServers["mini-oracle"];
+  const currentEntry = current.mcpServers?.["oracle"];
+  const wantedEntry = wanted.mcpServers["oracle"];
   if (currentEntry !== undefined && JSON.stringify(currentEntry) !== JSON.stringify(wantedEntry) && !force) {
     throw conflict(filePath);
   }
   return `${JSON.stringify(
     {
       ...current,
-      mcpServers: { ...current.mcpServers, "mini-oracle": wantedEntry }
+      mcpServers: { ...current.mcpServers, "oracle": wantedEntry }
     },
     null,
     2
@@ -101,7 +101,7 @@ function mergeClaudeConfig(existing: string, generated: string, force: boolean, 
 }
 
 function mergeCodexConfig(existing: string, generated: string, force: boolean, filePath: string): string {
-  const marker = "[mcp_servers.mini-oracle]";
+  const marker = "[mcp_servers.oracle]";
   const start = existing.indexOf(marker);
   if (start < 0) return `${existing.trimEnd()}\n\n${generated}`;
   if (!force && existing.slice(start).trim() !== generated.trim()) throw conflict(filePath);

@@ -8,7 +8,9 @@ import { DEFAULT_SYSTEM_PROMPT } from "../context/bundle.js";
 import type { ConsultService } from "../core/consult.js";
 import { OracleError, serializeOracleError } from "../errors.js";
 import { checkProvider } from "../providers/factory.js";
-import { composePresetSystemPrompt, PRESET_NAMES, type PresetName } from "../presets.js";
+import { SkillRegistry } from "../skills/registry.js";
+import { OracleRegistry } from "../oracles/registry.js";
+import { AgoyaAdapter } from "../memory/adapter.js";
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -16,6 +18,9 @@ interface OracleServerDependencies {
   config: ProjectConfig;
   workspaceRoot: string;
   providerId: string;
+  skills: SkillRegistry;
+  oracles: OracleRegistry;
+  memory: AgoyaAdapter;
   providerChecks?: typeof checkProvider;
 }
 
@@ -38,20 +43,24 @@ export function registerOracleTools({
   config,
   workspaceRoot,
   providerId,
+  skills,
+  oracles,
+  memory,
   providerChecks = checkProvider
 }: OracleServerDependencies): void {
   server.registerTool(
     "oracle_consult",
     {
       title: "Consult Oracle",
-      description: "Analyze project files with a focused engineering preset.",
+      description: "Analyze project files with a focused engineering skill.",
       inputSchema: {
         prompt: z.string().min(1),
-        preset: z.enum(PRESET_NAMES).default("review"),
-        files: z.array(z.string()).optional()
+        skill: z.string().optional(),
+        files: z.array(z.string()).optional(),
+        previousSessionId: z.string().optional()
       }
     },
-    async ({ prompt, preset, files }, extra) => {
+    async ({ prompt, skill, files, previousSessionId }, extra) => {
       try {
         const progressToken = extra._meta?.progressToken;
         const progress = async (value: number, message: string) => {
@@ -62,26 +71,57 @@ export function registerOracleTools({
           });
         };
         await progress(1, "Resolving and validating project files");
+        const skillName = skill ?? "review";
+        const selected = skills.get(skillName);
+        if (!selected) throw new OracleError("ORACLE_INVALID_REQUEST", `Unknown skill: ${skillName}`, `Available: ${skills.names().join(", ")}`);
         const patterns = [...(files ?? config.include), ...config.exclude.map((item) => `!${item}`)];
         await progress(2, "Consulting the configured provider");
+        let previousResponseId: string | undefined;
+        if (previousSessionId) {
+          const prev = await service.session(previousSessionId);
+          previousResponseId = prev?.responseId;
+        }
         const result = await service.consult({
           prompt,
-          preset,
+          preset: skillName,
           provider: providerId,
           files: patterns,
-          model: config.model,
+          model: selected.model ?? config.model,
           cwd: workspaceRoot,
           maxFileSizeBytes: config.maxFileSizeBytes,
           maxInputBytes: config.maxInputBytes,
-          systemPrompt: composePresetSystemPrompt(preset as PresetName, DEFAULT_SYSTEM_PROMPT)
+          previousResponseId,
+          systemPrompt: skills.compose(skillName, DEFAULT_SYSTEM_PROMPT)
         });
         await progress(3, "Session persisted");
         return success(result.output, {
           ...result,
           provider: providerId,
-          preset,
+          preset: skillName,
           filesIncluded: result.files.length
         });
+      } catch (error) {
+        return failure(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "oracle_skills",
+    {
+      title: "List Skills",
+      description: "List available Oracle skills.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const list = skills.list().map((s) => ({
+          name: s.name,
+          description: s.description,
+          model: s.model ?? null,
+          filePatterns: s.filePatterns ?? null
+        }));
+        return success(JSON.stringify(list, null, 2), { skills: list });
       } catch (error) {
         return failure(error);
       }
@@ -142,6 +182,80 @@ export function registerOracleTools({
   );
 
   server.registerTool(
+    "oracle_oracle_list",
+    {
+      title: "List Oracles",
+      description: "List registered oracle profiles.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const list = await oracles.listOracles();
+        return success(JSON.stringify(list, null, 2), { oracles: list });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_oracle_register",
+    {
+      title: "Register Oracle",
+      description: "Create a named oracle profile with a skill.",
+      inputSchema: {
+        name: z.string().min(1),
+        skill: z.string().min(1),
+        description: z.string().optional(),
+        model: z.string().optional(),
+        provider: z.string().optional(),
+        memory: z.boolean().optional()
+      }
+    },
+    async (params) => {
+      try {
+        await oracles.registerOracle({
+          name: params.name,
+          skill: params.skill,
+          description: params.description,
+          model: params.model,
+          provider: params.provider,
+          memory: params.memory
+        });
+        return success(`Registered oracle: ${params.name}`, { name: params.name });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_list",
+    {
+      title: "List Memory",
+      description: "Show memory entries from the .agoya store.",
+      inputSchema: { agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(100).default(10) }
+    },
+    async ({ agent, type, limit }) => {
+      try {
+        const entries = await memory.recall(type as any, agent ?? undefined, limit);
+        return success(JSON.stringify(entries, null, 2), { entries });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_clear",
+    {
+      title: "Clear Memory",
+      description: "Clear working memory for an agent or all.",
+      inputSchema: { agent: z.string().optional() }
+    },
+    async ({ agent }) => {
+      try {
+        const count = await memory.clearWorking(agent ?? undefined);
+        return success(`Cleared ${count} working memory entries.`, { cleared: count });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
     "oracle_doctor",
     {
       title: "Check Oracle",
@@ -151,7 +265,7 @@ export function registerOracleTools({
     async () => {
       try {
         const nodeMajor = Number.parseInt(process.versions.node.split(".")[0], 10);
-        const sessionProbe = await fs.mkdtemp(path.join(os.tmpdir(), "mini-oracle-doctor-"));
+        const sessionProbe = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-doctor-"));
         await fs.rm(sessionProbe, { recursive: true, force: true });
         await fs.access(workspaceRoot, fs.constants.R_OK);
         const checks = [

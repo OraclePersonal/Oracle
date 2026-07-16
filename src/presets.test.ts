@@ -1,14 +1,24 @@
 import { describe, expect, test } from "vitest";
-import { composePresetSystemPrompt, PRESET_NAMES } from "./presets.js";
+import { SkillRegistry } from "./skills/registry.js";
+import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 
-describe("presets", () => {
-  test("exposes the supported preset names", () => {
-    expect(PRESET_NAMES).toEqual(["review", "debug", "architecture", "tests", "security"]);
+describe("skills", () => {
+  test("loads built-in skills", async () => {
+    const registry = new SkillRegistry("/tmp");
+    await registry.load();
+    const names = registry.names();
+    expect(names).toContain("review");
+    expect(names).toContain("debug");
+    expect(names).toContain("architecture");
+    expect(names).toContain("tests");
+    expect(names).toContain("security");
   });
 
-  test.each(PRESET_NAMES)("composes %s with the base system prompt", (preset) => {
-    const result = composePresetSystemPrompt(preset, "Base prompt");
-    expect(result).toContain("Base prompt");
-    expect(result.length).toBeGreaterThan("Base prompt".length);
+  test("composes skill with base prompt", async () => {
+    const registry = new SkillRegistry("/tmp");
+    await registry.load();
+    const result = registry.compose("review", DEFAULT_SYSTEM_PROMPT);
+    expect(result).toContain(DEFAULT_SYSTEM_PROMPT);
+    expect(result.length).toBeGreaterThan(DEFAULT_SYSTEM_PROMPT.length);
   });
 });

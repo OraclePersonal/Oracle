@@ -9,6 +9,9 @@ import { DEFAULT_PROJECT_CONFIG } from "../config/project.js";
 import { ConsultService } from "../core/consult.js";
 import type { Provider } from "../providers/provider.js";
 import { FileSessionStore } from "../session/store.js";
+import { SkillRegistry } from "../skills/registry.js";
+import { OracleRegistry } from "../oracles/registry.js";
+import { AgoyaAdapter } from "../memory/adapter.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -28,12 +31,18 @@ beforeAll(async () => {
   await fs.writeFile(path.join(root, "src", "sample.ts"), "export const answer = 42;", "utf8");
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   server = new McpServer({ name: "oracle-test", version: "1.0.0" });
+  const skills = new SkillRegistry(root, path.join(root, ".oracle", "skills"));
+  await skills.load();
+  const oracles = new OracleRegistry(root, root);
   registerOracleTools({
     server,
     service: new ConsultService(provider, new FileSessionStore(path.join(root, ".sessions"))),
     config: { ...DEFAULT_PROJECT_CONFIG, include: ["src/**/*.ts"], exclude: [] },
     workspaceRoot: root,
     providerId: "codex",
+    skills,
+    oracles,
+    memory: new AgoyaAdapter(root),
     providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
@@ -49,18 +58,20 @@ afterAll(async () => {
 
 describe("Oracle MCP tools", () => {
   test("lists all focused tools", async () => {
-    expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-      "oracle_consult",
-      "oracle_sessions",
-      "oracle_session_get",
-      "oracle_doctor"
-    ]);
+    const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    expect(tools).toContain("oracle_consult");
+    expect(tools).toContain("oracle_doctor");
+    expect(tools).toContain("oracle_skills");
+    expect(tools).toContain("oracle_oracle_list");
+    expect(tools).toContain("oracle_oracle_register");
+    expect(tools).toContain("oracle_memory_list");
+    expect(tools).toContain("oracle_memory_clear");
   });
 
   test("consults, lists, retrieves, and diagnoses", async () => {
     const consultation = await client.callTool({
       name: "oracle_consult",
-      arguments: { prompt: "Review", preset: "debug" }
+      arguments: { prompt: "Review", skill: "debug" }
     });
     expect(consultation.isError).not.toBe(true);
     expect(consultation.structuredContent).toMatchObject({

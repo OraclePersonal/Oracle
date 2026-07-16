@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import type { ConsultRequest, ConsultResult, SessionRecord } from "../types.js";
+import type { ConsultRequest, ConsultResult, ContextFile, SessionRecord } from "../types.js";
+import { estimateTokens } from "../tokens.js";
 import { resolveFiles } from "../context/files.js";
 import { scanFilesForSecrets } from "../context/secrets.js";
 import {
@@ -70,6 +71,7 @@ export class ConsultService {
       systemPrompt
     });
 
+    const estimatedInputTokens = estimateTokens(systemPrompt) + estimateTokens(userPrompt);
     const id = createSessionId(request.prompt);
     let record = await this.sessions.create({
       id,
@@ -81,6 +83,7 @@ export class ConsultService {
       files: files.map((file) => file.path),
       bundle
     });
+    record = { ...record, estimatedInputTokens };
 
     try {
       const response = await this.provider.run({
@@ -88,7 +91,10 @@ export class ConsultService {
         systemPrompt,
         userPrompt,
         cwd,
-        previousResponseId: request.previousResponseId
+        previousResponseId: request.previousResponseId,
+        images: files
+          .filter((f): f is ContextFile & { base64: string; mimeType: string } => !!f.base64 && !!f.mimeType)
+          .map((f) => ({ base64: f.base64, mimeType: f.mimeType }))
       });
       record = {
         ...record,

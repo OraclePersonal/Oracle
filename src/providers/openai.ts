@@ -15,7 +15,21 @@ export class OpenAIProvider implements Provider {
     const response = await this.client.responses.create({
       model: request.model,
       instructions: request.systemPrompt,
-      input: request.userPrompt,
+      input: request.images?.length
+        ? [
+            {
+              role: "user",
+              content: [
+                { type: "input_text" as const, text: request.userPrompt },
+                ...request.images.map((img) => ({
+                  type: "input_image" as const,
+                  detail: "auto" as const,
+                  image_url: `data:${img.mimeType};base64,${img.base64}`
+                }))
+              ]
+            }
+          ]
+        : request.userPrompt,
       previous_response_id: request.previousResponseId,
       store: true
     });

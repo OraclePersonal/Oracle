@@ -16,7 +16,7 @@ afterEach(async () => {
 
 describe("FileSessionStore", () => {
   test("creates a session in a new home directory", async () => {
-    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mini-oracle-"));
+    const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-"));
     temporaryDirectories.push(temporaryRoot);
     const homeDir = path.join(temporaryRoot, "oracle-home");
     const store = new FileSessionStore(homeDir);

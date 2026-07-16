@@ -18,8 +18,12 @@ export function buildUserPrompt(prompt: string, files: ContextFile[]): string {
   if (files.length > 0) {
     parts.push("", "[FILES]");
     for (const file of files) {
-      const fence = markdownFence(file.content);
-      parts.push("", `## ${file.path}`, fence, file.content, fence);
+      if (file.base64) {
+        parts.push("", `## ${file.path}`, `![${file.path}](data:${file.mimeType};base64,${file.base64})`);
+      } else {
+        const fence = markdownFence(file.content);
+        parts.push("", `## ${file.path}`, fence, file.content, fence);
+      }
     }
   }
   return parts.join("\n").trim();

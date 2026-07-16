@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 async function createWorkspace(): Promise<{ root: string; outsideFile: string }> {
-  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mini-oracle-"));
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-"));
   temporaryDirectories.push(temporaryRoot);
   const root = path.join(temporaryRoot, "workspace");
   const outsideFile = path.join(temporaryRoot, "outside.txt");

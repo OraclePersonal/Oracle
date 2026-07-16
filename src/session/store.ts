@@ -6,7 +6,7 @@ import type { SessionRecord } from "../types.js";
 export class FileSessionStore {
   constructor(
     private readonly homeDir =
-      process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".mini-oracle")
+      process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle")
   ) {}
 
   private sessionsDir(): string {

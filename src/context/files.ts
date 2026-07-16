@@ -40,6 +40,20 @@ function assertInsideWorkingDirectory(candidate: string, cwd: string): void {
   }
 }
 
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+
+function mimeFromExtension(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  const map: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp"
+  };
+  return map[ext] ?? "application/octet-stream";
+}
+
 export async function resolveFiles(
   patterns: string[],
   options: { cwd: string; maxFileSizeBytes?: number }
@@ -71,12 +85,16 @@ export async function resolveFiles(
     assertInsideWorkingDirectory(absolutePath, cwd);
     const stat = await fs.stat(absolutePath);
     if (stat.size > maxFileSizeBytes) continue;
+    const ext = path.extname(absolutePath).toLowerCase();
+    const isImage = IMAGE_EXTENSIONS.has(ext);
     const raw = await fs.readFile(absolutePath);
-    if (looksBinary(raw)) continue;
+    if (!isImage && looksBinary(raw)) continue;
     files.push({
       path: path.relative(cwd, absolutePath).replaceAll("\\", "/"),
-      content: raw.toString("utf8"),
-      sizeBytes: stat.size
+      content: isImage ? `[image: ${path.basename(absolutePath)}]` : raw.toString("utf8"),
+      sizeBytes: stat.size,
+      base64: isImage ? raw.toString("base64") : undefined,
+      mimeType: isImage ? mimeFromExtension(absolutePath) : undefined
     });
   }
   return files;

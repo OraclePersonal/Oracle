@@ -6,6 +6,7 @@ export interface ProviderRequest {
   userPrompt: string;
   cwd: string;
   previousResponseId?: string;
+  images?: Array<{ base64: string; mimeType: string }>;
 }
 
 export interface Provider {

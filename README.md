@@ -1,94 +1,173 @@
-# Mini Oracle v1
+# Oracle
 
-A small, runnable implementation of the core idea behind `@steipete/oracle`:
+**MCP-powered AI coding consultant** — skills, named oracles, memory layer, and peer mesh.
 
-1. resolve project files and globs
-2. bundle prompt + file context
-3. call an expert model
-4. persist a replayable session
-5. expose the same core through CLI and MCP
-
-This starter intentionally omits browser automation, multi-model fan-out,
-remote browser control, TUI, project sources, and image workflows.
+```
+CLI + MCP server → bundle project context → analyze with AI → persist sessions
+                   Skills | Oracles | Memory (Agoya) | Mesh (Agora)
+```
 
 ## Requirements
 
 - Node.js 24+
-- Codex CLI authenticated with `codex login` (default), or an OpenAI API key
+- One provider: Codex CLI (`codex login`), OpenAI key (`OPENAI_API_KEY`), or
+  Anthropic key (`ANTHROPIC_API_KEY` / OAuth)
 
-## Install
-
-```bash
-npm install
-npm run build
-```
-
-Authenticate the default local provider:
+## Quick start
 
 ```bash
-codex login
+npm install && npm run build
+
+# Check provider
 node dist/cli.js doctor
-```
 
-To use the OpenAI API provider instead, set `OPENAI_API_KEY` and pass
-`--provider openai`.
+# Consult
+node dist/cli.js consult -p "Review this code" -f "src/**/*.ts"
+```
 
 ## CLI
 
-```bash
-node dist/cli.js consult \
-  -p "Review this code for correctness and concurrency risks" \
-  -f "src/**/*.ts" "!src/**/*.test.ts"
+```
+oracle consult   -p <prompt> [--skill <name>] [--oracle <name>] [--diff [target]] [-f <pattern...>]
+oracle doctor    [--provider <name>]
+oracle oracle    list|register|unregister|show
+oracle memory    list|clear
+oracle skill     list|install <file.json>
+oracle peer      export|import|send|list|monitor
+oracle login     [--provider anthropic] [--client-id <id>]
+oracle logout
+oracle session   <id>
+oracle status    [-n <limit>]
+oracle setup-mcp [--client claude-code|codex]
 ```
 
-Codex is the default provider and runs read-only with your existing ChatGPT
-login. Common credential formats are blocked before any provider is called.
-Use OpenAI explicitly when needed:
+### consult
 
 ```bash
-node dist/cli.js consult --provider openai \
-  -p "Review this code" -f "src/**/*.ts"
+# Basic
+oracle consult -p "Review for edge cases" -f "src/**/*.ts"
+
+# With skill
+oracle consult -p "Find bugs" --skill debug
+
+# With named oracle (auto-loads skill + memory)
+oracle consult --oracle senior-review -p "Review this PR"
+
+# With git diff context (default: HEAD~1)
+oracle consult -p "Review changes" --diff
+oracle consult -p "Review against main" --diff main
+
+# With vision (image files auto-detected)
+oracle consult -p "What does this diagram show?" -f "diagram.png"
+
+# With multi-turn
+oracle consult -p "Follow up question" --previous-session-id <id>
 ```
+
+### Skills
+
+5 built-in: `review`, `debug`, `architecture`, `tests`, `security`
 
 ```bash
-node dist/cli.js status
-node dist/cli.js session <session-id>
+oracle skill list
+oracle skill install ./my-skill.json
 ```
 
-Sessions are stored at:
-
-```text
-~/.mini-oracle/sessions/<session-id>/
-├── bundle.md
-├── output.md
-└── session.json
+Custom skill format (`~/.oracle/skills/<name>.json`):
+```json
+{
+  "name": "my-skill",
+  "description": "Focus on error handling",
+  "systemPrompt": "Analyze error handling, edge cases, and logging coverage...",
+  "filePatterns": ["src/**/*.ts"],
+  "model": "claude-sonnet-4-20250514"
+}
 ```
 
-## MCP
-
-Generate project-local MCP configuration:
+### Named Oracles
 
 ```bash
-node dist/cli.js setup-mcp --client claude-code
-node dist/cli.js setup-mcp --client codex
-node dist/cli.js setup-mcp --print
+# Register
+oracle oracle register --name senior-review --skill review --memory
+oracle oracle register --name debugger --skill debug --model claude-sonnet-4-20250514
+
+# List
+oracle oracle list
+
+# Consult with oracle (auto-injects memory context)
+oracle consult --oracle senior-review -p "Review this"
 ```
 
-Or start the server directly:
+When `--memory` is enabled, each consult saves a summary (`insight`) via
+[Agoya](https://github.com/JonusNattapong/agoya) (`.agoya/` format). Past
+insights are injected into the system prompt on subsequent calls.
+
+### Providers
+
+| Provider | Auth | Env var |
+|----------|------|---------|
+| `codex` (default) | `codex login` | — |
+| `openai` | API key | `OPENAI_API_KEY` |
+| `anthropic` | API key or OAuth | `ANTHROPIC_API_KEY` / `ANTHROPIC_CLIENT_ID` |
 
 ```bash
+oracle login --provider anthropic --client-id <id>
+oracle consult -p "Review" --provider anthropic --model claude-sonnet-4-20250514
+```
+
+### Peer mesh (Agora)
+
+Messages are stored in `.agora/` format, compatible with
+[Agora](https://github.com/JonusNattapong/agora) message bus.
+
+```bash
+oracle peer send --to claude --body "Review complete" --kind review-result
+oracle peer list --agent oracle --limit 10
+oracle peer monitor --agent oracle
+oracle peer export senior-review -o oracle.json
+oracle peer import oracle.json
+```
+
+### Memory (Agoya)
+
+Memory entries stored in `.agoya/` format, compatible with
+[Agoya](https://github.com/JonusNattapong/agoya) memory server.
+
+```bash
+oracle memory list
+oracle memory list --agent senior-review
+oracle memory clear
+oracle memory clear senior-review
+```
+
+## MCP Server
+
+```bash
+# Start directly
 node dist/mcp.js
+
+# Generate client config
+oracle setup-mcp --client claude-code
+oracle setup-mcp --client codex
 ```
 
-The server exposes four focused tools:
+### MCP tools (14)
 
-- `oracle_consult` — analyze configured or explicitly selected project files
-- `oracle_sessions` — list compact recent session summaries
-- `oracle_session_get` — retrieve metadata and output for one session
-- `oracle_doctor` — check configuration, workspace, provider, and authentication
+| Tool | Description |
+|------|-------------|
+| `oracle_consult` | Analyze project files with a skill |
+| `oracle_skills` | List available skills |
+| `oracle_oracle_list` | List registered oracle profiles |
+| `oracle_oracle_register` | Create a named oracle |
+| `oracle_memory_list` | List memory entries from `.agoya` |
+| `oracle_memory_clear` | Clear working memory |
+| `oracle_sessions` | List recent sessions |
+| `oracle_session_get` | Get session details |
+| `oracle_doctor` | Check configuration and provider |
 
-Optional `.oracle/config.json`:
+## Configuration
 
+`.oracle/config.json`:
 ```json
 {
   "provider": "codex",
@@ -100,37 +179,49 @@ Optional `.oracle/config.json`:
 }
 ```
 
-`oracle_consult` supports `review`, `debug`, `architecture`, `tests`, and
-`security` presets. Expected failures return stable `ORACLE_*` codes with an
-actionable suggestion and never include detected secret values.
+## Storage layout
 
-Example `.mcp.json`:
+```
+~/.oracle/
+├── oracles/         # Named oracle profiles
+├── skills/          # Custom skill files
+├── sessions/        # Consult session history
+│   └── <id>/
+│       ├── bundle.md
+│       ├── output.md
+│       └── session.json
+├── auth/            # OAuth tokens
+│   └── anthropic.json
 
-```json
-{
-  "mcpServers": {
-    "mini-oracle": {
-      "command": "node",
-      "args": ["/absolute/path/to/mini-oracle-v1/dist/mcp.js"],
-      "env": {
-        "ORACLE_WORKSPACE_ROOT": "/absolute/path/to/project",
-        "ORACLE_PROVIDER": "codex"
-      }
-    }
-  }
-}
+<project>/
+├── .oracle/
+│   ├── config.json
+│   ├── workshop.json
+│   └── skills/      # Project-local skills
+├── .agoya/          # Memory (compatible with Agoya)
+│   ├── facts/
+│   ├── insights/
+│   ├── chunks/
+│   └── working/
+└── .agora/          # Messages (compatible with Agora)
+    └── messages/
 ```
 
-MCP callers cannot replace the workspace root. If `ORACLE_WORKSPACE_ROOT` is
-omitted, the server uses its startup working directory.
+## Environment
 
-## Next steps
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORACLE_HOME_DIR` | `~/.oracle` | Home for config, skills, oracles, sessions |
+| `ORACLE_WORKSPACE_ROOT` | `cwd` | MCP workspace root |
+| `OPENAI_API_KEY` | — | OpenAI provider |
+| `ANTHROPIC_API_KEY` | — | Anthropic provider |
+| `ANTHROPIC_CLIENT_ID` | — | Anthropic OAuth client ID |
+| `AGOYA_ROOT_DIR` | `cwd` | Agoya memory root |
 
-1. add Anthropic and Gemini provider adapters
-2. add `--models` using `Promise.allSettled`
-3. add token estimation and hard budgets
-4. implement full `.gitignore` semantics
-5. add secret scanning/redaction before bundling
-6. add a follow-up command using `previous_response_id`
-7. add dry-run/render/copy modes
-8. only then consider browser automation
+## Integrated projects
+
+Oracle reads/writes `.agoya/` and `.agora/` formats natively,
+making it interoperable with:
+
+- [Agoya](https://github.com/JonusNattapong/agoya) — File-backed Memory MCP Server
+- [Agora](https://github.com/JonusNattapong/agora) — Multi-agent message bus

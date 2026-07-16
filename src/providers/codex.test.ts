@@ -65,16 +65,22 @@ describe("CodexCliProvider", () => {
     expect(response).toEqual({ text: "Reviewed successfully", usage: {} });
   });
 
-  test("rejects Responses API follow-up ids", async () => {
-    const provider = new CodexCliProvider({ runner: vi.fn() });
-    await expect(
-      provider.run({
-        model: "gpt-5.4",
-        systemPrompt: "system",
-        userPrompt: "user",
-        cwd: "D:/workspace",
-        previousResponseId: "response-id"
-      })
-    ).rejects.toThrow("does not support previousResponseId");
+  test("tolerates previousResponseId (ignored, re-runs fresh)", async () => {
+    const runner: CommandRunner = vi.fn(async (_command, args) => {
+      const outputPath = args[args.indexOf("--output-last-message") + 1];
+      await fs.writeFile(outputPath, "Fresh review", "utf8");
+      return { exitCode: 0, stdout: "", stderr: "" };
+    });
+    const provider = new CodexCliProvider({ runner });
+
+    const response = await provider.run({
+      model: "gpt-5.4",
+      systemPrompt: "system",
+      userPrompt: "user",
+      cwd: "D:/workspace",
+      previousResponseId: "response-id"
+    });
+
+    expect(response.text).toBe("Fresh review");
   });
 });

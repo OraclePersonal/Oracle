@@ -102,7 +102,7 @@ oracle setup-mcp --print
 
 It accepts `--cwd`, defaulting to the current directory. It performs provider preflight, creates `.oracle/config.json` only when absent, and generates an MCP entry using the absolute built `dist/mcp.js` path plus `ORACLE_WORKSPACE_ROOT` and `ORACLE_PROVIDER`.
 
-`--print` writes JSON to stdout and changes no client configuration. Client modes write only the project-local MCP configuration supported by that client. If an existing file contains unrelated servers, setup merges the `mini-oracle` entry. If that entry already differs, setup stops with an actionable conflict unless `--force` is explicitly supplied. Config writes use a temporary file followed by rename to avoid partial files.
+`--print` writes JSON to stdout and changes no client configuration. Client modes write only the project-local MCP configuration supported by that client. If an existing file contains unrelated servers, setup merges the `oracle` entry. If that entry already differs, setup stops with an actionable conflict unless `--force` is explicitly supplied. Config writes use a temporary file followed by rename to avoid partial files.
 
 Codex project MCP output targets `.codex/config.toml`; Claude Code project MCP output targets `.mcp.json`. Setup never edits user-global configuration.
 

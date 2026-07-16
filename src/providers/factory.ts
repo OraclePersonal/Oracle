@@ -1,8 +1,9 @@
+import { AnthropicProvider } from "./anthropic.js";
 import { CodexCliProvider, runCommand, type CommandRunner } from "./codex.js";
 import { OpenAIProvider } from "./openai.js";
 import type { Provider } from "./provider.js";
 
-export type ProviderName = "codex" | "openai";
+export type ProviderName = "codex" | "openai" | "anthropic";
 
 export interface DoctorCheck {
   name: string;
@@ -11,11 +12,12 @@ export interface DoctorCheck {
 }
 
 export function parseProviderName(value = "codex"): ProviderName {
-  if (value === "codex" || value === "openai") return value;
-  throw new Error(`Unknown provider: ${value}. Expected codex or openai.`);
+  if (value === "codex" || value === "openai" || value === "anthropic") return value;
+  throw new Error(`Unknown provider: ${value}. Expected codex, openai, or anthropic.`);
 }
 
 export function createProvider(name: ProviderName = "codex"): Provider {
+  if (name === "anthropic") return new AnthropicProvider();
   return name === "codex" ? new CodexCliProvider() : new OpenAIProvider();
 }
 
@@ -29,6 +31,16 @@ export async function checkProvider(
         name: "OPENAI_API_KEY",
         ok: Boolean(process.env.OPENAI_API_KEY),
         detail: process.env.OPENAI_API_KEY ? "set" : "not set"
+      }
+    ];
+  }
+
+  if (name === "anthropic") {
+    return [
+      {
+        name: "ANTHROPIC_API_KEY",
+        ok: Boolean(process.env.ANTHROPIC_API_KEY),
+        detail: process.env.ANTHROPIC_API_KEY ? "set" : "not set"
       }
     ];
   }

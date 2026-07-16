@@ -78,11 +78,8 @@ export class CodexCliProvider implements Provider {
   }
 
   async run(request: ProviderRequest): Promise<ProviderResponse> {
-    if (request.previousResponseId) {
-      throw new Error("Codex CLI provider does not support previousResponseId.");
-    }
-
-    const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "mini-oracle-codex-"));
+    // ponytail: previousResponseId unsupported by Codex CLI, re-run fresh
+    const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-codex-"));
     const outputPath = path.join(temporaryDirectory, "output.md");
     try {
       const result = await this.runner(

@@ -1,9 +1,11 @@
 {
-  "name": "mini-oracle-v1",
+  "name": "oracle",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "oracle": "./dist/cli.js",
     "oracle-mcp": "./dist/mcp.js"
@@ -16,6 +18,7 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",

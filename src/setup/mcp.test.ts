@@ -37,7 +37,7 @@ describe("generateMcpSetup", () => {
     expect(result.path).toBe(path.join(root, ".mcp.json"));
     expect(JSON.parse(result.content)).toMatchObject({
       mcpServers: {
-        "mini-oracle": {
+        "oracle": {
           command: process.execPath,
           env: { ORACLE_WORKSPACE_ROOT: root }
         }
@@ -49,7 +49,7 @@ describe("generateMcpSetup", () => {
     const root = path.resolve("project");
     const result = generateMcpSetup({ root, client: "codex", serverPath: path.resolve("dist/mcp.js") });
     expect(result.path).toBe(path.join(root, ".codex", "config.toml"));
-    expect(result.content).toContain('[mcp_servers.mini-oracle]');
+    expect(result.content).toContain('[mcp_servers.oracle]');
     expect(result.content).toContain("ORACLE_WORKSPACE_ROOT");
   });
 });
@@ -66,20 +66,20 @@ describe("writeMcpSetup", () => {
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
       mcpServers: {
         existing: { command: "existing" },
-        "mini-oracle": expect.objectContaining({ command: process.execPath })
+        "oracle": expect.objectContaining({ command: process.execPath })
       }
     });
   });
 
-  test("refuses a conflicting mini-oracle entry unless forced", async () => {
+  test("refuses a conflicting oracle entry unless forced", async () => {
     const root = await temporaryRoot();
     const configPath = path.join(root, ".mcp.json");
-    await fs.writeFile(configPath, JSON.stringify({ mcpServers: { "mini-oracle": { command: "other" } } }));
+    await fs.writeFile(configPath, JSON.stringify({ mcpServers: { "oracle": { command: "other" } } }));
     const generated = generateMcpSetup({ root, client: "claude-code", serverPath: path.join(root, "mcp.js") });
 
     await expect(writeMcpSetup(generated)).rejects.toMatchObject({ code: "ORACLE_CONFIG_INVALID" });
     await expect(writeMcpSetup(generated, true)).resolves.toBeUndefined();
-    expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcpServers["mini-oracle"].command).toBe(process.execPath);
+    expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcpServers["oracle"].command).toBe(process.execPath);
   });
 
   test("appends Codex configuration without replacing unrelated settings", async () => {
@@ -93,6 +93,6 @@ describe("writeMcpSetup", () => {
 
     const content = await fs.readFile(configPath, "utf8");
     expect(content).toContain('model = "gpt-5.4"');
-    expect(content).toContain("[mcp_servers.mini-oracle]");
+    expect(content).toContain("[mcp_servers.oracle]");
   });
 });
