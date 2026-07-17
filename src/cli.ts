@@ -108,8 +108,10 @@ program
       }
     }
 
+    let hasGitHubPr = false;
     // Include PR context if --github-pr is passed
     if (options.githubPr) {
+      hasGitHubPr = true;
       const ref = options.githubPr as string;
       let repo: string | undefined;
       let number: number;
@@ -175,7 +177,8 @@ program
       files: options.file,
       model: model ?? skill.model ?? "gpt-5.4",
       cwd,
-      systemPrompt: finalSystemPrompt
+      systemPrompt: finalSystemPrompt,
+      allowEmptyFiles: hasGitHubPr
     });
 
     // Save memory if oracle has memory enabled
@@ -703,6 +706,7 @@ githubCmd
             model: options.model ?? "gpt-5.4",
             cwd: options.cwd ?? process.cwd(),
             systemPrompt: "You are a senior code reviewer. Analyze the PR diff and files. Be specific, cite line numbers, and categorize findings by severity (critical/major/minor/nit). End with a verdict: approve, request changes, or comment.",
+            allowEmptyFiles: true,
           });
 
           console.log(`\n${result.output}`);

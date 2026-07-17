@@ -17,6 +17,7 @@ export interface ConsultRequest {
   maxFileSizeBytes?: number;
   maxInputBytes?: number;
   previousResponseId?: string;
+  allowEmptyFiles?: boolean;
 }
 
 export interface TokenUsage {

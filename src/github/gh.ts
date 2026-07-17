@@ -52,8 +52,7 @@ function runGh(args: string[], input?: string): string {
   }
 }
 
-function parsePR(input: string): PR {
-  const raw = JSON.parse(input);
+function parsePR(raw: any): PR {
   return {
     number: raw.number,
     title: raw.title,
@@ -72,8 +71,7 @@ function parsePR(input: string): PR {
   };
 }
 
-function parseIssue(input: string): Issue {
-  const raw = JSON.parse(input);
+function parseIssue(raw: any): Issue {
   return {
     number: raw.number,
     title: raw.title,
@@ -139,7 +137,7 @@ export function getPR(number: number, repo?: string): PR {
       "createdAt", "updatedAt", "mergedAt", "closedAt", "labels",
     ],
   }));
-  return parsePR(out);
+  return parsePR(JSON.parse(out));
 }
 
 /** List PRs with optional state filter */
@@ -181,10 +179,10 @@ export function getPRDiff(number: number, repo?: string): string {
 export function getPRFiles(number: number, repo?: string): PRFile[] {
   const out = runGh(buildArgs(["pr", "view", String(number)], {
     repo,
-    fields: ["files"],
-    template: "{{range .files}}{{.path}}\t{{.status}}\t{{.additions}}\t{{.deletions}}\n{{end}}",
+    json: ["files"],
+    jq: '.files[] | [.path, .status, .additions, .deletions] | @tsv',
   }));
-  return out.split("\n").filter(Boolean).map((line) => {
+  return out.trim().split("\n").filter(Boolean).map((line) => {
     const [path, status, additions, deletions] = line.split("\t");
     return {
       path,
@@ -215,7 +213,7 @@ export function getIssue(number: number, repo?: string): Issue {
     repo,
     json: ["number", "title", "state", "body", "url", "author", "createdAt", "updatedAt", "closedAt", "labels"],
   }));
-  return parseIssue(out);
+  return parseIssue(JSON.parse(out));
 }
 
 /** List issues */

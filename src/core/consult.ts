@@ -35,7 +35,8 @@ export class ConsultService {
       cwd,
       maxFileSizeBytes: request.maxFileSizeBytes
     });
-    if (files.length === 0) {
+    // ponytail: allow prompt-only consults (e.g. --github-pr injects context into prompt)
+    if (files.length === 0 && !request.allowEmptyFiles) {
       throw new OracleError(
         "ORACLE_NO_FILES",
         "No files matched the consultation request.",
