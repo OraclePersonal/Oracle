@@ -1,0 +1,52 @@
+{
+  "name": "oracle-messages",
+  "version": "0.2.0",
+  "description": "Universal MCP mailbox for AI coding agents — works with Claude Code, Codex, Gemini CLI, Cline, OpenCode, KilloCode, Clew Code, and any MCP-compatible agent",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "oracle-messages": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "mcp",
+    "messages",
+    "multi-agent",
+    "coding-agents",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "cline",
+    "opencode",
+    "killocode",
+    "clew-code"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JonusNattapong/oracle-messages.git"
+  }
+}

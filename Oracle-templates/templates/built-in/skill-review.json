@@ -1,0 +1,18 @@
+{
+  "name": "skill-review",
+  "type": "skill",
+  "description": "Code review skill template — scaffolds a structured code review workflow for Oracle agents",
+  "version": "1.0.0",
+  "author": "Oracle-templates",
+  "tags": ["skill", "code-review", "review"],
+  "files": [
+    {
+      "path": "review.md",
+      "content": "# code-review\n\nA structured code review skill for Oracle agents.\n\n## Workflow\n\n1. **Understand** — Read the diff or file changes carefully.\n2. **Analyze** — Check for correctness, performance, security, and style issues.\n3. **Report** — Provide actionable feedback with file:line references.\n\n## Output format\n\n```markdown\n## Review Summary\n<one-line summary>\n\n## Findings\n\n### severity: <low|medium|high>\n- **File**: `path/to/file.ts:42`\n- **Issue**: Description of the problem\n- **Suggestion**: How to fix it\n```\n\n## Configuration\n\nThis skill is compatible with Oracle-skill v1.0+.\n"
+    }
+  ],
+  "metadata": {
+    "oracleSkillVersion": "1.0",
+    "scaffoldInstructions": "Place the generated .md file in your Oracle-skill skills/ directory."
+  }
+}

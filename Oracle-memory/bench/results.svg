@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 1504" width="820" height="1504" font-family="ui-sans-serif, -apple-system, Segoe UI, Roboto, sans-serif">
+  <style>
+    :root { --surface:#ffffff; --ink:#1f2933; --muted:#6b7280; --track:#eceef1; --grid:#e5e7eb; --good:#159a6b; --crit:#d64545; --neutral:#3b82f6; --panel-bg:#f9fafb; }
+    .bg{fill:var(--surface)}
+    .title{fill:var(--ink);font-size:19px;font-weight:700}
+    .subtitle{fill:var(--muted);font-size:12px}
+    .panel-title{fill:var(--ink);font-size:14px;font-weight:700}
+    .panel-bg{fill:var(--panel-bg);stroke:var(--grid);stroke-width:1}
+    .lbl{fill:var(--ink);font-size:12px;font-weight:600}
+    .tick{fill:var(--muted);font-size:10px}
+    .val{font-size:12px;font-weight:700}
+    .val.good{fill:var(--good)} .val.crit{fill:var(--crit)} .val.neutral{fill:var(--neutral)}
+    .track{fill:var(--track)}
+    .bar.good{fill:var(--good)} .bar.crit{fill:var(--crit)} .bar.neutral{fill:var(--neutral)}
+    .grid{stroke:var(--grid);stroke-width:1}
+    @media (prefers-color-scheme: dark){
+      :root{ --surface:#0f1419; --ink:#e6e8eb; --muted:#9aa4b2; --track:#232a33; --grid:#2b323c; --good:#34d399; --crit:#f87171; --neutral:#60a5fa; --panel-bg:#151c25; }
+    }
+  </style>
+  <rect class="bg" x="0" y="0" width="820" height="1504"/>
+  <text class="title" x="20" y="40">oracle-memory · eval benchmark</text>
+  <text class="subtitle" x="20" y="60">vectors: off  ·  llm detectors: off  ·  elapsed: 86.2s</text>
+  
+  <g transform="translate(0, 0)">
+    <rect class="panel-bg" x="0" y="0" width="820" height="244" rx="8"/>
+    <text class="panel-title" x="20" y="30">Retrieval Quality · bm25+graph</text>
+    <line class="grid" x1="200.0" y1="40" x2="200.0" y2="156"/><text class="tick" x="200.0" y="176" text-anchor="middle">0%</text><line class="grid" x1="320.0" y1="40" x2="320.0" y2="156"/><text class="tick" x="320.0" y="176" text-anchor="middle">25%</text><line class="grid" x1="440.0" y1="40" x2="440.0" y2="156"/><text class="tick" x="440.0" y="176" text-anchor="middle">50%</text><line class="grid" x1="560.0" y1="40" x2="560.0" y2="156"/><text class="tick" x="560.0" y="176" text-anchor="middle">75%</text><line class="grid" x1="680.0" y1="40" x2="680.0" y2="156"/><text class="tick" x="680.0" y="176" text-anchor="middle">100%</text>
+    
+    <g class="row">
+      <text class="lbl" x="186" y="70" text-anchor="end">recall@5</text>
+      <rect class="track" x="200" y="59" width="480" height="14" rx="4"/>
+      <rect class="bar good" x="200" y="59" width="480.0" height="14" rx="4"/>
+      <text class="val good" x="688.0" y="70">✓ 100.0%</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="106" text-anchor="end">MRR</text>
+      <rect class="track" x="200" y="95" width="480" height="14" rx="4"/>
+      <rect class="bar good" x="200" y="95" width="4.5" height="14" rx="4"/>
+      <text class="val good" x="212.5" y="106">✓ 0.938</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="142" text-anchor="end">temporal accuracy</text>
+      <rect class="track" x="200" y="131" width="480" height="14" rx="4"/>
+      <rect class="bar good" x="200" y="131" width="480.0" height="14" rx="4"/>
+      <text class="val good" x="688.0" y="142">✓ 100.0%</text>
+    </g>
+  </g>
+
+  <g transform="translate(0, 222)">
+    <rect class="panel-bg" x="0" y="0" width="820" height="424" rx="8"/>
+    <text class="panel-title" x="20" y="30">Operation Latency · bm25+graph</text>
+    <line class="grid" x1="200.0" y1="40" x2="200.0" y2="336"/><text class="tick" x="200.0" y="356" text-anchor="middle">0.00</text><line class="grid" x1="320.0" y1="40" x2="320.0" y2="336"/><text class="tick" x="320.0" y="356" text-anchor="middle">25</text><line class="grid" x1="440.0" y1="40" x2="440.0" y2="336"/><text class="tick" x="440.0" y="356" text-anchor="middle">49</text><line class="grid" x1="560.0" y1="40" x2="560.0" y2="336"/><text class="tick" x="560.0" y="356" text-anchor="middle">74</text><line class="grid" x1="680.0" y1="40" x2="680.0" y2="336"/><text class="tick" x="680.0" y="356" text-anchor="middle">98</text>
+    
+    <g class="row">
+      <text class="lbl" x="186" y="70" text-anchor="end">remember (avg)</text>
+      <rect class="track" x="200" y="59" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="59" width="278.8" height="14" rx="4"/>
+      <text class="val neutral" x="486.8" y="70"> 57.1ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="106" text-anchor="end">remember (min)</text>
+      <rect class="track" x="200" y="95" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="95" width="154.3" height="14" rx="4"/>
+      <text class="val neutral" x="362.3" y="106"> 31.6ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="142" text-anchor="end">remember (max)</text>
+      <rect class="track" x="200" y="131" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="131" width="480.0" height="14" rx="4"/>
+      <text class="val neutral" x="688.0" y="142"> 98.3ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="178" text-anchor="end">search (avg)</text>
+      <rect class="track" x="200" y="167" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="167" width="139.2" height="14" rx="4"/>
+      <text class="val neutral" x="347.2" y="178"> 28.5ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="214" text-anchor="end">search (min)</text>
+      <rect class="track" x="200" y="203" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="203" width="93.3" height="14" rx="4"/>
+      <text class="val neutral" x="301.3" y="214"> 19.1ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="250" text-anchor="end">search (max)</text>
+      <rect class="track" x="200" y="239" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="239" width="214.4" height="14" rx="4"/>
+      <text class="val neutral" x="422.4" y="250"> 43.9ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="286" text-anchor="end">forget (avg)</text>
+      <rect class="track" x="200" y="275" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="275" width="6.3" height="14" rx="4"/>
+      <text class="val neutral" x="214.3" y="286"> 1.3ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="322" text-anchor="end">consolidate</text>
+      <rect class="track" x="200" y="311" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="311" width="174.8" height="14" rx="4"/>
+      <text class="val neutral" x="382.8" y="322"> 35.8ms</text>
+    </g>
+  </g>
+
+  <g transform="translate(0, 624)">
+    <rect class="panel-bg" x="0" y="0" width="820" height="460" rx="8"/>
+    <text class="panel-title" x="20" y="30">Scale Stress · bm25+graph</text>
+    <line class="grid" x1="200.0" y1="40" x2="200.0" y2="372"/><text class="tick" x="200.0" y="392" text-anchor="middle">0.00</text><line class="grid" x1="320.0" y1="40" x2="320.0" y2="372"/><text class="tick" x="320.0" y="392" text-anchor="middle">96</text><line class="grid" x1="440.0" y1="40" x2="440.0" y2="372"/><text class="tick" x="440.0" y="392" text-anchor="middle">192</text><line class="grid" x1="560.0" y1="40" x2="560.0" y2="372"/><text class="tick" x="560.0" y="392" text-anchor="middle">289</text><line class="grid" x1="680.0" y1="40" x2="680.0" y2="372"/><text class="tick" x="680.0" y="392" text-anchor="middle">385</text>
+    
+    <g class="row">
+      <text class="lbl" x="186" y="70" text-anchor="end">50 mems</text>
+      <rect class="track" x="200" y="59" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="59" width="57.9" height="14" rx="4"/>
+      <text class="val neutral" x="265.9" y="70"> 46.4ms / 134.7ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="106" text-anchor="end">100 mems</text>
+      <rect class="track" x="200" y="95" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="95" width="77.9" height="14" rx="4"/>
+      <text class="val neutral" x="285.9" y="106"> 62.5ms / 154.4ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="142" text-anchor="end">200 mems</text>
+      <rect class="track" x="200" y="131" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="131" width="133.2" height="14" rx="4"/>
+      <text class="val neutral" x="341.2" y="142"> 106.8ms / 301.3ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="178" text-anchor="end">  throughput</text>
+      <rect class="track" x="200" y="167" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="167" width="27.4" height="14" rx="4"/>
+      <text class="val neutral" x="235.4" y="178"> 22 mem/s</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="214" text-anchor="end">  throughput</text>
+      <rect class="track" x="200" y="203" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="203" width="20.0" height="14" rx="4"/>
+      <text class="val neutral" x="228.0" y="214"> 16 mem/s</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="250" text-anchor="end">  throughput</text>
+      <rect class="track" x="200" y="239" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="239" width="11.2" height="14" rx="4"/>
+      <text class="val neutral" x="219.2" y="250"> 9 mem/s</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="286" text-anchor="end">  storage</text>
+      <rect class="track" x="200" y="275" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="275" width="149.3" height="14" rx="4"/>
+      <text class="val neutral" x="357.3" y="286"> 119.7 KB</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="322" text-anchor="end">  storage</text>
+      <rect class="track" x="200" y="311" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="311" width="263.9" height="14" rx="4"/>
+      <text class="val neutral" x="471.9" y="322"> 211.6 KB</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="358" text-anchor="end">  storage</text>
+      <rect class="track" x="200" y="347" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="347" width="480.0" height="14" rx="4"/>
+      <text class="val neutral" x="688.0" y="358"> 384.9 KB</text>
+    </g>
+  </g>
+
+  <g transform="translate(0, 1062)">
+    <rect class="panel-bg" x="0" y="0" width="820" height="460" rx="8"/>
+    <text class="panel-title" x="20" y="30">Config Comparison</text>
+    <line class="grid" x1="200.0" y1="40" x2="200.0" y2="372"/><text class="tick" x="200.0" y="392" text-anchor="middle">0.00</text><line class="grid" x1="320.0" y1="40" x2="320.0" y2="372"/><text class="tick" x="320.0" y="392" text-anchor="middle">252</text><line class="grid" x1="440.0" y1="40" x2="440.0" y2="372"/><text class="tick" x="440.0" y="392" text-anchor="middle">504</text><line class="grid" x1="560.0" y1="40" x2="560.0" y2="372"/><text class="tick" x="560.0" y="392" text-anchor="middle">755</text><line class="grid" x1="680.0" y1="40" x2="680.0" y2="372"/><text class="tick" x="680.0" y="392" text-anchor="middle">1007</text>
+    
+    <g class="row">
+      <text class="lbl" x="186" y="70" text-anchor="end">bm25+graph (json) · write</text>
+      <rect class="track" x="200" y="59" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="59" width="20.9" height="14" rx="4"/>
+      <text class="val neutral" x="228.9" y="70"> 43.8ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="106" text-anchor="end">bm25+graph (json) · search</text>
+      <rect class="track" x="200" y="95" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="95" width="60.8" height="14" rx="4"/>
+      <text class="val neutral" x="268.8" y="106"> 127.5ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="142" text-anchor="end">bm25+graph (json) · storage</text>
+      <rect class="track" x="200" y="131" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="131" width="100.9" height="14" rx="4"/>
+      <text class="val neutral" x="308.9" y="142"> 211.8 KB</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="178" text-anchor="end">bm25+graph (sqlite) · write</text>
+      <rect class="track" x="200" y="167" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="167" width="46.0" height="14" rx="4"/>
+      <text class="val neutral" x="254.0" y="178"> 96.5ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="214" text-anchor="end">bm25+graph (sqlite) · search</text>
+      <rect class="track" x="200" y="203" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="203" width="77.0" height="14" rx="4"/>
+      <text class="val neutral" x="285.0" y="214"> 161.6ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="250" text-anchor="end">bm25+graph (sqlite) · storage</text>
+      <rect class="track" x="200" y="239" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="239" width="2.2" height="14" rx="4"/>
+      <text class="val neutral" x="210.2" y="250"> 4.6 MB</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="286" text-anchor="end">bm25+vector+graph · write</text>
+      <rect class="track" x="200" y="275" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="275" width="136.2" height="14" rx="4"/>
+      <text class="val neutral" x="344.2" y="286"> 285.8ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="322" text-anchor="end">bm25+vector+graph · search</text>
+      <rect class="track" x="200" y="311" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="311" width="350.6" height="14" rx="4"/>
+      <text class="val neutral" x="558.6" y="322"> 735.7ms</text>
+    </g>
+    <g class="row">
+      <text class="lbl" x="186" y="358" text-anchor="end">bm25+vector+graph · storage</text>
+      <rect class="track" x="200" y="347" width="480" height="14" rx="4"/>
+      <rect class="bar neutral" x="200" y="347" width="480.0" height="14" rx="4"/>
+      <text class="val neutral" x="688.0" y="358"> 1007.1 KB</text>
+    </g>
+  </g>
+</svg>

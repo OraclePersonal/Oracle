@@ -1,0 +1,49 @@
+{
+  "name": "oracle-templates",
+  "version": "1.0.0",
+  "description": "Template management system for the Oracle ecosystem — create, list, install, and uninstall skill, oracle, and session templates.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "oracle-templates": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "version:patch": "npm version patch --no-git-tag-version",
+    "version:minor": "npm version minor --no-git-tag-version",
+    "version:major": "npm version major --no-git-tag-version"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JonusNattapong/Oracle-templates.git"
+  },
+  "keywords": [
+    "oracle",
+    "templates",
+    "multi-agent",
+    "scaffold"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^13.0.0",
+    "fast-glob": "^3.3.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.oracle-eval-bench*/
+.oracle-eval/
+.agoya/
+.clew/
+*.tmp
+.env
+bench/results/

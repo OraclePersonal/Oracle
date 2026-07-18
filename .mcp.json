@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "oracle-tmux": {
+      "command": "node",
+      "args": ["D:/Projects/Github/Oracle-Ecosystems/Oracle-tmux-mcp/dist/index.js"]
+    },
+    "oracle-messages": {
+      "command": "node",
+      "args": ["D:/Projects/Github/Oracle-Ecosystems/Oracle-messages/dist/index.js"]
+    }
+  }
+}
