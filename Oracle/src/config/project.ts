@@ -15,7 +15,7 @@ export interface ProjectConfig {
 
 const schema = z
   .object({
-    provider: z.enum(["codex", "openai", "anthropic"]).optional(),
+    provider: z.enum(["codex", "openai", "anthropic", "opencode"]).optional(),
     model: z.string().trim().min(1).optional(),
     include: z.array(z.string().trim().min(1)).min(1).optional(),
     exclude: z.array(z.string().trim().min(1)).optional(),

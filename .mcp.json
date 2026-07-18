@@ -7,6 +7,14 @@
     "oracle-messages": {
       "command": "node",
       "args": ["D:/Projects/Github/Oracle-Ecosystems/Oracle-messages/dist/index.js"]
+    },
+    "oracle": {
+      "command": "node",
+      "args": ["D:/Projects/Github/Oracle-Ecosystems/Oracle/dist/mcp.js"],
+      "env": {
+        "ORACLE_USE_OLLAMA": "1",
+        "ORACLE_WORKSPACE_ROOT": "D:/Projects/Github/Oracle-Ecosystems"
+      }
     }
   }
 }
