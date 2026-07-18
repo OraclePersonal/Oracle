@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { MemoryPort } from "../orchestrator/ports.js";
+import { generateEmbedding } from "./ollama.js";
+import { VectorStore } from "./vectorStore.js";
 
 // ponytail: writes directly to .oracle-memory/ format — zero deps, no MCP needed.
 // oracle-memory server reads the same files, so memory is shared transparently.
@@ -30,6 +32,7 @@ const TYPE_DIR: Record<MemoryType, string> = {
   chunk: "chunks",
   working: "working",
 };
+const USE_OLLAMA = process.env.ORACLE_USE_OLLAMA === "1" || process.env.ORACLE_USE_OLLAMA === "true";
 
 function generateId(): string {
   const now = new Date();
@@ -41,7 +44,12 @@ function generateId(): string {
 }
 
 export class MemoryAdapter implements MemoryPort {
-  constructor(private readonly rootDir: string) {}
+  private vectors: VectorStore;
+  private vectorsLoaded = false;
+
+  constructor(private readonly rootDir: string) {
+    this.vectors = new VectorStore(rootDir);
+  }
 
   private dataDir(): string {
     return path.join(this.rootDir, DATA_DIR);
@@ -56,6 +64,29 @@ export class MemoryAdapter implements MemoryPort {
     for (const dir of Object.values(TYPE_DIR)) {
       await fs.mkdir(path.join(this.dataDir(), dir), { recursive: true });
     }
+  }
+
+  private async ensureVectors(): Promise<void> {
+    if (!USE_OLLAMA || this.vectorsLoaded) return;
+    await this.vectors.load();
+    this.vectorsLoaded = true;
+  }
+
+  private filePath(type: MemoryType, id: string): string {
+    return path.join(this.typeDir(type), `${id}.json`);
+  }
+
+  private async readEntry(type: MemoryType, id: string): Promise<MemoryStoreEntry | null> {
+    try {
+      return JSON.parse(await fs.readFile(this.filePath(type, id), "utf8")) as MemoryStoreEntry;
+    } catch { return null; }
+  }
+
+  private async writeEntry(entry: MemoryStoreEntry): Promise<void> {
+    const fp = this.filePath(entry.type, entry.id);
+    const tmp = `${fp}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(entry, null, 2), "utf8");
+    await fs.rename(tmp, fp);
   }
 
   async remember(
@@ -75,30 +106,34 @@ export class MemoryAdapter implements MemoryPort {
       meta: opts?.meta ?? {},
       importance: opts?.importance ?? 0.5,
     };
-    const filePath = path.join(this.typeDir(type), `${entry.id}.json`);
-    const tmp = `${filePath}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(entry, null, 2), "utf8");
-    await fs.rename(tmp, filePath);
+    await this.writeEntry(entry);
+
+    // ponytail: fire-and-forget vector index — never blocks remember
+    if (USE_OLLAMA) {
+      this.ensureVectors().then(() => this.vectors.index(entry.id, content)).catch(() => {});
+    }
     return entry;
   }
 
-  async recall(type?: MemoryType, agent?: string, limit = 20): Promise<MemoryStoreEntry[]> {
+  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number }): Promise<MemoryStoreEntry[]> {
+    const type = opts?.type;
+    const agent = opts?.agent;
+    const tags = opts?.tags;
+    const limit = opts?.limit ?? 20;
     const dirs = type
       ? [this.typeDir(type)]
       : Object.values(TYPE_DIR).map((d) => path.join(this.dataDir(), d));
     const entries: MemoryStoreEntry[] = [];
     for (const dir of dirs) {
       try {
-        // Filenames are timestamp-prefixed, so lexical sort == chronological order.
-        // readdir() gives no ordering guarantee — sort before slicing or the most
-        // recent entries can be silently dropped once a dir exceeds the slice window.
         const files = (await fs.readdir(dir)).sort();
-        for (const file of files.slice(-(limit * 2))) {
+        for (const file of files.slice(-(limit * 4))) {
           if (!file.endsWith(".json")) continue;
           try {
             const entry = JSON.parse(await fs.readFile(path.join(dir, file), "utf8")) as MemoryStoreEntry;
             if (entry.archived) continue;
             if (agent && entry.agent !== agent) continue;
+            if (tags && !tags.some((t) => entry.tags.includes(t))) continue;
             entries.push(entry);
           } catch { /* skip corrupt */ }
         }
@@ -107,10 +142,63 @@ export class MemoryAdapter implements MemoryPort {
     return entries.sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit);
   }
 
+  async searchMemories(query: string, opts?: { type?: MemoryType; agent?: string; limit?: number }): Promise<MemoryStoreEntry[]> {
+    const limit = opts?.limit ?? 50;
+    const q = query.toLowerCase();
+
+    // Try semantic search via Ollama (whitelist: non-empty query)
+    if (USE_OLLAMA && q.length > 0) {
+      await this.ensureVectors();
+      const queryEmb = await generateEmbedding(query);
+      if (queryEmb) {
+        const hits = this.vectors.search(queryEmb.embedding, limit * 2);
+        if (hits.length > 0) {
+          const ids = new Map(hits.map((h) => [h.memoryId, h.score]));
+          const all = await this.recall({ type: opts?.type, agent: opts?.agent, limit: 10_000 });
+          const scored = all
+            .filter((e) => ids.has(e.id))
+            .map((e) => ({ entry: e, score: ids.get(e.id)! }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, limit);
+          return scored.map((s) => s.entry);
+        }
+      }
+    }
+
+    // Fallback: keyword filter
+    const entries = await this.recall({ type: opts?.type, agent: opts?.agent, limit });
+    return entries.filter((e) => e.content.toLowerCase().includes(q) || e.tags.some((t) => t.toLowerCase().includes(q)));
+  }
+
+  async updateMemory(id: string, type: MemoryType, updates: { content?: string; tags?: string[]; importance?: number }): Promise<MemoryStoreEntry | null> {
+    const entry = await this.readEntry(type, id);
+    if (!entry) return null;
+    if (updates.content !== undefined) entry.content = updates.content;
+    if (updates.tags !== undefined) entry.tags = updates.tags;
+    if (updates.importance !== undefined) entry.importance = updates.importance;
+    await this.writeEntry(entry);
+    if (USE_OLLAMA && updates.content !== undefined) {
+      this.ensureVectors().then(() => this.vectors.index(id, entry.content)).catch(() => {});
+    }
+    return entry;
+  }
+
+  async getStats(): Promise<{ total: number; byType: Record<string, number>; byAgent: Record<string, number> }> {
+    const all = await this.recall({ limit: 10_000 });
+    const byType: Record<string, number> = {};
+    const byAgent: Record<string, number> = {};
+    for (const e of all) {
+      byType[e.type] = (byType[e.type] ?? 0) + 1;
+      byAgent[e.agent] = (byAgent[e.agent] ?? 0) + 1;
+    }
+    return { total: all.length, byType, byAgent };
+  }
+
   async forget(id: string, type: MemoryType): Promise<void> {
     try {
-      await fs.unlink(path.join(this.typeDir(type), `${id}.json`));
+      await fs.unlink(this.filePath(type, id));
     } catch { /* ignore */ }
+    if (USE_OLLAMA) this.vectors.remove(id).catch(() => {});
   }
 
   async clearWorking(agent?: string): Promise<number> {
@@ -126,7 +214,9 @@ export class MemoryAdapter implements MemoryPort {
             if (entry.agent !== agent) continue;
           } catch { continue; }
         }
+        const id = file.replace(".json", "");
         await fs.unlink(path.join(dir, file));
+        if (USE_OLLAMA) this.vectors.remove(id).catch(() => {});
         count++;
       }
     } catch { /* ignore */ }

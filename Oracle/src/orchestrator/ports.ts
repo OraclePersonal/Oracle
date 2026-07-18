@@ -13,7 +13,13 @@ export interface MemoryPort {
     opts?: { tags?: string[]; meta?: Record<string, unknown>; importance?: number }
   ): Promise<MemoryStoreEntry>;
 
-  recall(type?: MemoryType, agent?: string, limit?: number): Promise<MemoryStoreEntry[]>;
+  recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number }): Promise<MemoryStoreEntry[]>;
+
+  searchMemories(query: string, opts?: { type?: MemoryType; agent?: string; limit?: number }): Promise<MemoryStoreEntry[]>;
+
+  updateMemory(id: string, type: MemoryType, updates: { content?: string; tags?: string[]; importance?: number }): Promise<MemoryStoreEntry | null>;
+
+  getStats(): Promise<{ total: number; byType: Record<string, number>; byAgent: Record<string, number> }>;
 
   forget(id: string, type: MemoryType): Promise<void>;
 
