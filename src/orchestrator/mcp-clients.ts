@@ -70,27 +70,71 @@ export class McpMemoryAdapter implements MemoryPort {
     return parsed.memory as MemoryStoreEntry;
   }
 
-  async recall(type?: MemoryType, agent?: string, limit = 20): Promise<MemoryStoreEntry[]> {
+  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number }): Promise<MemoryStoreEntry[]> {
     await this.ensureConnected();
-
-    // oracle-memory's recall tool expects a query string
-    const queryParts: string[] = [];
-    if (agent) queryParts.push(`agent:${agent}`);
-    if (type) queryParts.push(`type:${type}`);
-    const query = queryParts.length > 0 ? queryParts.join(" ") : "*";
-
     const result = (await this.client.callTool({
       name: "recall",
       arguments: {
-        query,
-        limit: Math.min(limit, 200), // Respect server's max limit
+        query: "*",
+        type: opts?.type,
+        agent: opts?.agent,
+        tags: opts?.tags,
+        limit: Math.min(opts?.limit ?? 20, 200),
       },
     })) as ToolResult;
-
     const text = this.extractText(result);
     const parsed = JSON.parse(text);
     if (!parsed.success) throw new Error(parsed.error || "recall failed");
     return (parsed.results || []) as MemoryStoreEntry[];
+  }
+
+  async searchMemories(query: string, opts?: { type?: MemoryType; agent?: string; limit?: number }): Promise<MemoryStoreEntry[]> {
+    await this.ensureConnected();
+    const result = (await this.client.callTool({
+      name: "recall",
+      arguments: {
+        query,
+        type: opts?.type,
+        agent: opts?.agent,
+        limit: Math.min(opts?.limit ?? 50, 200),
+      },
+    })) as ToolResult;
+    const text = this.extractText(result);
+    const parsed = JSON.parse(text);
+    if (!parsed.success) throw new Error(parsed.error || "search failed");
+    return (parsed.results || []) as MemoryStoreEntry[];
+  }
+
+  async updateMemory(id: string, type: MemoryType, updates: { content?: string; tags?: string[]; importance?: number }): Promise<MemoryStoreEntry | null> {
+    await this.ensureConnected();
+    try {
+      const result = (await this.client.callTool({
+        name: "remember",
+        arguments: {
+          entry_id: id,
+          type,
+          agent: "oracle",
+          content: updates.content ?? "",
+          tags: updates.tags,
+          importance: updates.importance,
+        },
+      })) as ToolResult;
+      const text = this.extractText(result);
+      const parsed = JSON.parse(text);
+      if (!parsed.success) return null;
+      return parsed.memory as MemoryStoreEntry;
+    } catch { return null; }
+  }
+
+  async getStats(): Promise<{ total: number; byType: Record<string, number>; byAgent: Record<string, number> }> {
+    const all = await this.recall({ limit: 10_000 });
+    const byType: Record<string, number> = {};
+    const byAgent: Record<string, number> = {};
+    for (const e of all) {
+      byType[e.type] = (byType[e.type] ?? 0) + 1;
+      byAgent[e.agent] = (byAgent[e.agent] ?? 0) + 1;
+    }
+    return { total: all.length, byType, byAgent };
   }
 
   async forget(id: string, type: MemoryType): Promise<void> {
@@ -99,7 +143,6 @@ export class McpMemoryAdapter implements MemoryPort {
       name: "forget",
       arguments: { id, type },
     })) as ToolResult;
-
     const text = this.extractText(result);
     const parsed = JSON.parse(text);
     if (!parsed.success) throw new Error(parsed.error || "forget failed");
@@ -108,14 +151,13 @@ export class McpMemoryAdapter implements MemoryPort {
   async clearWorking(agent?: string): Promise<number> {
     await this.ensureConnected();
     const result = (await this.client.callTool({
-      name: "clear_working",
-      arguments: { ...(agent && { agent }) },
+      name: "forget",
+      arguments: { agent: agent ?? "" },
     })) as ToolResult;
-
     const text = this.extractText(result);
     const parsed = JSON.parse(text);
     if (!parsed.success) throw new Error(parsed.error || "clear_working failed");
-    return parsed.count as number;
+    return parsed.cleared as number;
   }
 }
 

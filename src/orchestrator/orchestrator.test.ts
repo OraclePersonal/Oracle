@@ -105,13 +105,13 @@ describe("OrchestratorFactory", () => {
     expect(entry.content).toBe("Test memory");
 
     // Test recall
-    const recalled = await memAdapter.recall("fact", "test-agent");
+    const recalled = await memAdapter.recall({ type: "fact", agent: "test-agent" });
     expect(recalled.length).toBeGreaterThan(0);
     expect(recalled[0].id).toBe(entry.id);
 
     // Test forget
     await memAdapter.forget(entry.id, "fact");
-    const afterForget = await memAdapter.recall("fact", "test-agent");
+    const afterForget = await memAdapter.recall({ type: "fact", agent: "test-agent" });
     expect(afterForget.some((e) => e.id === entry.id)).toBe(false);
   });
 
@@ -126,7 +126,7 @@ describe("OrchestratorFactory", () => {
       await new Promise((r) => setTimeout(r, 5)); // ensure distinct timestamp prefixes
     }
 
-    const recalled = await memAdapter.recall("fact", "agent", 2);
+    const recalled = await memAdapter.recall({ type: "fact", agent: "agent", limit: 2 });
     expect(recalled).toHaveLength(2);
     // Most recent two, newest first.
     expect(recalled[0].id).toBe(written[4].id);

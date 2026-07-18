@@ -8,14 +8,31 @@ import { DEFAULT_SYSTEM_PROMPT } from "../context/bundle.js";
 import type { ConsultService } from "../core/consult.js";
 import { OracleError, serializeOracleError } from "../errors.js";
 import { checkProvider } from "../providers/factory.js";
-import { SkillRegistry } from "../skills/registry.js";
-import { OracleRegistry } from "../oracles/registry.js";
-import { MemoryAdapter } from "../memory/adapter.js";
+import type { SkillRegistry } from "../skills/registry.js";
+import type { OracleRegistry } from "../oracles/registry.js";
 import { ProfileStore } from "../identity/profile.js";
-import { MessagesAdapter, type MessageKind } from "../peer/mesh.js";
+import type { MessageKind } from "../peer/mesh.js";
 import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
 import type { PRFile } from "../github/types.js";
 import * as gh from "../github/gh.js";
+
+const SOUL_CACHE = new Map<string, string>();
+
+async function loadSoul(name: string, dir: string): Promise<string> {
+  const key = `${dir}:${name}`;
+  const cached = SOUL_CACHE.get(key);
+  if (cached) return cached;
+  const [file, defaultFile] = [`${name}.md`, "default.md"];
+  for (const f of [file, defaultFile]) {
+    try {
+      const content = await fs.readFile(path.join(dir, f), "utf-8");
+      SOUL_CACHE.set(key, content);
+      return content;
+    } catch {}
+  }
+  // ponytail: no soul dir or file — return a minimal fallback prompt
+  return "You are Oracle, a senior engineer. Answer concisely and directly.";
+}
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -85,8 +102,9 @@ export function registerOracleTools({
   memory,
   profile,
   messages,
-  providerChecks = checkProvider
-}: OracleServerDependencies): void {
+  providerChecks = checkProvider,
+  soulsDir = path.join(os.homedir(), ".oracle", "souls")
+}: OracleServerDependencies & { soulsDir?: string }): void {
   server.registerTool(
     "oracle_consult",
     {
@@ -141,6 +159,45 @@ export function registerOracleTools({
           provider: providerId,
           preset: skillName,
           filesIncluded: result.files.length
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    }
+  );
+
+  server.registerTool(
+    "oracle_ask",
+    {
+      title: "Ask Oracle",
+      description: "Ask Oracle a question. Use when you're unsure, need a second opinion, or hit something outside your knowledge. Oracle answers with its configured soul prompt.",
+      inputSchema: {
+        question: z.string().min(1).describe("Your question or what you're stuck on"),
+        soul: z.string().optional().describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
+        context: z.string().optional().describe("Additional context: code snippets, error messages, what you've tried")
+      }
+    },
+    async ({ question, soul, context }) => {
+      try {
+        const soulName = soul ?? "default";
+        const soulPrompt = await loadSoul(soulName, soulsDir);
+        const ctxBlock = context ? `\n\n## Context from the asking agent\n${context}` : "";
+        const prompt = `${ctxBlock}\n\n## Question\n${question}`;
+        const systemPrompt = `${soulPrompt}\n\nAnswer concisely and directly. If you don't know, say so.`;
+        const result = await service.consult({
+          prompt,
+          preset: "review",
+          provider: providerId,
+          files: [],
+          model: config.model,
+          cwd: workspaceRoot,
+          maxFileSizeBytes: 0,
+          maxInputBytes: config.maxInputBytes,
+          systemPrompt
+        });
+        return success(result.output, {
+          soul: soulName,
+          sessionId: result.sessionId
         });
       } catch (error) {
         return failure(error);
@@ -276,8 +333,54 @@ export function registerOracleTools({
     },
     async ({ agent, type, limit }) => {
       try {
-        const entries = await memory.recall(type as any, agent ?? undefined, limit);
+        const entries = await memory.recall({ type: type as any, agent: agent ?? undefined, limit });
         return success(JSON.stringify(entries, null, 2), { entries });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_search",
+    {
+      title: "Search Memory",
+      description: "Search memory contents by keyword.",
+      inputSchema: { query: z.string().min(1), agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(200).default(20) }
+    },
+    async ({ query, agent, type, limit }) => {
+      try {
+        const entries = await memory.searchMemories(query, { type: type as any, agent: agent ?? undefined, limit });
+        return success(JSON.stringify(entries, null, 2), { count: entries.length, entries });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_update",
+    {
+      title: "Update Memory",
+      description: "Update content, tags, or importance of an existing memory.",
+      inputSchema: { id: z.string(), type: z.enum(["fact", "insight", "chunk", "working"]), content: z.string().optional(), tags: z.array(z.string()).optional(), importance: z.number().min(0).max(1).optional() }
+    },
+    async ({ id, type, content, tags, importance }) => {
+      try {
+        const updated = await memory.updateMemory(id, type as any, { content, tags, importance });
+        if (!updated) return failure(new Error("Memory not found"));
+        return success(JSON.stringify(updated, null, 2), { memory: updated });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_stats",
+    {
+      title: "Memory Stats",
+      description: "Get memory counts by type and agent.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const stats = await memory.getStats();
+        return success(JSON.stringify(stats, null, 2), { stats });
       } catch (error) { return failure(error); }
     }
   );

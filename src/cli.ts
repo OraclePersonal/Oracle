@@ -23,8 +23,6 @@ import { AnthropicOAuthClient } from "./auth/anthropic-oauth.js";
 import { TokenStore } from "./auth/store.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { OracleRegistry } from "./oracles/registry.js";
-import { MemoryAdapter } from "./memory/adapter.js";
-import { MessagesAdapter } from "./peer/mesh.js";
 import { OrchestratorFactory } from "./orchestrator/factory.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import * as peer from "./peer/peer.js";
@@ -100,7 +98,7 @@ program
     if (options.oracle) {
       const profile = await oracleReg.getOracle(options.oracle);
       if (profile?.memory) {
-        const entries = await memory.recall(undefined, options.oracle);
+        const entries = await memory.recall({ agent: options.oracle });
         if (entries.length > 0) {
           const ctx = entries.map((e) => `[${e.type}] ${e.content.slice(0, 200)}`).join("\n\n");
           finalSystemPrompt = `${systemPrompt}\n\n[PREVIOUS CONTEXT]\n${ctx}`;
@@ -280,7 +278,7 @@ memCmd
   .action(async (agent, options) => {
     const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
     const memory = await orchestrator.createMemoryAdapter();
-    const entries = await memory.recall(undefined, agent ?? undefined, Number(options.limit));
+    const entries = await memory.recall({ agent: agent ?? undefined, limit: Number(options.limit) });
     if (!entries.length) { console.log("No memory entries."); return; }
     for (const e of entries) {
       console.log(`${e.ts.slice(0, 19)}  [${e.type.padEnd(8)}]  ${e.agent.padEnd(12)}  ${e.content.slice(0, 60)}`);
