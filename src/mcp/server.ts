@@ -15,6 +15,7 @@ import type { MessageKind } from "../peer/mesh.js";
 import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
 import type { PRFile } from "../github/types.js";
 import * as gh from "../github/gh.js";
+import { listDocs, searchDocs } from "../docs/reader.js";
 
 const SOUL_CACHE = new Map<string, string>();
 
@@ -174,14 +175,30 @@ export function registerOracleTools({
       inputSchema: {
         question: z.string().min(1).describe("Your question or what you're stuck on"),
         soul: z.string().optional().describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
-        context: z.string().optional().describe("Additional context: code snippets, error messages, what you've tried")
+        context: z.string().optional().describe("Additional context: code snippets, error messages, what you've tried"),
+        include_docs: z.boolean().optional().describe("Search .oracle/docs/ for relevant documentation and include as context"),
+        doc_search: z.string().optional().describe("Specific doc query (defaults to using the question itself)")
       }
     },
-    async ({ question, soul, context }) => {
+    async ({ question, soul, context, include_docs, doc_search }) => {
       try {
         const soulName = soul ?? "default";
         const soulPrompt = await loadSoul(soulName, soulsDir);
-        const ctxBlock = context ? `\n\n## Context from the asking agent\n${context}` : "";
+        let ctxBlock = context ? `\n\n## Context from the asking agent\n${context}` : "";
+
+        // Include relevant docs from .oracle/docs/
+        if (include_docs) {
+          const docQuery = doc_search ?? question;
+          const matched = await searchDocs(workspaceRoot, docQuery);
+          if (matched.length > 0) {
+            const docsBlock = matched
+              .slice(0, 5)
+              .map((d) => `### ${d.name}\n${d.content.slice(0, 3000)}`)
+              .join("\n\n");
+            ctxBlock += `\n\n## Documentation from .oracle/docs/\n${docsBlock}\n\n(Match: "${docQuery}")`;
+          }
+        }
+
         const prompt = `${ctxBlock}\n\n## Question\n${question}`;
         const systemPrompt = `${soulPrompt}\n\nAnswer concisely and directly. If you don't know, say so.`;
         const result = await service.consult({
@@ -193,7 +210,8 @@ export function registerOracleTools({
           cwd: workspaceRoot,
           maxFileSizeBytes: 0,
           maxInputBytes: config.maxInputBytes,
-          systemPrompt
+          systemPrompt,
+          allowEmptyFiles: true,
         });
         return success(result.output, {
           soul: soulName,
@@ -396,6 +414,47 @@ export function registerOracleTools({
       try {
         const count = await memory.clearWorking(agent ?? undefined);
         return success(`Cleared ${count} working memory entries.`, { cleared: count });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  // ─── Docs ────────────────────────────────────────
+
+  server.registerTool(
+    "oracle_docs_list",
+    {
+      title: "List Docs",
+      description: "List available documentation files in .oracle/docs/.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const docs = await listDocs(workspaceRoot);
+        const summary = docs.map((d) => ({ name: d.name, size: d.size }));
+        return success(JSON.stringify(summary, null, 2), { count: docs.length, docs: summary });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_docs_search",
+    {
+      title: "Search Docs",
+      description: "Search .oracle/docs/ files by keyword.",
+      inputSchema: {
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(20).default(5),
+      }
+    },
+    async ({ query, limit }) => {
+      try {
+        const docs = await searchDocs(workspaceRoot, query);
+        const results = docs.slice(0, limit).map((d) => ({
+          name: d.name,
+          snippet: d.content.slice(0, 500),
+          size: d.size,
+        }));
+        return success(JSON.stringify(results, null, 2), { count: results.length, results });
       } catch (error) { return failure(error); }
     }
   );

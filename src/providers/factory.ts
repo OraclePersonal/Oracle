@@ -1,9 +1,9 @@
 import { AnthropicProvider } from "./anthropic.js";
 import { CodexCliProvider, runCommand, type CommandRunner } from "./codex.js";
-import { OpenAIProvider } from "./openai.js";
+import { OpenAIProvider, OpenCodeProvider } from "./openai.js";
 import type { Provider } from "./provider.js";
 
-export type ProviderName = "codex" | "openai" | "anthropic";
+export type ProviderName = "codex" | "openai" | "anthropic" | "opencode";
 
 export interface DoctorCheck {
   name: string;
@@ -12,13 +12,17 @@ export interface DoctorCheck {
 }
 
 export function parseProviderName(value = "codex"): ProviderName {
-  if (value === "codex" || value === "openai" || value === "anthropic") return value;
-  throw new Error(`Unknown provider: ${value}. Expected codex, openai, or anthropic.`);
+  if (value === "codex" || value === "openai" || value === "anthropic" || value === "opencode") return value;
+  throw new Error(`Unknown provider: ${value}. Expected codex, openai, anthropic, or opencode.`);
 }
 
 export function createProvider(name: ProviderName = "codex"): Provider {
-  if (name === "anthropic") return new AnthropicProvider();
-  return name === "codex" ? new CodexCliProvider() : new OpenAIProvider();
+  switch (name) {
+    case "anthropic": return new AnthropicProvider();
+    case "openai": return new OpenAIProvider();
+    case "opencode": return new OpenCodeProvider();
+    default: return new CodexCliProvider();
+  }
 }
 
 export async function checkProvider(
@@ -27,21 +31,22 @@ export async function checkProvider(
 ): Promise<DoctorCheck[]> {
   if (name === "openai") {
     return [
-      {
-        name: "OPENAI_API_KEY",
-        ok: Boolean(process.env.OPENAI_API_KEY),
-        detail: process.env.OPENAI_API_KEY ? "set" : "not set"
-      }
+      { name: "OPENAI_API_KEY", ok: Boolean(process.env.OPENAI_API_KEY), detail: process.env.OPENAI_API_KEY ? "set" : "not set" },
+      { name: "OPENAI_API_BASE", ok: Boolean(process.env.OPENAI_API_BASE), detail: process.env.OPENAI_API_BASE ?? "default (api.openai.com)" },
     ];
   }
 
   if (name === "anthropic") {
     return [
-      {
-        name: "ANTHROPIC_API_KEY",
-        ok: Boolean(process.env.ANTHROPIC_API_KEY),
-        detail: process.env.ANTHROPIC_API_KEY ? "set" : "not set"
-      }
+      { name: "ANTHROPIC_API_KEY", ok: Boolean(process.env.ANTHROPIC_API_KEY), detail: process.env.ANTHROPIC_API_KEY ? "set" : "not set" },
+    ];
+  }
+
+  if (name === "opencode") {
+    return [
+      { name: "OPENCODE_API_KEY", ok: Boolean(process.env.OPENCODE_API_KEY ?? process.env.OPENAI_API_KEY), detail: process.env.OPENCODE_API_KEY ? "set (OPENCODE_API_KEY)" : process.env.OPENAI_API_KEY ? "set (OPENAI_API_KEY)" : "not set" },
+      { name: "OPENCODE_API_BASE", ok: Boolean(process.env.OPENCODE_API_BASE), detail: process.env.OPENCODE_API_BASE ?? "not set" },
+      { name: "OPENCODE_MODEL", ok: Boolean(process.env.OPENCODE_MODEL), detail: process.env.OPENCODE_MODEL ?? "default (gpt-4o)" },
     ];
   }
 

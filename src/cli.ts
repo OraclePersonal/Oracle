@@ -393,7 +393,7 @@ peerCmd
 // ── existing commands ────────────────────────────────────────────
 program
   .command("doctor")
-  .option("--provider <provider>", "Provider: codex, openai, or anthropic", "codex")
+  .option("--provider <provider>", "Provider: codex, openai, anthropic, or opencode", "codex")
   .action(async (options) => {
     const checks = await checkProvider(parseProviderName(options.provider));
     for (const check of checks) {
