@@ -97,13 +97,20 @@ oracle peer list --agent oracle --limit 10
 
 When more than one agent (Claude, opencode, Oracle itself) might touch the
 same file at once, claim it first — a lock is a plain exclusive file create,
-so two agents racing for the same resource can't both win, and an abandoned
-lock (crashed agent) expires and can be stolen after its TTL:
+so two agents racing for the same resource can't both win. It's a **short
+lease (60s default), not a long hold**: acquire only for the critical
+section (read-latest → modify → write → release), renew if that genuinely
+runs long, and let an abandoned lease (crashed agent) expire and get stolen
+rather than tying up a resource for minutes on a guess. Every acquire
+returns a **fencing token** — pass it back to `lock-renew`/`unlock` so a
+lease you lost to expiry-and-theft can't accidentally revive and stomp on
+whoever holds it now:
 
 ```bash
-oracle peer lock "src/auth.ts" --agent claude
+oracle peer lock "src/auth.ts" --agent claude       # prints a token
+oracle peer lock-renew "src/auth.ts" --agent claude --token 1
 oracle peer lock-status "src/auth.ts"
-oracle peer unlock "src/auth.ts" --agent claude
+oracle peer unlock "src/auth.ts" --agent claude --token 1
 ```
 
 ## Memory wiki
@@ -169,7 +176,7 @@ oracle docs remove auth/oauth.md
 
 `oracle_ask` can pull matching passages in automatically via `include_docs: true`.
 
-## Tools (44 MCP tools)
+## Tools (45 MCP tools)
 
 Run as MCP server:
 
@@ -229,7 +236,7 @@ Soul prompts define Oracle's personality when asked via `oracle_ask`:
 |------|--------------|
 | `oracle_peer_send` / `oracle_peer_broadcast` | Send messages via oracle-messages |
 | `oracle_peer_list` / `oracle_peer_unread` / `oracle_peer_thread` | Read messages |
-| `oracle_peer_lock_acquire` / `oracle_peer_lock_release` / `oracle_peer_lock_check` | Multi-agent file/resource locks |
+| `oracle_peer_lock_acquire` / `oracle_peer_lock_renew` / `oracle_peer_lock_release` / `oracle_peer_lock_check` | Multi-agent file/resource locks (fencing-token leases) |
 | `oracle_oracle_list` / `oracle_oracle_register` | Named oracle profiles |
 
 ### Identity

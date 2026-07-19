@@ -801,11 +801,11 @@ export function registerOracleTools({
     "oracle_peer_lock_acquire",
     {
       title: "Acquire Lock",
-      description: "Acquire a coordination lock on a resource (e.g. a file path) so two agents don't edit it concurrently. An abandoned lock older than its TTL can be stolen.",
+      description: "Acquire a short lease on a resource (e.g. a file path) so two agents don't edit it concurrently. Returns a fencing token — pass it to oracle_peer_lock_renew/release. Hold the lease only for the critical section (read-latest → modify → write → release), not a whole task's lifetime; renew if it genuinely runs long. An abandoned lease older than its TTL can be stolen.",
       inputSchema: {
         resource: z.string().min(1).describe("Resource identifier, typically a file path"),
         agent: z.string().min(1),
-        ttlMs: z.number().int().positive().optional().describe("Lock expiry in ms (default 5 minutes)")
+        ttlMs: z.number().int().positive().optional().describe("Lease length in ms (default 60s)")
       }
     },
     async ({ resource, agent, ttlMs }) => {
@@ -818,17 +818,42 @@ export function registerOracleTools({
   );
 
   server.registerTool(
+    "oracle_peer_lock_renew",
+    {
+      title: "Renew Lock",
+      description: "Extend a lease you currently hold. Requires the fencing token from the acquire (or previous renew) call — a mismatched token means your lease already expired and was taken by someone else.",
+      inputSchema: {
+        resource: z.string().min(1),
+        agent: z.string().min(1),
+        token: z.number().int().describe("Fencing token from the acquire or previous renew call"),
+        ttlMs: z.number().int().positive().optional().describe("New lease length in ms (default 60s)")
+      }
+    },
+    async ({ resource, agent, token, ttlMs }) => {
+      try {
+        if (!messages.renewLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
+        const result = await messages.renewLock(resource, agent, token, ttlMs);
+        return success(JSON.stringify(result, null, 2), { ...result });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
     "oracle_peer_lock_release",
     {
       title: "Release Lock",
-      description: "Release a lock you hold. Fails if another agent holds it.",
-      inputSchema: { resource: z.string().min(1), agent: z.string().min(1) }
+      description: "Release a lock you hold. Fails if another agent holds it, or (when token is given) if it doesn't match the current lease.",
+      inputSchema: {
+        resource: z.string().min(1),
+        agent: z.string().min(1),
+        token: z.number().int().optional().describe("Fencing token — if given, must match the current lease")
+      }
     },
-    async ({ resource, agent }) => {
+    async ({ resource, agent, token }) => {
       try {
         if (!messages.releaseLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
-        const released = await messages.releaseLock(resource, agent);
-        return success(released ? `Released: ${resource}` : `Not held by ${agent}: ${resource}`, { released });
+        const released = await messages.releaseLock(resource, agent, token);
+        return success(released ? `Released: ${resource}` : `Not held by ${agent} (with a matching token, if given): ${resource}`, { released });
       } catch (error) { return failure(error); }
     }
   );
