@@ -1,5 +1,5 @@
 import type { MemoryStoreEntry, MemoryType } from "../memory/adapter.js";
-import type { MessageKind, MessageStoreEntry } from "../peer/mesh.js";
+import type { MessageKind, MessageStoreEntry, LockRecord, LockAcquireResult } from "../peer/mesh.js";
 
 /**
  * MemoryPort — abstraction over memory storage (file-based or MCP-backed).
@@ -13,7 +13,7 @@ export interface MemoryPort {
     opts?: { tags?: string[]; meta?: Record<string, unknown>; importance?: number }
   ): Promise<MemoryStoreEntry>;
 
-  recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number }): Promise<MemoryStoreEntry[]>;
+  recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number; includeArchived?: boolean }): Promise<MemoryStoreEntry[]>;
 
   searchMemories(query: string, opts?: { type?: MemoryType; agent?: string; limit?: number }): Promise<MemoryStoreEntry[]>;
 
@@ -64,6 +64,17 @@ export interface MessagesPort {
    * libuv "UV_HANDLE_CLOSING" assertion instead of exiting cleanly.
    */
   close?(): Promise<void>;
+
+  /**
+   * Multi-agent coordination locks (e.g. "don't let two agents edit the same
+   * file at once"). Optional: only the file-backed MessagesAdapter
+   * implements these today — the MCP-backed oracle-messages bus has no
+   * matching lock tools, so callers must check for presence before use
+   * rather than assuming every MessagesPort supports locking.
+   */
+  acquireLock?(resource: string, agent: string, ttlMs?: number): Promise<LockAcquireResult>;
+  releaseLock?(resource: string, agent: string): Promise<boolean>;
+  checkLock?(resource: string): Promise<LockRecord | null>;
 }
 
 export type ServiceType = "memory" | "messages";

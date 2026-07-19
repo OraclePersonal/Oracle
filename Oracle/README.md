@@ -1,17 +1,17 @@
 # Oracle
 
-> A senior engineer you can summon with one command. It reads your code, thinks with a real model, remembers what it learned, and can talk to other agents while it works.
+> A personal AI assistant you keep around, not a one-shot tool you invoke. Ask it anything, it remembers across every conversation, and it can act on your behalf — reviewing code is one of the things it does, not the point of it.
 
-**Oracle** is an MCP-powered AI coding consultant. Point it at some files,
-ask a question, and it bundles the right context, sends it to the model of
-your choice, and hands back a real review — not a vibe.
+**Oracle** is an MCP-powered assistant with persistent memory, a knowledge
+base, web access, and its own coordination layer for working alongside other
+agents (Claude, opencode, etc.) instead of just answering when asked.
 
 ```
-you ──▶ oracle consult ──▶ bundle context ──▶ think (AI) ──▶ answer
-               │                                              │
-         skills · oracles                              saved as session
-               │                                              │
-     memory (oracle-memory)  ◀───────────────────▶  mesh (oracle-messages)
+you ──▶ oracle ask ──▶ context (memory · docs · web · files) ──▶ think (AI) ──▶ answer
+              │                                                                  │
+     conversation continuity                                          remembers what it said
+              │                                                                  │
+     memory (facts · insights · wiki)  ◀───────────────────▶  mesh (locks · messages to other agents)
 ```
 
 ## Quick start
@@ -93,6 +93,31 @@ oracle peer send --to claude --body "Review complete" --kind review-result
 oracle peer list --agent oracle --limit 10
 ```
 
+### Multi-agent locks
+
+When more than one agent (Claude, opencode, Oracle itself) might touch the
+same file at once, claim it first — a lock is a plain exclusive file create,
+so two agents racing for the same resource can't both win, and an abandoned
+lock (crashed agent) expires and can be stolen after its TTL:
+
+```bash
+oracle peer lock "src/auth.ts" --agent claude
+oracle peer lock-status "src/auth.ts"
+oracle peer unlock "src/auth.ts" --agent claude
+```
+
+## Memory wiki
+
+`oracle wiki build` compiles every fact/insight into topic-grouped Markdown
+pages under `.oracle/wiki/<topic>.md` (grouped by tag) — a readable view over
+memory, including anything superseded, not a second store to keep in sync:
+
+```bash
+oracle wiki build
+oracle wiki list
+oracle wiki show redis
+```
+
 ## Web search, fetch & extract
 
 Four pluggable providers, each doing a different job:
@@ -144,7 +169,7 @@ oracle docs remove auth/oauth.md
 
 `oracle_ask` can pull matching passages in automatically via `include_docs: true`.
 
-## Tools (38 MCP tools)
+## Tools (44 MCP tools)
 
 Run as MCP server:
 
@@ -169,6 +194,7 @@ node dist/mcp.js                 # stdio MCP server
 | `oracle_memory_update` | Edit content/tags of existing memory |
 | `oracle_memory_stats` | Count by type and agent |
 | `oracle_memory_clear` | Clear working memory |
+| `oracle_memory_wiki_build` / `oracle_memory_wiki_list` / `oracle_memory_wiki_get` | Compile & read the topic-grouped memory wiki |
 
 ### Knowledge base — `.oracle/docs/`
 
@@ -203,6 +229,7 @@ Soul prompts define Oracle's personality when asked via `oracle_ask`:
 |------|--------------|
 | `oracle_peer_send` / `oracle_peer_broadcast` | Send messages via oracle-messages |
 | `oracle_peer_list` / `oracle_peer_unread` / `oracle_peer_thread` | Read messages |
+| `oracle_peer_lock_acquire` / `oracle_peer_lock_release` / `oracle_peer_lock_check` | Multi-agent file/resource locks |
 | `oracle_oracle_list` / `oracle_oracle_register` | Named oracle profiles |
 
 ### Identity
