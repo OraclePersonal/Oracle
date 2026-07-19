@@ -29,6 +29,7 @@ import * as peer from "./peer/peer.js";
 import { ProfileStore } from "./identity/profile.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
+import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
 
 const homeDir = (): string =>
   process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
@@ -294,6 +295,58 @@ memCmd
     const memory = await orchestrator.createMemoryAdapter();
     const count = await memory.clearWorking(agent ?? undefined);
     console.log(`Cleared ${count} working memory entries.`);
+  });
+
+// ── docs ─────────────────────────────────────────────────────────
+const docsCmd = program.command("docs").description("Manage .oracle/docs/ knowledge base");
+
+docsCmd
+  .command("list")
+  .description("List files in .oracle/docs/")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (options) => {
+    const docs = await listDocs(path.resolve(options.cwd));
+    if (!docs.length) { console.log("No docs found in .oracle/docs/."); return; }
+    for (const d of docs) {
+      console.log(`${d.name.padEnd(40)} ${(d.size / 1024).toFixed(1)}KB`);
+    }
+  });
+
+docsCmd
+  .command("search")
+  .description("BM25-ranked passage search over .oracle/docs/")
+  .argument("<query>", "Search query")
+  .option("-n, --limit <number>", "Max results", "10")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (query, options) => {
+    const results = await searchDocs(path.resolve(options.cwd), query, Number(options.limit));
+    if (!results.length) { console.log("No matches."); return; }
+    for (const r of results) {
+      console.log(`${r.name}${r.heading ? ` — ${r.heading}` : ""}  (score ${r.score.toFixed(2)})`);
+      console.log(`  ${r.snippet.slice(0, 150).replace(/\n/g, " ")}...`);
+    }
+  });
+
+docsCmd
+  .command("add")
+  .description("Add or overwrite a file in .oracle/docs/")
+  .argument("<name>", "Relative filename, e.g. 'auth/oauth.md'")
+  .requiredOption("-f, --file <path>", "Source file to copy content from")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (name, options) => {
+    const content = await fs.readFile(options.file, "utf8");
+    const filePath = await addDoc(path.resolve(options.cwd), name, content);
+    console.log(`Added ${filePath}`);
+  });
+
+docsCmd
+  .command("remove")
+  .description("Delete a file from .oracle/docs/")
+  .argument("<name>", "Relative filename")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (name, options) => {
+    const removed = await removeDoc(path.resolve(options.cwd), name);
+    console.log(removed ? `Removed ${name}` : `Not found: ${name}`);
   });
 
 // ── peer ─────────────────────────────────────────────────────────

@@ -57,7 +57,24 @@ oracle peer send --to claude --body "Review complete" --kind review-result
 oracle peer list --agent oracle --limit 10
 ```
 
-## Tools (32 MCP tools)
+## Knowledge base — `.oracle/docs/`
+
+Drop project documentation (`.md`, `.txt`, `.json`, `.mdx`) into `.oracle/docs/`
+and Oracle indexes it for retrieval: each file is chunked by markdown heading
+(hard-wrapped past ~1200 chars for long sections) and ranked with BM25 — not
+whole-file keyword matching. The chunk index is cached in
+`.oracle/docs/.index.json` and only rebuilds for files whose mtime/size changed.
+
+```bash
+oracle docs list
+oracle docs search "redis timeout" -n 5
+oracle docs add auth/oauth.md -f ./notes.md
+oracle docs remove auth/oauth.md
+```
+
+`oracle_ask` can pull matching passages in automatically via `include_docs: true`.
+
+## Tools (35 MCP tools)
 
 Run as MCP server:
 
@@ -82,6 +99,15 @@ node dist/mcp.js                 # stdio MCP server
 | `oracle_memory_update` | Edit content/tags of existing memory |
 | `oracle_memory_stats` | Count by type and agent |
 | `oracle_memory_clear` | Clear working memory |
+
+### Knowledge base — `.oracle/docs/`
+
+| Tool | What it does |
+|------|--------------|
+| `oracle_docs_list` | List indexed doc files |
+| `oracle_docs_search` | BM25-ranked passage search |
+| `oracle_docs_add` | Add/overwrite a doc file |
+| `oracle_docs_remove` | Delete a doc file |
 
 Semantic search via Ollama (opt-in):
 

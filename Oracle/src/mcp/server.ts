@@ -15,7 +15,7 @@ import type { MessageKind } from "../peer/mesh.js";
 import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
 import type { PRFile } from "../github/types.js";
 import * as gh from "../github/gh.js";
-import { listDocs, searchDocs } from "../docs/reader.js";
+import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
 
 const SOUL_CACHE = new Map<string, string>();
 
@@ -189,11 +189,10 @@ export function registerOracleTools({
         // Include relevant docs from .oracle/docs/
         if (include_docs) {
           const docQuery = doc_search ?? question;
-          const matched = await searchDocs(workspaceRoot, docQuery);
+          const matched = await searchDocs(workspaceRoot, docQuery, 5);
           if (matched.length > 0) {
             const docsBlock = matched
-              .slice(0, 5)
-              .map((d) => `### ${d.name}\n${d.content.slice(0, 3000)}`)
+              .map((d) => `### ${d.name}${d.heading ? ` — ${d.heading}` : ""}\n${d.snippet}`)
               .join("\n\n");
             ctxBlock += `\n\n## Documentation from .oracle/docs/\n${docsBlock}\n\n(Match: "${docQuery}")`;
           }
@@ -440,7 +439,7 @@ export function registerOracleTools({
     "oracle_docs_search",
     {
       title: "Search Docs",
-      description: "Search .oracle/docs/ files by keyword.",
+      description: "BM25-ranked passage search over .oracle/docs/ — chunked by heading, not whole files.",
       inputSchema: {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(20).default(5),
@@ -448,13 +447,42 @@ export function registerOracleTools({
     },
     async ({ query, limit }) => {
       try {
-        const docs = await searchDocs(workspaceRoot, query);
-        const results = docs.slice(0, limit).map((d) => ({
-          name: d.name,
-          snippet: d.content.slice(0, 500),
-          size: d.size,
-        }));
+        const results = await searchDocs(workspaceRoot, query, limit);
         return success(JSON.stringify(results, null, 2), { count: results.length, results });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_docs_add",
+    {
+      title: "Add Doc",
+      description: "Add or overwrite a file in .oracle/docs/ (.md, .txt, .json, .mdx).",
+      inputSchema: {
+        name: z.string().min(1).describe("Relative filename, e.g. 'auth/oauth.md'"),
+        content: z.string()
+      }
+    },
+    async ({ name, content }) => {
+      try {
+        const filePath = await addDoc(workspaceRoot, name, content);
+        return success(`Added ${name}`, { path: filePath });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_docs_remove",
+    {
+      title: "Remove Doc",
+      description: "Delete a file from .oracle/docs/.",
+      inputSchema: { name: z.string().min(1) }
+    },
+    async ({ name }) => {
+      try {
+        const removed = await removeDoc(workspaceRoot, name);
+        if (!removed) return failure(new Error(`Doc not found: ${name}`));
+        return success(`Removed ${name}`, { name });
       } catch (error) { return failure(error); }
     }
   );
