@@ -33,6 +33,9 @@ import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
 import { webSearchWithTrace } from "./web/search.js";
 import { fetchUrl } from "./web/fetchUrl.js";
 import { agentqlExtract } from "./web/providers/agentql.js";
+import { loadSoul } from "./core/souls.js";
+import { getConversationContext, recordSelfLog } from "./core/selfMemory.js";
+import { createDebouncer, reviewWorkingTreeDiff } from "./core/watch.js";
 
 const homeDir = (): string =>
   process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
@@ -210,6 +213,148 @@ program
       if (result.output) console.log(`\n${result.output}`);
     }
     process.exitCode = result.status === "completed" ? 0 : 1;
+  });
+
+// ── ask ──────────────────────────────────────────────────────────
+program
+  .command("ask")
+  .description("Ask Oracle anything, one entry point — pass -f to also look at code")
+  .argument("<question>", "Your question")
+  .option("--soul <name>", "Soul prompt name (~/.oracle/souls/<name>.md)", "default")
+  .option("-f, --file <pattern...>", "File paths or glob patterns to include")
+  .option("--conversation <id>", "Stable id so Oracle recalls what it already told you across calls")
+  .option("--include-docs", "Search .oracle/docs/ for relevant documentation")
+  .option("-m, --model <model>", "Model override")
+  .option("--provider <provider>", "Provider override")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (question, options) => {
+    const cwd = path.resolve(options.cwd);
+    const finalProvider = options.provider ?? "codex";
+    const parsedProvider = parseProviderName(finalProvider);
+    const checks = await checkProvider(parsedProvider);
+    const failedCheck = checks.find((chk) => !chk.ok);
+    if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
+
+    const service = new ConsultService(createProvider(parsedProvider));
+    const soulsDir = path.join(homeDir(), "souls");
+    const soulPrompt = await loadSoul(options.soul, soulsDir);
+
+    const orchestrator = new OrchestratorFactory(cwd, homeDir());
+    const memory = await orchestrator.createMemoryAdapter();
+
+    let ctxBlock = "";
+    if (options.conversation) {
+      ctxBlock += await getConversationContext(memory, options.conversation);
+    }
+    if (options.includeDocs) {
+      const matched = await searchDocs(cwd, question, 5);
+      if (matched.length > 0) {
+        const docsBlock = matched.map((d) => `### ${d.name}${d.heading ? ` — ${d.heading}` : ""}\n${d.snippet}`).join("\n\n");
+        ctxBlock += `\n\n## Documentation from .oracle/docs/\n${docsBlock}`;
+      }
+    }
+
+    const hasFiles = Boolean(options.file?.length);
+    const result = await service.consult({
+      prompt: `${ctxBlock}\n\n## Question\n${question}`,
+      preset: "review",
+      provider: finalProvider,
+      files: hasFiles ? options.file : [],
+      model: options.model ?? "gpt-5.4",
+      cwd,
+      systemPrompt: `${soulPrompt}\n\nAnswer concisely and directly. If you don't know, say so.`,
+      allowEmptyFiles: !hasFiles
+    });
+
+    if (options.conversation) {
+      await recordSelfLog(memory, options.conversation, { question, answerSummary: result.output.slice(0, 400) });
+    }
+
+    console.log(result.output);
+    process.exitCode = result.status === "completed" ? 0 : 1;
+  });
+
+// ── watch (autonomy layer) ────────────────────────────────────────
+program
+  .command("watch")
+  .description("Watch the working tree and auto-review uncommitted changes — Oracle reacts on its own instead of waiting to be asked")
+  .option("--skill <name>", "Skill to apply", "review")
+  .option("--debounce <ms>", "Quiet period after the last change before reviewing", "3000")
+  .option("--to <agent>", "Also send the review via oracle-messages to this agent")
+  .option("-m, --model <model>", "Model override")
+  .option("--provider <provider>", "Provider override")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (options) => {
+    const { watch } = await import("chokidar");
+    const cwd = path.resolve(options.cwd);
+    const skillReg = new SkillRegistry(homeDir(), cwd);
+    await skillReg.load();
+    const skillName = options.skill;
+    const skill = skillReg.get(skillName);
+    if (!skill) throw new Error(`Unknown skill: ${skillName}. Available: ${skillReg.names().join(", ")}`);
+
+    const finalProvider = options.provider ?? "codex";
+    const parsedProvider = parseProviderName(finalProvider);
+    const checks = await checkProvider(parsedProvider);
+    const failedCheck = checks.find((chk) => !chk.ok);
+    if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
+
+    const service = new ConsultService(createProvider(parsedProvider));
+    const systemPrompt = skillReg.compose(skillName, DEFAULT_SYSTEM_PROMPT);
+    const model = options.model ?? skill.model ?? "gpt-5.4";
+
+    const orchestrator = options.to ? new OrchestratorFactory(cwd, homeDir()) : undefined;
+    const mesh = orchestrator ? await orchestrator.createMessagesAdapter() : undefined;
+
+    let reviewing = false;
+    async function runReview() {
+      if (reviewing) return; // a review is already in flight; the next fs change will trigger another round after it finishes
+      reviewing = true;
+      try {
+        const result = await reviewWorkingTreeDiff(service, { cwd, provider: finalProvider, model, skillName, systemPrompt });
+        if (!result) {
+          console.log("[watch] no uncommitted changes to review");
+          return;
+        }
+        console.log(`\n[watch] ${new Date().toISOString()} — reviewed ${result.diff.length} chars of diff\n${result.output}\n`);
+        if (mesh && options.to) {
+          try {
+            await mesh.send("oracle-watch", options.to, result.output.slice(0, 4000), "review-result", { subject: "Auto-review: working tree change" });
+            console.log(`[watch] sent to ${options.to}`);
+          } catch (e) {
+            console.error(`[watch] failed to send to ${options.to}: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+      } catch (e) {
+        console.error(`[watch] review failed: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        reviewing = false;
+      }
+    }
+
+    const debouncer = createDebouncer(runReview, Number(options.debounce));
+    const watcher = watch(cwd, {
+      ignored: [/node_modules/, /(^|[/\\])\.git($|[/\\])/, /dist/, /\.oracle-memory/, /\.oracle\/sessions/],
+      ignoreInitial: true,
+      persistent: true
+    });
+    watcher.on("all", () => debouncer.trigger());
+
+    console.log(`[watch] watching ${cwd} — reviewing ${debouncer ? `${options.debounce}ms` : ""} after the last change. Ctrl+C to stop.`);
+
+    let shuttingDown = false;
+    const shutdown = async () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      debouncer.cancel();
+      await watcher.close();
+      await mesh?.close?.();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+    await new Promise(() => {}); // keep the process alive until SIGINT/SIGTERM
   });
 
 // ── oracle ───────────────────────────────────────────────────────

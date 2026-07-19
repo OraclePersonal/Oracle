@@ -22,6 +22,42 @@ node dist/cli.js doctor          # check provider is wired up
 node dist/cli.js consult -p "Review this" -f "src/**/*.ts"
 ```
 
+## Just talk to it: `oracle ask`
+
+One entry point for both "just answer me" and "look at this code" — pass
+`-f` when the question needs real files, skip it for a plain conversation.
+Pass `--conversation <id>` across multiple calls in the same exchange and
+Oracle recalls what it already told you (a token-budgeted rolling window,
+not an unbounded transcript — see [Self-memory](#self-memory--conversation-continuity) below):
+
+```bash
+oracle ask "what does this error mean: ECONNRESET on a Redis client?"
+oracle ask "review this for edge cases" -f "src/**/*.ts" --soul engineer
+oracle ask "does that still hold if it's a cluster?" --conversation redis-debug-1
+```
+
+## Self-memory & conversation continuity
+
+`oracle ask --conversation <id>` writes a compact log of each question+answer
+under that id (`.oracle-memory/`, `working` type, auto-clears — it's not a
+durable fact). The *next* call with the same id gets that history back as
+context, capped by token budget (not just a fixed number of turns): the
+newest turns are kept until the budget runs out, and the block says how
+many earlier turns were left out rather than silently growing the prompt
+forever or silently dropping history with no trace.
+
+## Autonomy: `oracle watch`
+
+Everything else in Oracle is reactive — you ask, it answers. `watch` is the
+one proactive path: it watches the working tree, and on a quiet period
+after a change, runs `git diff` and reviews it on its own, no prompt needed.
+
+```bash
+oracle watch                                  # review to stdout on every quiet-period change
+oracle watch --to claude --skill review       # also push the result via oracle-messages
+oracle watch --debounce 5000 --provider anthropic
+```
+
 ## The one command: `consult`
 
 ```bash
@@ -121,7 +157,7 @@ node dist/mcp.js                 # stdio MCP server
 | Tool | What it does |
 |------|--------------|
 | `oracle_consult` | Analyze code with a skill |
-| `oracle_ask` | Ask Oracle anything — uses soul prompts (`~/.oracle/souls/`) |
+| `oracle_ask` | Ask anything, optionally with `files` to include and `conversationId` for multi-turn continuity |
 | `oracle_skills` | List available skills |
 
 ### Memory — `.oracle-memory/`
