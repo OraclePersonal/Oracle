@@ -57,13 +57,28 @@ oracle peer send --to claude --body "Review complete" --kind review-result
 oracle peer list --agent oracle --limit 10
 ```
 
-## Web search & fetch
+## Web search, fetch & extract
 
-Requires `BRAVE_API_KEY` (free tier at https://brave.com/search/api/):
+Four pluggable providers, each doing a different job:
+
+| Provider | Job | Env var |
+|----------|-----|---------|
+| Brave | Web search (free tier: 2000 queries/mo) | `BRAVE_API_KEY` |
+| Tavily | Web search tuned for LLM consumption | `TAVILY_API_KEY` |
+| Firecrawl | Web search, or JS-rendered scrape → markdown | `FIRECRAWL_API_KEY` |
+| AgentQL (TinyFish) | Structured field extraction from a URL | `AGENTQL_API_KEY` |
+
+`oracle web search` picks the first configured provider (Brave → Tavily →
+Firecrawl) unless `--provider` is given. `oracle web fetch` defaults to
+Oracle's own SSRF-guarded HTML-to-text fetch (`native`); pass
+`--provider firecrawl` for pages that need real JS rendering.
 
 ```bash
 oracle web search "redis connection pool exhausted" -n 5
+oracle web search "redis connection pool exhausted" --provider tavily
 oracle web fetch https://redis.io/docs/latest/develop/connect/clients/pool/
+oracle web fetch https://spa-docs.example.com/ --provider firecrawl
+oracle web extract https://shop.example.com/item/42 "the product name and price"
 ```
 
 ## Knowledge base — `.oracle/docs/`
@@ -83,7 +98,7 @@ oracle docs remove auth/oauth.md
 
 `oracle_ask` can pull matching passages in automatically via `include_docs: true`.
 
-## Tools (37 MCP tools)
+## Tools (38 MCP tools)
 
 Run as MCP server:
 
@@ -166,8 +181,9 @@ Soul prompts define Oracle's personality when asked via `oracle_ask`:
 
 | Tool | What it does |
 |------|--------------|
-| `oracle_web_search` | Search the web (Brave Search API — needs `BRAVE_API_KEY`) |
-| `oracle_web_fetch` | Fetch a URL, return readable text (HTML stripped) |
+| `oracle_web_search` | Search via Brave/Tavily/Firecrawl (auto-picks a configured provider) |
+| `oracle_web_fetch` | Fetch a URL — `native` (SSRF-guarded) or `firecrawl` (JS rendering) |
+| `oracle_web_extract` | Extract structured fields from a URL (AgentQL/TinyFish) |
 
 ### System
 

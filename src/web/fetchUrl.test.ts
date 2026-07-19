@@ -106,4 +106,20 @@ describe("fetchUrl", () => {
     expect(page.text).toBe("final page");
     expect(page.url).toBe("https://example.com/final");
   });
+
+  it("delegates to Firecrawl and skips the native SSRF/DNS path entirely when provider is 'firecrawl'", async () => {
+    const originalKey = process.env.FIRECRAWL_API_KEY;
+    process.env.FIRECRAWL_API_KEY = "test-key";
+    global.fetch = vi.fn(async (url: any) => {
+      expect(String(url)).toContain("api.firecrawl.dev/v1/scrape");
+      return new Response(JSON.stringify({ data: { markdown: "content", metadata: { title: "T" } } }), { status: 200 });
+    }) as any;
+
+    const page = await fetchUrl("https://example.com", "firecrawl");
+    expect(page.text).toBe("content");
+    expect(dns.lookup).not.toHaveBeenCalled();
+
+    if (originalKey === undefined) delete process.env.FIRECRAWL_API_KEY;
+    else process.env.FIRECRAWL_API_KEY = originalKey;
+  });
 });

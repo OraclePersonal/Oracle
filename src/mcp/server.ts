@@ -18,6 +18,8 @@ import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
 import { webSearch } from "../web/search.js";
 import { fetchUrl } from "../web/fetchUrl.js";
+import { agentqlExtract } from "../web/providers/agentql.js";
+import { SEARCH_PROVIDERS, FETCH_PROVIDERS } from "../web/types.js";
 
 const SOUL_CACHE = new Map<string, string>();
 
@@ -495,15 +497,16 @@ export function registerOracleTools({
     "oracle_web_search",
     {
       title: "Web Search",
-      description: "Search the web (Brave Search API). Requires BRAVE_API_KEY.",
+      description: "Search the web via Brave, Tavily, or Firecrawl. Defaults to the first provider with a configured API key.",
       inputSchema: {
         query: z.string().min(1),
-        limit: z.number().int().min(1).max(20).default(5)
+        limit: z.number().int().min(1).max(20).default(5),
+        provider: z.enum(SEARCH_PROVIDERS as [string, ...string[]]).optional()
       }
     },
-    async ({ query, limit }) => {
+    async ({ query, limit, provider }) => {
       try {
-        const results = await webSearch(query, limit);
+        const results = await webSearch(query, limit, provider as any);
         return success(JSON.stringify(results, null, 2), { count: results.length, results });
       } catch (error) { return failure(error); }
     }
@@ -513,13 +516,34 @@ export function registerOracleTools({
     "oracle_web_fetch",
     {
       title: "Fetch URL",
-      description: "Fetch a URL and return its readable text (HTML stripped to plain text).",
-      inputSchema: { url: z.string().min(1) }
+      description: "Fetch a URL and return its readable text. 'native' strips HTML itself (SSRF-guarded); 'firecrawl' uses Firecrawl's JS-rendering scraper (requires FIRECRAWL_API_KEY).",
+      inputSchema: {
+        url: z.string().min(1),
+        provider: z.enum(FETCH_PROVIDERS as [string, ...string[]]).default("native")
+      }
     },
-    async ({ url }) => {
+    async ({ url, provider }) => {
       try {
-        const page = await fetchUrl(url);
+        const page = await fetchUrl(url, provider as any);
         return success(page.text, { url: page.url, title: page.title, length: page.text.length });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_web_extract",
+    {
+      title: "Extract Structured Data",
+      description: "Extract structured data from a URL via TinyFish's AgentQL API given a natural-language description of the fields to pull out. Requires AGENTQL_API_KEY.",
+      inputSchema: {
+        url: z.string().min(1),
+        prompt: z.string().min(1).describe("What to extract, e.g. 'the product name, price, and in-stock status'")
+      }
+    },
+    async ({ url, prompt }) => {
+      try {
+        const data = await agentqlExtract(url, prompt);
+        return success(JSON.stringify(data, null, 2), { data });
       } catch (error) { return failure(error); }
     }
   );
