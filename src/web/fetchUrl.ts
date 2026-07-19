@@ -2,6 +2,7 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import { OracleError } from "../errors.js";
 import { firecrawlScrape } from "./providers/firecrawl.js";
+import { logWebEvent } from "./log.js";
 import type { FetchProviderName } from "./types.js";
 
 export interface FetchedPage {
@@ -32,13 +33,24 @@ const MAX_REDIRECTS = 5;
  * is disabled for the same reason: it would bypass this check on hop 2+.
  */
 export async function fetchUrl(url: string, provider: FetchProviderName = "native"): Promise<FetchedPage> {
-  if (provider === "firecrawl") return firecrawlScrape(url);
+  const start = Date.now();
+  if (provider === "firecrawl") {
+    try {
+      const page = await firecrawlScrape(url);
+      logWebEvent({ op: "fetch", provider, outcome: "success", latencyMs: Date.now() - start });
+      return page;
+    } catch (error) {
+      logWebEvent({ op: "fetch", provider, outcome: "failure", latencyMs: Date.now() - start, errorMessage: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
 
   let response: Response;
   let finalUrl: URL;
   try {
     ({ response, finalUrl } = await fetchFollowingSafeRedirects(url, MAX_REDIRECTS));
   } catch (error) {
+    logWebEvent({ op: "fetch", provider, outcome: "failure", latencyMs: Date.now() - start, errorMessage: error instanceof Error ? error.message : String(error) });
     if (error instanceof OracleError) throw error;
     throw new OracleError(
       "ORACLE_WEB_UNAVAILABLE",
@@ -47,6 +59,7 @@ export async function fetchUrl(url: string, provider: FetchProviderName = "nativ
     );
   }
   if (!response.ok) {
+    logWebEvent({ op: "fetch", provider, outcome: "failure", latencyMs: Date.now() - start, errorMessage: `HTTP ${response.status}` });
     throw new OracleError(
       "ORACLE_WEB_UNAVAILABLE",
       `Fetch returned ${response.status}: ${response.statusText}`,
@@ -58,6 +71,8 @@ export async function fetchUrl(url: string, provider: FetchProviderName = "nativ
   const contentType = response.headers.get("content-type") ?? "";
   const buf = await response.arrayBuffer();
   const raw = Buffer.from(buf.slice(0, MAX_BYTES)).toString("utf8");
+
+  logWebEvent({ op: "fetch", provider, outcome: "success", latencyMs: Date.now() - start, finalUrl: parsed.toString() });
 
   if (!contentType.includes("html")) {
     return { url: parsed.toString(), title: "", text: raw.slice(0, MAX_TEXT_CHARS) };

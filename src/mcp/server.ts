@@ -16,7 +16,7 @@ import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
 import type { PRFile } from "../github/types.js";
 import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
-import { webSearch } from "../web/search.js";
+import { webSearchWithTrace } from "../web/search.js";
 import { fetchUrl } from "../web/fetchUrl.js";
 import { agentqlExtract } from "../web/providers/agentql.js";
 import { SEARCH_PROVIDERS, FETCH_PROVIDERS } from "../web/types.js";
@@ -506,8 +506,13 @@ export function registerOracleTools({
     },
     async ({ query, limit, provider }) => {
       try {
-        const results = await webSearch(query, limit, provider as any);
-        return success(JSON.stringify(results, null, 2), { count: results.length, results });
+        const outcome = await webSearchWithTrace(query, limit, provider as any);
+        return success(JSON.stringify(outcome.results, null, 2), {
+          count: outcome.results.length,
+          results: outcome.results,
+          provider: outcome.provider,
+          attempts: outcome.attempts
+        });
       } catch (error) { return failure(error); }
     }
   );
@@ -542,8 +547,8 @@ export function registerOracleTools({
     },
     async ({ url, prompt }) => {
       try {
-        const data = await agentqlExtract(url, prompt);
-        return success(JSON.stringify(data, null, 2), { data });
+        const result = await agentqlExtract(url, prompt);
+        return success(JSON.stringify(result.data, null, 2), { data: result.data, sourceUrl: result.sourceUrl });
       } catch (error) { return failure(error); }
     }
   );
