@@ -1,6 +1,19 @@
 {
   "name": "oracle",
   "version": "0.0.2",
+  "description": "Oracle Assistant — an MCP-powered AI assistant with persistent memory, a knowledge base, web access, and multi-agent coordination for Claude Code, opencode, and other coding agents.",
+  "keywords": [
+    "oracle-assistant",
+    "mcp",
+    "mcp-server",
+    "ai-assistant",
+    "ai-coding-assistant",
+    "claude-code",
+    "opencode",
+    "llm-tools",
+    "code-review-cli",
+    "agent-memory"
+  ],
   "private": true,
   "type": "module",
   "engines": {
