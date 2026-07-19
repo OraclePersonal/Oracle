@@ -16,28 +16,12 @@ import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
 import type { PRFile } from "../github/types.js";
 import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
+import { getConversationContext, recordSelfLog } from "../core/selfMemory.js";
+import { loadSoul } from "../core/souls.js";
 import { webSearchWithTrace } from "../web/search.js";
 import { fetchUrl } from "../web/fetchUrl.js";
 import { agentqlExtract } from "../web/providers/agentql.js";
 import { SEARCH_PROVIDERS, FETCH_PROVIDERS } from "../web/types.js";
-
-const SOUL_CACHE = new Map<string, string>();
-
-async function loadSoul(name: string, dir: string): Promise<string> {
-  const key = `${dir}:${name}`;
-  const cached = SOUL_CACHE.get(key);
-  if (cached) return cached;
-  const [file, defaultFile] = [`${name}.md`, "default.md"];
-  for (const f of [file, defaultFile]) {
-    try {
-      const content = await fs.readFile(path.join(dir, f), "utf-8");
-      SOUL_CACHE.set(key, content);
-      return content;
-    } catch {}
-  }
-  // ponytail: no soul dir or file — return a minimal fallback prompt
-  return "You are Oracle, a senior engineer. Answer concisely and directly.";
-}
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -175,20 +159,26 @@ export function registerOracleTools({
     "oracle_ask",
     {
       title: "Ask Oracle",
-      description: "Ask Oracle a question. Use when you're unsure, need a second opinion, or hit something outside your knowledge. Oracle answers with its configured soul prompt.",
+      description: "Ask Oracle anything — a question, or 'look at these files and tell me X'. One entry point: pass `files` when the answer needs actual code, omit it for a plain conversation. Pass `conversationId` across calls in the same exchange so Oracle remembers what it already told you.",
       inputSchema: {
         question: z.string().min(1).describe("Your question or what you're stuck on"),
         soul: z.string().optional().describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
         context: z.string().optional().describe("Additional context: code snippets, error messages, what you've tried"),
+        files: z.array(z.string()).optional().describe("File paths or glob patterns to read and include, when the question needs real code (e.g. ['src/**/*.ts'])"),
+        conversationId: z.string().optional().describe("Stable id for this exchange — pass the same value across multiple oracle_ask calls so Oracle recalls what it already said"),
         include_docs: z.boolean().optional().describe("Search .oracle/docs/ for relevant documentation and include as context"),
         doc_search: z.string().optional().describe("Specific doc query (defaults to using the question itself)")
       }
     },
-    async ({ question, soul, context, include_docs, doc_search }) => {
+    async ({ question, soul, context, files, conversationId, include_docs, doc_search }) => {
       try {
         const soulName = soul ?? "default";
         const soulPrompt = await loadSoul(soulName, soulsDir);
         let ctxBlock = context ? `\n\n## Context from the asking agent\n${context}` : "";
+
+        if (conversationId) {
+          ctxBlock += await getConversationContext(memory, conversationId);
+        }
 
         // Include relevant docs from .oracle/docs/
         if (include_docs) {
@@ -204,21 +194,28 @@ export function registerOracleTools({
 
         const prompt = `${ctxBlock}\n\n## Question\n${question}`;
         const systemPrompt = `${soulPrompt}\n\nAnswer concisely and directly. If you don't know, say so.`;
+        const hasFiles = files !== undefined && files.length > 0;
         const result = await service.consult({
           prompt,
           preset: "review",
           provider: providerId,
-          files: [],
+          files: hasFiles ? files : [],
           model: config.model,
           cwd: workspaceRoot,
-          maxFileSizeBytes: 0,
+          maxFileSizeBytes: config.maxFileSizeBytes,
           maxInputBytes: config.maxInputBytes,
           systemPrompt,
-          allowEmptyFiles: true,
+          allowEmptyFiles: !hasFiles,
         });
+
+        if (conversationId) {
+          await recordSelfLog(memory, conversationId, { question, answerSummary: result.output.slice(0, 400) });
+        }
+
         return success(result.output, {
           soul: soulName,
-          sessionId: result.sessionId
+          sessionId: result.sessionId,
+          filesIncluded: result.files.length
         });
       } catch (error) {
         return failure(error);
