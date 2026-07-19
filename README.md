@@ -57,6 +57,15 @@ oracle peer send --to claude --body "Review complete" --kind review-result
 oracle peer list --agent oracle --limit 10
 ```
 
+## Web search & fetch
+
+Requires `BRAVE_API_KEY` (free tier at https://brave.com/search/api/):
+
+```bash
+oracle web search "redis connection pool exhausted" -n 5
+oracle web fetch https://redis.io/docs/latest/develop/connect/clients/pool/
+```
+
 ## Knowledge base — `.oracle/docs/`
 
 Drop project documentation (`.md`, `.txt`, `.json`, `.mdx`) into `.oracle/docs/`
@@ -74,7 +83,7 @@ oracle docs remove auth/oauth.md
 
 `oracle_ask` can pull matching passages in automatically via `include_docs: true`.
 
-## Tools (35 MCP tools)
+## Tools (37 MCP tools)
 
 Run as MCP server:
 
@@ -152,6 +161,13 @@ Soul prompts define Oracle's personality when asked via `oracle_ask`:
 | `oracle_github_pr_review_submit` | Post APPROVE/CHANGES/COMMENT |
 | `oracle_github_issue_get` / `oracle_github_issue_list` | Issues |
 | `oracle_github_comment` / `oracle_github_search` / `oracle_github_api` | Misc |
+
+### Web
+
+| Tool | What it does |
+|------|--------------|
+| `oracle_web_search` | Search the web (Brave Search API — needs `BRAVE_API_KEY`) |
+| `oracle_web_fetch` | Fetch a URL, return readable text (HTML stripped) |
 
 ### System
 

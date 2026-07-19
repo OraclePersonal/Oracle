@@ -16,6 +16,8 @@ import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
 import type { PRFile } from "../github/types.js";
 import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
+import { webSearch } from "../web/search.js";
+import { fetchUrl } from "../web/fetchUrl.js";
 
 const SOUL_CACHE = new Map<string, string>();
 
@@ -483,6 +485,41 @@ export function registerOracleTools({
         const removed = await removeDoc(workspaceRoot, name);
         if (!removed) return failure(new Error(`Doc not found: ${name}`));
         return success(`Removed ${name}`, { name });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  // ─── Web ─────────────────────────────────────────
+
+  server.registerTool(
+    "oracle_web_search",
+    {
+      title: "Web Search",
+      description: "Search the web (Brave Search API). Requires BRAVE_API_KEY.",
+      inputSchema: {
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(20).default(5)
+      }
+    },
+    async ({ query, limit }) => {
+      try {
+        const results = await webSearch(query, limit);
+        return success(JSON.stringify(results, null, 2), { count: results.length, results });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_web_fetch",
+    {
+      title: "Fetch URL",
+      description: "Fetch a URL and return its readable text (HTML stripped to plain text).",
+      inputSchema: { url: z.string().min(1) }
+    },
+    async ({ url }) => {
+      try {
+        const page = await fetchUrl(url);
+        return success(page.text, { url: page.url, title: page.title, length: page.text.length });
       } catch (error) { return failure(error); }
     }
   );

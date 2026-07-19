@@ -30,6 +30,8 @@ import { ProfileStore } from "./identity/profile.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
+import { webSearch } from "./web/search.js";
+import { fetchUrl } from "./web/fetchUrl.js";
 
 const homeDir = (): string =>
   process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
@@ -347,6 +349,32 @@ docsCmd
   .action(async (name, options) => {
     const removed = await removeDoc(path.resolve(options.cwd), name);
     console.log(removed ? `Removed ${name}` : `Not found: ${name}`);
+  });
+
+// ── web ──────────────────────────────────────────────────────────
+const webCmd = program.command("web").description("Web search and fetch (requires BRAVE_API_KEY)");
+
+webCmd
+  .command("search")
+  .description("Search the web via Brave Search API")
+  .argument("<query>", "Search query")
+  .option("-n, --limit <number>", "Max results", "5")
+  .action(async (query, options) => {
+    const results = await webSearch(query, Number(options.limit));
+    if (!results.length) { console.log("No results."); return; }
+    for (const r of results) {
+      console.log(`${r.title}\n  ${r.url}\n  ${r.description}\n`);
+    }
+  });
+
+webCmd
+  .command("fetch")
+  .description("Fetch a URL and print its readable text")
+  .argument("<url>", "URL to fetch")
+  .action(async (url) => {
+    const page = await fetchUrl(url);
+    if (page.title) console.log(`# ${page.title}\n`);
+    console.log(page.text);
   });
 
 // ── peer ─────────────────────────────────────────────────────────
