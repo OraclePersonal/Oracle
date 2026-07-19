@@ -671,19 +671,42 @@ peerCmd
 
 peerCmd
   .command("lock")
-  .description("Acquire a coordination lock on a resource (e.g. a file path) so two agents don't edit it at once")
+  .description("Acquire a short lease on a resource (e.g. a file path) so two agents don't edit it at once. Prints a token — save it, lock-renew/unlock need it.")
   .argument("<resource>", "Resource identifier, typically a file path")
   .requiredOption("--agent <agent>", "Your agent name")
-  .option("--ttl <ms>", "Lock expiry — an abandoned lock older than this can be stolen", "300000")
+  .option("--ttl <ms>", "Lease length — an abandoned lease older than this can be stolen", "60000")
   .action(async (resource, options) => {
     const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
     const mesh = await orchestrator.createMessagesAdapter();
     try {
       if (!mesh.acquireLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
       const result = await mesh.acquireLock(resource, options.agent, Number(options.ttl));
-      if (result.acquired) console.log(`Locked: ${resource}`);
+      if (result.acquired) console.log(`Locked: ${resource} (token ${result.lock?.token})`);
       else {
         console.log(`Already locked by ${result.lock?.agent} since ${result.lock?.acquiredAt}`);
+        process.exitCode = 1;
+      }
+    } finally {
+      await mesh.close?.();
+    }
+  });
+
+peerCmd
+  .command("lock-renew")
+  .description("Extend a lease you hold — needed if your critical section runs longer than the original ttl")
+  .argument("<resource>", "Resource identifier")
+  .requiredOption("--agent <agent>", "Your agent name")
+  .requiredOption("--token <n>", "Fencing token from the acquire (or previous renew) call")
+  .option("--ttl <ms>", "New lease length", "60000")
+  .action(async (resource, options) => {
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const mesh = await orchestrator.createMessagesAdapter();
+    try {
+      if (!mesh.renewLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
+      const result = await mesh.renewLock(resource, options.agent, Number(options.token), Number(options.ttl));
+      if (result.acquired) console.log(`Renewed: ${resource} (token ${result.lock?.token})`);
+      else {
+        console.log(`Renew failed — lease expired or held by someone else${result.lock ? ` (${result.lock.agent})` : ""}.`);
         process.exitCode = 1;
       }
     } finally {
@@ -696,13 +719,14 @@ peerCmd
   .description("Release a lock you hold")
   .argument("<resource>", "Resource identifier")
   .requiredOption("--agent <agent>", "Your agent name")
+  .option("--token <n>", "Fencing token — if given, must match the current lease")
   .action(async (resource, options) => {
     const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
     const mesh = await orchestrator.createMessagesAdapter();
     try {
       if (!mesh.releaseLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
-      const released = await mesh.releaseLock(resource, options.agent);
-      console.log(released ? `Unlocked: ${resource}` : `Not locked by ${options.agent}: ${resource}`);
+      const released = await mesh.releaseLock(resource, options.agent, options.token !== undefined ? Number(options.token) : undefined);
+      console.log(released ? `Unlocked: ${resource}` : `Not locked by ${options.agent} (with a matching token, if given): ${resource}`);
       if (!released) process.exitCode = 1;
     } finally {
       await mesh.close?.();
@@ -719,7 +743,7 @@ peerCmd
     try {
       if (!mesh.checkLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
       const lock = await mesh.checkLock(resource);
-      console.log(lock ? `Locked by ${lock.agent} since ${lock.acquiredAt} (ttl ${lock.ttlMs}ms)` : `Unlocked: ${resource}`);
+      console.log(lock ? `Locked by ${lock.agent} since ${lock.acquiredAt} (ttl ${lock.ttlMs}ms, token ${lock.token})` : `Unlocked: ${resource}`);
     } finally {
       await mesh.close?.();
     }

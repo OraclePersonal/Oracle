@@ -57,16 +57,16 @@ describe("MessagesAdapter locks", () => {
   });
 
   it("treats an expired lock as abandoned and lets another agent steal it", async () => {
-    await mesh.acquireLock("src/foo.ts", "agent-a", 10); // 10ms TTL
-    await new Promise((r) => setTimeout(r, 30));
+    await mesh.acquireLock("src/foo.ts", "agent-a", 30); // 30ms TTL
+    await new Promise((r) => setTimeout(r, 150));
     const result = await mesh.acquireLock("src/foo.ts", "agent-b");
     expect(result.acquired).toBe(true);
     expect(result.lock?.agent).toBe("agent-b");
   });
 
   it("checkLock returns null for an expired lock", async () => {
-    await mesh.acquireLock("src/foo.ts", "agent-a", 10);
-    await new Promise((r) => setTimeout(r, 30));
+    await mesh.acquireLock("src/foo.ts", "agent-a", 30);
+    await new Promise((r) => setTimeout(r, 150));
     expect(await mesh.checkLock("src/foo.ts")).toBeNull();
   });
 
@@ -84,5 +84,59 @@ describe("MessagesAdapter locks", () => {
     const b = await mesh.acquireLock("src/b.ts", "agent-b");
     expect(a.acquired).toBe(true);
     expect(b.acquired).toBe(true);
+  });
+
+  it("issues a fencing token that increases on each new acquisition of the same resource", async () => {
+    const first = await mesh.acquireLock("src/foo.ts", "agent-a");
+    expect(first.lock?.token).toBe(1);
+    await mesh.releaseLock("src/foo.ts", "agent-a");
+    const second = await mesh.acquireLock("src/foo.ts", "agent-b");
+    expect(second.lock?.token).toBe(2);
+  });
+
+  it("renewLock extends the lease and keeps the same token for the current holder", async () => {
+    const acquired = await mesh.acquireLock("src/foo.ts", "agent-a", 300);
+    const token = acquired.lock!.token;
+    await new Promise((r) => setTimeout(r, 150));
+    const renewed = await mesh.renewLock("src/foo.ts", "agent-a", token, 300);
+    expect(renewed.acquired).toBe(true);
+    expect(renewed.lock?.token).toBe(token);
+    // Still alive past the original 300ms window because it was renewed.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await mesh.checkLock("src/foo.ts")).not.toBeNull();
+  });
+
+  it("renewLock fails with a stale token after the lease was stolen", async () => {
+    const acquired = await mesh.acquireLock("src/foo.ts", "agent-a", 50);
+    const staleToken = acquired.lock!.token;
+    await new Promise((r) => setTimeout(r, 150)); // lease expires
+    await mesh.acquireLock("src/foo.ts", "agent-b"); // agent-b steals it, new token
+    const renewResult = await mesh.renewLock("src/foo.ts", "agent-a", staleToken, 60_000);
+    expect(renewResult.acquired).toBe(false);
+  });
+
+  it("renewLock fails for the wrong agent even with the right token", async () => {
+    const acquired = await mesh.acquireLock("src/foo.ts", "agent-a");
+    const token = acquired.lock!.token;
+    const renewResult = await mesh.renewLock("src/foo.ts", "agent-b", token);
+    expect(renewResult.acquired).toBe(false);
+  });
+
+  it("releaseLock with a mismatched token fails without releasing the lock", async () => {
+    const acquired = await mesh.acquireLock("src/foo.ts", "agent-a");
+    const wrongToken = acquired.lock!.token + 999;
+    expect(await mesh.releaseLock("src/foo.ts", "agent-a", wrongToken)).toBe(false);
+    expect(await mesh.checkLock("src/foo.ts")).not.toBeNull();
+  });
+
+  it("releaseLock with the correct token releases the lock", async () => {
+    const acquired = await mesh.acquireLock("src/foo.ts", "agent-a");
+    expect(await mesh.releaseLock("src/foo.ts", "agent-a", acquired.lock!.token)).toBe(true);
+    expect(await mesh.checkLock("src/foo.ts")).toBeNull();
+  });
+
+  it("releaseLock omitting the token still works (backward compatible)", async () => {
+    await mesh.acquireLock("src/foo.ts", "agent-a");
+    expect(await mesh.releaseLock("src/foo.ts", "agent-a")).toBe(true);
   });
 });

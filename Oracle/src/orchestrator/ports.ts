@@ -73,7 +73,8 @@ export interface MessagesPort {
    * rather than assuming every MessagesPort supports locking.
    */
   acquireLock?(resource: string, agent: string, ttlMs?: number): Promise<LockAcquireResult>;
-  releaseLock?(resource: string, agent: string): Promise<boolean>;
+  renewLock?(resource: string, agent: string, token: number, ttlMs?: number): Promise<LockAcquireResult>;
+  releaseLock?(resource: string, agent: string, token?: number): Promise<boolean>;
   checkLock?(resource: string): Promise<LockRecord | null>;
 }
 
