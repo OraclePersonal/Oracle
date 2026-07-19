@@ -22,6 +22,41 @@ node dist/cli.js doctor          # check provider is wired up
 node dist/cli.js consult -p "Review this" -f "src/**/*.ts"
 ```
 
+## The one command: `consult`
+
+```bash
+oracle consult -p "Review for edge cases" -f "src/**/*.ts"
+oracle consult -p "Find bugs" --skill debug
+oracle consult --oracle senior-review -p "Review this PR"
+oracle consult -p "Review my changes" --diff
+oracle consult -p "Follow-up" --previous-session-id <id>
+```
+
+## Skills
+
+Five built-in: `review`, `debug`, `architecture`, `tests`, `security`.
+
+```bash
+oracle skill list
+oracle skill install ./my-skill.json
+```
+
+## Named oracles
+
+A skill + a persistent memory:
+
+```bash
+oracle oracle register --name senior-review --skill review --memory
+oracle consult --oracle senior-review -p "Review this"
+```
+
+## Peers
+
+```bash
+oracle peer send --to claude --body "Review complete" --kind review-result
+oracle peer list --agent oracle --limit 10
+```
+
 ## Tools (32 MCP tools)
 
 Run as MCP server:
@@ -143,9 +178,9 @@ No soul file? Falls back to: *"You are Oracle, a senior engineer. Answer concise
 
 ## Related
 
-- [Oracle-memory](https://github.com/JonusNattapong/Oracle-memory) — File-backed MCP memory server
-- [Oracle-messages](https://github.com/JonusNattapong/Oracle-messages) — Multi-agent MCP message bus
-- [Oracle-skill](https://github.com/JonusNattapong/Oracle-skill) — Cross-agent workflow docs
-- [Oracle-templates](https://github.com/JonusNattapong/Oracle-templates) — Template system
-- [Oracle-dashboard](https://github.com/JonusNattapong/Oracle-dashboard) — Live web dashboard
-- [Oracle-eval](https://github.com/JonusNattapong/Oracle-eval) — Benchmark suite
+- [Oracle-memory](https://github.com/OraclePersonal/Oracle-memory) — File-backed MCP memory server
+- [Oracle-messages](https://github.com/OraclePersonal/Oracle-messages) — Multi-agent MCP message bus
+- [Oracle-skill](https://github.com/OraclePersonal/Oracle-skill) — Cross-agent workflow docs
+- [Oracle-templates](https://github.com/OraclePersonal/Oracle-templates) — Template system
+- [Oracle-dashboard](https://github.com/OraclePersonal/Oracle-dashboard) — Live web dashboard
+- [Oracle-eval](https://github.com/OraclePersonal/Oracle-eval) — Benchmark suite
