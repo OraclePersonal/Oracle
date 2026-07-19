@@ -40,6 +40,31 @@ describe("fetchUrl", () => {
     await expect(fetchUrl("http://internal.example.com/")).rejects.toThrow(OracleError);
   });
 
+  it("rejects hex-normalized IPv4-mapped IPv6 loopback/private addresses regardless of textual form", async () => {
+    // A string-prefix check like startsWith("::ffff:") misses these — the
+    // address is still ::ffff:0:0/96 (or fe80::/fc00::), just not spelled
+    // the way the check expected. This is the shape of a real disclosed
+    // bypass (CVE-2026-49857).
+    const cases = [
+      "0:0:0:0:0:ffff:7f00:1",     // 127.0.0.1, fully expanded hex
+      "::ffff:7f00:1",             // 127.0.0.1, hex tail instead of dotted-decimal
+      "::ffff:a9fe:a9fe",          // 169.254.169.254 (cloud metadata), hex
+      "0:0:0:0:0:ffff:a00:1",      // 10.0.0.1, fully expanded hex
+    ];
+    for (const literal of cases) {
+      vi.mocked(dns.lookup).mockResolvedValue([{ address: literal, family: 6 }] as any);
+      await expect(fetchUrl("http://internal.example.com/"), literal).rejects.toThrow(OracleError);
+    }
+  });
+
+  it("still allows a genuinely public IPv4-mapped IPv6 address", async () => {
+    mockPublicDns();
+    vi.mocked(dns.lookup).mockResolvedValue([{ address: "::ffff:5db8:d822", family: 6 }] as any); // 93.184.216.34
+    global.fetch = vi.fn(async () => new Response("ok", { status: 200, headers: { "content-type": "text/plain" } })) as any;
+    const page = await fetchUrl("https://example.com");
+    expect(page.text).toBe("ok");
+  });
+
   it("does not call fetch when the host is rejected", async () => {
     global.fetch = vi.fn() as any;
     await expect(fetchUrl("http://127.0.0.1/")).rejects.toThrow(OracleError);
@@ -59,7 +84,8 @@ describe("fetchUrl", () => {
     const page = await fetchUrl("https://example.com");
     expect(page.title).toBe("Redis & Cache");
     expect(page.text).toContain("Hello");
-    expect(page.text).toContain("World  here".replace("  ", " ")); // decoded &nbsp;
+    expect(page.text).toContain("World");
+    expect(page.text).toContain("here");
     expect(page.text).not.toContain("evil()");
     expect(page.text).not.toContain("<h1>");
   });

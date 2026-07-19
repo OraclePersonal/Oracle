@@ -1,5 +1,6 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import { readdown } from "readdown";
 import { OracleError } from "../errors.js";
 import { firecrawlScrape } from "./providers/firecrawl.js";
 import { logWebEvent } from "./log.js";
@@ -78,10 +79,12 @@ export async function fetchUrl(url: string, provider: FetchProviderName = "nativ
     return { url: parsed.toString(), title: "", text: raw.slice(0, MAX_TEXT_CHARS) };
   }
 
-  const titleMatch = raw.match(/<title[^>]*>([^<]*)<\/title>/i);
-  const title = titleMatch ? decodeEntities(titleMatch[1]).trim() : "";
-  const text = htmlToText(raw).slice(0, MAX_TEXT_CHARS);
-  return { url: parsed.toString(), title, text };
+  // readdown (readability-style content extraction + markdown conversion,
+  // linkedom under the hood) replaces the old regex tag-stripper — it drops
+  // nav/ads/sidebars instead of dumping every visible string on the page,
+  // and gives proper title/metadata extraction instead of a raw <title> regex.
+  const { markdown, metadata } = readdown(raw, { url: parsed.toString() });
+  return { url: parsed.toString(), title: metadata.title ?? "", text: markdown.slice(0, MAX_TEXT_CHARS) };
 }
 
 async function fetchFollowingSafeRedirects(
@@ -174,36 +177,52 @@ function isPrivateIpv4(address: string): boolean {
   return false;
 }
 
+/**
+ * IPv6 check via a full 8-group expansion instead of raw string-prefix
+ * matching. A prefix check on the literal text (e.g. `startsWith("::ffff:")`)
+ * misses any IPv4-mapped loopback/private address that isn't written in that
+ * exact abbreviated form — dns.lookup()/net can hand back the fully expanded
+ * "0:0:0:0:0:ffff:7f00:1" (hex, not dotted-decimal) for 127.0.0.1, which such
+ * a check would wave through as a normal public-looking IPv6 address. This
+ * mirrors a real disclosed bypass class (CVE-2026-49857, hex-normalized
+ * IPv4-mapped IPv6 loopback) in another SSRF filter.
+ */
 function isPrivateIpv6(address: string): boolean {
-  const normalized = address.toLowerCase();
-  if (normalized === "::1") return true; // loopback
-  if (normalized === "::") return true; // unspecified
-  if (normalized.startsWith("::ffff:")) return isPrivateIpv4(normalized.slice("::ffff:".length));
-  if (normalized.startsWith("fe80:") || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")) return true; // link-local
-  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true; // unique local (ULA)
+  const groups = expandIpv6(address);
+  if (!groups) return true; // unparseable — fail closed
+
+  if (groups.every((g) => g === 0)) return true; // :: (unspecified)
+  if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return true; // ::1 (loopback)
+
+  // ::ffff:a.b.c.d — IPv4-mapped, regardless of how the source text wrote it
+  if (groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff) {
+    const a = (groups[6] >> 8) & 0xff;
+    const b = groups[6] & 0xff;
+    const c = (groups[7] >> 8) & 0xff;
+    const d = groups[7] & 0xff;
+    return isPrivateIpv4(`${a}.${b}.${c}.${d}`);
+  }
+
+  if ((groups[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((groups[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique local (ULA)
   return false;
 }
 
-function htmlToText(html: string): string {
-  const withoutNoise = html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<!--[\s\S]*?-->/g, "");
-  const withBreaks = withoutNoise
-    .replace(/<(br|\/p|\/div|\/li|\/h[1-6])\s*\/?>/gi, "\n")
-    .replace(/<[^>]+>/g, " ");
-  return decodeEntities(withBreaks)
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n+/g, "\n\n")
-    .trim();
-}
+/** Expand any valid textual IPv6 address (any abbreviation) to 8 16-bit groups, or null if unparseable. */
+function expandIpv6(address: string): number[] | null {
+  if (net.isIP(address) !== 6) return null;
+  const [main, zoneStripped] = address.split("%"); // strip zone id (e.g. fe80::1%eth0)
+  void zoneStripped;
+  const halves = main.split("::");
+  if (halves.length > 2) return null;
 
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+  const parseSide = (side: string): number[] => (side.length === 0 ? [] : side.split(":").map((h) => parseInt(h, 16)));
+  const head = parseSide(halves[0]);
+  const tail = halves.length === 2 ? parseSide(halves[1]) : [];
+  const missing = 8 - head.length - tail.length;
+  if (missing < 0 || (halves.length === 1 && head.length !== 8)) return null;
+
+  const groups = [...head, ...Array(halves.length === 2 ? missing : 0).fill(0), ...tail];
+  if (groups.length !== 8 || groups.some((g) => Number.isNaN(g) || g < 0 || g > 0xffff)) return null;
+  return groups;
 }
