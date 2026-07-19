@@ -6,6 +6,7 @@ export type OracleErrorCode =
   | "ORACLE_INPUT_TOO_LARGE"
   | "ORACLE_SESSION_NOT_FOUND"
   | "ORACLE_INVALID_REQUEST"
+  | "ORACLE_WEB_UNAVAILABLE"
   | "ORACLE_INTERNAL_ERROR";
 
 export class OracleError extends Error {
