@@ -24,6 +24,7 @@
     "dotenv": "^17.4.2",
     "fast-glob": "^3.3.3",
     "openai": "^6.45.0",
+    "readdown": "^0.2.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
