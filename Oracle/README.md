@@ -1,10 +1,11 @@
-# Oracle
+# Oracle Assistant
 
 > A personal AI assistant you keep around, not a one-shot tool you invoke. Ask it anything, it remembers across every conversation, and it can act on your behalf — reviewing code is one of the things it does, not the point of it.
 
-**Oracle** is an MCP-powered assistant with persistent memory, a knowledge
-base, web access, and its own coordination layer for working alongside other
-agents (Claude, opencode, etc.) instead of just answering when asked.
+**Oracle Assistant** (`oracle` CLI / `oracle-mcp` server) is an MCP-powered
+assistant with persistent memory, a knowledge base, web access, and its own
+coordination layer for working alongside other coding agents — Claude Code,
+opencode, and others — instead of just answering when asked.
 
 ```
 you ──▶ oracle ask ──▶ context (memory · docs · web · files) ──▶ think (AI) ──▶ answer
