@@ -36,6 +36,7 @@ import { agentqlExtract } from "./web/providers/agentql.js";
 import { loadSoul } from "./core/souls.js";
 import { getConversationContext, recordSelfLog } from "./core/selfMemory.js";
 import { createDebouncer, reviewWorkingTreeDiff } from "./core/watch.js";
+import { buildWiki, getWikiPage, listWikiTopics } from "./wiki/compile.js";
 
 const homeDir = (): string =>
   process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
@@ -445,6 +446,38 @@ memCmd
     console.log(`Cleared ${count} working memory entries.`);
   });
 
+const wikiCmd = program.command("wiki").description("Compile facts/insights into a topic-grouped memory wiki");
+
+wikiCmd
+  .command("build")
+  .description("Compile all facts/insights into .oracle/wiki/<topic>.md + an index")
+  .action(async () => {
+    const cwd = process.cwd();
+    const orchestrator = new OrchestratorFactory(cwd, homeDir());
+    const memory = await orchestrator.createMemoryAdapter();
+    const result = await buildWiki(memory, cwd);
+    console.log(`Compiled ${result.topics.length} topic(s) → ${result.path}`);
+  });
+
+wikiCmd
+  .command("list")
+  .description("List compiled wiki topics")
+  .action(async () => {
+    const topics = await listWikiTopics(process.cwd());
+    if (!topics.length) { console.log("No wiki topics yet — run `oracle wiki build` first."); return; }
+    for (const t of topics) console.log(t);
+  });
+
+wikiCmd
+  .command("show")
+  .description("Print a compiled wiki topic page")
+  .argument("<topic>", "Topic name")
+  .action(async (topic) => {
+    const page = await getWikiPage(process.cwd(), topic);
+    if (!page) { console.log(`Topic not found: ${topic}. Run \`oracle wiki build\` or \`oracle wiki list\`.`); process.exitCode = 1; return; }
+    console.log(page);
+  });
+
 // ── docs ─────────────────────────────────────────────────────────
 const docsCmd = program.command("docs").description("Manage .oracle/docs/ knowledge base");
 
@@ -631,6 +664,62 @@ peerCmd
         }
         await new Promise((r) => setTimeout(r, Number(options.interval)));
       }
+    } finally {
+      await mesh.close?.();
+    }
+  });
+
+peerCmd
+  .command("lock")
+  .description("Acquire a coordination lock on a resource (e.g. a file path) so two agents don't edit it at once")
+  .argument("<resource>", "Resource identifier, typically a file path")
+  .requiredOption("--agent <agent>", "Your agent name")
+  .option("--ttl <ms>", "Lock expiry — an abandoned lock older than this can be stolen", "300000")
+  .action(async (resource, options) => {
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const mesh = await orchestrator.createMessagesAdapter();
+    try {
+      if (!mesh.acquireLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
+      const result = await mesh.acquireLock(resource, options.agent, Number(options.ttl));
+      if (result.acquired) console.log(`Locked: ${resource}`);
+      else {
+        console.log(`Already locked by ${result.lock?.agent} since ${result.lock?.acquiredAt}`);
+        process.exitCode = 1;
+      }
+    } finally {
+      await mesh.close?.();
+    }
+  });
+
+peerCmd
+  .command("unlock")
+  .description("Release a lock you hold")
+  .argument("<resource>", "Resource identifier")
+  .requiredOption("--agent <agent>", "Your agent name")
+  .action(async (resource, options) => {
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const mesh = await orchestrator.createMessagesAdapter();
+    try {
+      if (!mesh.releaseLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
+      const released = await mesh.releaseLock(resource, options.agent);
+      console.log(released ? `Unlocked: ${resource}` : `Not locked by ${options.agent}: ${resource}`);
+      if (!released) process.exitCode = 1;
+    } finally {
+      await mesh.close?.();
+    }
+  });
+
+peerCmd
+  .command("lock-status")
+  .description("Check who currently holds a lock, if anyone")
+  .argument("<resource>", "Resource identifier")
+  .action(async (resource) => {
+    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
+    const mesh = await orchestrator.createMessagesAdapter();
+    try {
+      if (!mesh.checkLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
+      const lock = await mesh.checkLock(resource);
+      console.log(lock ? `Locked by ${lock.agent} since ${lock.acquiredAt} (ttl ${lock.ttlMs}ms)` : `Unlocked: ${resource}`);
     } finally {
       await mesh.close?.();
     }

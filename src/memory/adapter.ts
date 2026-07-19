@@ -115,11 +115,12 @@ export class MemoryAdapter implements MemoryPort {
     return entry;
   }
 
-  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number }): Promise<MemoryStoreEntry[]> {
+  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number; includeArchived?: boolean }): Promise<MemoryStoreEntry[]> {
     const type = opts?.type;
     const agent = opts?.agent;
     const tags = opts?.tags;
     const limit = opts?.limit ?? 20;
+    const includeArchived = opts?.includeArchived ?? false;
     const dirs = type
       ? [this.typeDir(type)]
       : Object.values(TYPE_DIR).map((d) => path.join(this.dataDir(), d));
@@ -131,7 +132,7 @@ export class MemoryAdapter implements MemoryPort {
           if (!file.endsWith(".json")) continue;
           try {
             const entry = JSON.parse(await fs.readFile(path.join(dir, file), "utf8")) as MemoryStoreEntry;
-            if (entry.archived) continue;
+            if (entry.archived && !includeArchived) continue;
             if (agent && entry.agent !== agent) continue;
             if (tags && !tags.some((t) => entry.tags.includes(t))) continue;
             entries.push(entry);

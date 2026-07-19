@@ -18,6 +18,7 @@ import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
 import { getConversationContext, recordSelfLog } from "../core/selfMemory.js";
 import { loadSoul } from "../core/souls.js";
+import { buildWiki, getWikiPage, listWikiTopics } from "../wiki/compile.js";
 import { webSearchWithTrace } from "../web/search.js";
 import { fetchUrl } from "../web/fetchUrl.js";
 import { agentqlExtract } from "../web/providers/agentql.js";
@@ -418,6 +419,52 @@ export function registerOracleTools({
     }
   );
 
+  server.registerTool(
+    "oracle_memory_wiki_build",
+    {
+      title: "Build Memory Wiki",
+      description: "Compile all facts/insights into topic-grouped wiki pages under .oracle/wiki/ — a readable view over memory, not a second copy of it.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const result = await buildWiki(memory, workspaceRoot);
+        return success(`Compiled ${result.topics.length} topic(s).`, { ...result });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_wiki_list",
+    {
+      title: "List Wiki Topics",
+      description: "List topics from the last oracle_memory_wiki_build.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const topics = await listWikiTopics(workspaceRoot);
+        return success(JSON.stringify(topics, null, 2), { topics });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_wiki_get",
+    {
+      title: "Get Wiki Page",
+      description: "Read a compiled wiki topic page. Run oracle_memory_wiki_build first if it doesn't exist yet.",
+      inputSchema: { topic: z.string().min(1) }
+    },
+    async ({ topic }) => {
+      try {
+        const page = await getWikiPage(workspaceRoot, topic);
+        if (!page) throw new OracleError("ORACLE_INVALID_REQUEST", `Wiki topic not found: ${topic}`, "Run oracle_memory_wiki_build or oracle_memory_wiki_list.");
+        return success(page, { topic });
+      } catch (error) { return failure(error); }
+    }
+  );
+
   // ─── Docs ────────────────────────────────────────
 
   server.registerTool(
@@ -746,6 +793,58 @@ export function registerOracleTools({
       try {
         const msgs = await messages.getThread(rootId);
         return success(JSON.stringify(msgs, null, 2), { messages: msgs });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_lock_acquire",
+    {
+      title: "Acquire Lock",
+      description: "Acquire a coordination lock on a resource (e.g. a file path) so two agents don't edit it concurrently. An abandoned lock older than its TTL can be stolen.",
+      inputSchema: {
+        resource: z.string().min(1).describe("Resource identifier, typically a file path"),
+        agent: z.string().min(1),
+        ttlMs: z.number().int().positive().optional().describe("Lock expiry in ms (default 5 minutes)")
+      }
+    },
+    async ({ resource, agent, ttlMs }) => {
+      try {
+        if (!messages.acquireLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
+        const result = await messages.acquireLock(resource, agent, ttlMs);
+        return success(JSON.stringify(result, null, 2), { ...result });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_lock_release",
+    {
+      title: "Release Lock",
+      description: "Release a lock you hold. Fails if another agent holds it.",
+      inputSchema: { resource: z.string().min(1), agent: z.string().min(1) }
+    },
+    async ({ resource, agent }) => {
+      try {
+        if (!messages.releaseLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
+        const released = await messages.releaseLock(resource, agent);
+        return success(released ? `Released: ${resource}` : `Not held by ${agent}: ${resource}`, { released });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_peer_lock_check",
+    {
+      title: "Check Lock",
+      description: "Check who currently holds a lock, if anyone, without acquiring it.",
+      inputSchema: { resource: z.string().min(1) }
+    },
+    async ({ resource }) => {
+      try {
+        if (!messages.checkLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
+        const lock = await messages.checkLock(resource);
+        return success(lock ? JSON.stringify(lock, null, 2) : "unlocked", { lock });
       } catch (error) { return failure(error); }
     }
   );

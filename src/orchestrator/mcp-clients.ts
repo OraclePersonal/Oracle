@@ -70,7 +70,7 @@ export class McpMemoryAdapter implements MemoryPort {
     return parsed.memory as MemoryStoreEntry;
   }
 
-  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number }): Promise<MemoryStoreEntry[]> {
+  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number; includeArchived?: boolean }): Promise<MemoryStoreEntry[]> {
     await this.ensureConnected();
     const result = (await this.client.callTool({
       name: "recall",
@@ -80,6 +80,9 @@ export class McpMemoryAdapter implements MemoryPort {
         agent: opts?.agent,
         tags: opts?.tags,
         limit: Math.min(opts?.limit ?? 20, 200),
+        // the oracle-memory MCP server's equivalent knob is named includeExpired,
+        // not includeArchived — same "don't hide superseded/archived entries" intent
+        includeExpired: opts?.includeArchived,
       },
     })) as ToolResult;
     const text = this.extractText(result);

@@ -113,4 +113,98 @@ export class MessagesAdapter implements MessagesPort {
     const all = await this.getMessages();
     return all.filter((m) => m.id === rootId || m.parent_id === rootId || m.in_reply_to === rootId);
   }
+
+  private locksDir(): string {
+    return path.join(this.rootDir, ".oracle", "messages", "locks");
+  }
+
+  private lockFilePath(resource: string): string {
+    const hash = crypto.createHash("sha1").update(resource).digest("hex");
+    return path.join(this.locksDir(), `${hash}.json`);
+  }
+
+  /**
+   * Acquire an exclusive lock on `resource` (typically a file path) for
+   * `agent`. Uses `wx` (write, fail if exists) so two agents racing to
+   * acquire the same lock can't both succeed — the filesystem itself
+   * arbitrates, not a read-then-write check that has a race window. A lock
+   * older than `ttlMs` is treated as abandoned (a crashed agent) and can be
+   * stolen by the next caller.
+   */
+  async acquireLock(resource: string, agent: string, ttlMs = 5 * 60_000): Promise<LockAcquireResult> {
+    await fs.mkdir(this.locksDir(), { recursive: true });
+    const filePath = this.lockFilePath(resource);
+    const record: LockRecord = { resource, agent, acquiredAt: new Date().toISOString(), ttlMs };
+
+    try {
+      await fs.writeFile(filePath, JSON.stringify(record, null, 2), { encoding: "utf8", flag: "wx" });
+      return { acquired: true, lock: record };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+
+    // Lock file exists — check whether it's expired (an abandoned lock)
+    // before giving up. Re-attempt the exclusive create after removing it so
+    // a second racer that also sees it as expired still can't both succeed.
+    const existing = await this.readLockFile(filePath);
+    if (existing && !this.isExpired(existing)) {
+      return { acquired: false, lock: existing };
+    }
+    try {
+      await fs.unlink(filePath);
+      await fs.writeFile(filePath, JSON.stringify(record, null, 2), { encoding: "utf8", flag: "wx" });
+      return { acquired: true, lock: record };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        const current = await this.readLockFile(filePath);
+        return { acquired: false, lock: current ?? undefined };
+      }
+      throw error;
+    }
+  }
+
+  /** Release a lock — only the agent holding it can release it. */
+  async releaseLock(resource: string, agent: string): Promise<boolean> {
+    const filePath = this.lockFilePath(resource);
+    const existing = await this.readLockFile(filePath);
+    if (!existing) return false;
+    if (existing.agent !== agent) return false;
+    try {
+      await fs.unlink(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Check a lock's current state without acquiring it. Returns null if unlocked or expired. */
+  async checkLock(resource: string): Promise<LockRecord | null> {
+    const existing = await this.readLockFile(this.lockFilePath(resource));
+    if (!existing || this.isExpired(existing)) return null;
+    return existing;
+  }
+
+  private isExpired(lock: LockRecord): boolean {
+    return Date.now() - new Date(lock.acquiredAt).getTime() > lock.ttlMs;
+  }
+
+  private async readLockFile(filePath: string): Promise<LockRecord | null> {
+    try {
+      return JSON.parse(await fs.readFile(filePath, "utf8")) as LockRecord;
+    } catch {
+      return null;
+    }
+  }
+}
+
+export interface LockRecord {
+  resource: string;
+  agent: string;
+  acquiredAt: string;
+  ttlMs: number;
+}
+
+export interface LockAcquireResult {
+  acquired: boolean;
+  lock?: LockRecord;
 }
