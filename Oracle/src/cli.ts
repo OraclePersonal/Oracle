@@ -32,6 +32,7 @@ import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
 import { webSearch } from "./web/search.js";
 import { fetchUrl } from "./web/fetchUrl.js";
+import { agentqlExtract } from "./web/providers/agentql.js";
 
 const homeDir = (): string =>
   process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
@@ -352,15 +353,16 @@ docsCmd
   });
 
 // ── web ──────────────────────────────────────────────────────────
-const webCmd = program.command("web").description("Web search and fetch (requires BRAVE_API_KEY)");
+const webCmd = program.command("web").description("Web search, fetch, and extract (Brave/Tavily/Firecrawl/AgentQL)");
 
 webCmd
   .command("search")
-  .description("Search the web via Brave Search API")
+  .description("Search the web — uses the first provider with a configured API key unless --provider is given")
   .argument("<query>", "Search query")
   .option("-n, --limit <number>", "Max results", "5")
+  .option("--provider <provider>", "brave | tavily | firecrawl")
   .action(async (query, options) => {
-    const results = await webSearch(query, Number(options.limit));
+    const results = await webSearch(query, Number(options.limit), options.provider);
     if (!results.length) { console.log("No results."); return; }
     for (const r of results) {
       console.log(`${r.title}\n  ${r.url}\n  ${r.description}\n`);
@@ -371,10 +373,21 @@ webCmd
   .command("fetch")
   .description("Fetch a URL and print its readable text")
   .argument("<url>", "URL to fetch")
-  .action(async (url) => {
-    const page = await fetchUrl(url);
+  .option("--provider <provider>", "native | firecrawl", "native")
+  .action(async (url, options) => {
+    const page = await fetchUrl(url, options.provider);
     if (page.title) console.log(`# ${page.title}\n`);
     console.log(page.text);
+  });
+
+webCmd
+  .command("extract")
+  .description("Extract structured data from a URL via TinyFish's AgentQL API")
+  .argument("<url>", "URL to extract from")
+  .argument("<prompt>", "What to extract, e.g. 'the product name and price'")
+  .action(async (url, prompt) => {
+    const data = await agentqlExtract(url, prompt);
+    console.log(JSON.stringify(data, null, 2));
   });
 
 // ── peer ─────────────────────────────────────────────────────────

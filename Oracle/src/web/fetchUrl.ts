@@ -1,6 +1,8 @@
 import dns from "node:dns/promises";
 import net from "node:net";
 import { OracleError } from "../errors.js";
+import { firecrawlScrape } from "./providers/firecrawl.js";
+import type { FetchProviderName } from "./types.js";
 
 export interface FetchedPage {
   url: string;
@@ -13,18 +15,25 @@ const MAX_TEXT_CHARS = 20_000;
 const MAX_REDIRECTS = 5;
 
 /**
- * Fetch a URL and reduce it to readable plain text. Deliberately basic (tag
- * strip + entity decode, no DOM/readability library) — this is for pulling
- * a doc page's prose into a prompt, not for rendering or scraping structure.
+ * Fetch a URL and reduce it to readable plain text.
  *
- * This is exposed as an MCP tool an agent can call with an arbitrary URL, so
- * every hop (including redirects) is resolved and checked against
- * private/loopback/link-local ranges before connecting — otherwise a prompt
- * could make Oracle fetch http://169.254.169.254/ (cloud metadata) or an
- * internal service on localhost. `fetch`'s built-in redirect following is
- * disabled for the same reason: it would bypass this check on hop 2+.
+ * Default ("native") is deliberately basic (tag strip + entity decode, no
+ * DOM/readability library, no JS rendering) — this is for pulling a doc
+ * page's prose into a prompt, not for rendering or scraping structure. Pass
+ * provider "firecrawl" for JS-rendered pages Firecrawl converts to clean
+ * markdown remotely (requires FIRECRAWL_API_KEY); the SSRF guard below only
+ * applies to the native path since Firecrawl does its own fetching.
+ *
+ * The native path is exposed as an MCP tool an agent can call with an
+ * arbitrary URL, so every hop (including redirects) is resolved and checked
+ * against private/loopback/link-local ranges before connecting — otherwise
+ * a prompt could make Oracle fetch http://169.254.169.254/ (cloud metadata)
+ * or an internal service on localhost. `fetch`'s built-in redirect following
+ * is disabled for the same reason: it would bypass this check on hop 2+.
  */
-export async function fetchUrl(url: string): Promise<FetchedPage> {
+export async function fetchUrl(url: string, provider: FetchProviderName = "native"): Promise<FetchedPage> {
+  if (provider === "firecrawl") return firecrawlScrape(url);
+
   let response: Response;
   let finalUrl: URL;
   try {

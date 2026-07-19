@@ -1,62 +1,42 @@
 import { OracleError } from "../errors.js";
+import { braveSearch } from "./providers/brave.js";
+import { tavilySearch } from "./providers/tavily.js";
+import { firecrawlSearch } from "./providers/firecrawl.js";
+import { SEARCH_PROVIDERS, type SearchProviderName, type WebSearchResult } from "./types.js";
 
-export interface WebSearchResult {
-  title: string;
-  url: string;
-  description: string;
+export type { WebSearchResult, SearchProviderName };
+
+const PROVIDER_KEY_ENV: Record<SearchProviderName, string> = {
+  brave: "BRAVE_API_KEY",
+  tavily: "TAVILY_API_KEY",
+  firecrawl: "FIRECRAWL_API_KEY"
+};
+
+/** First search provider with a configured API key, in preference order. */
+function resolveProvider(): SearchProviderName {
+  const configured = SEARCH_PROVIDERS.find((p) => process.env[PROVIDER_KEY_ENV[p]]);
+  if (!configured) {
+    throw new OracleError(
+      "ORACLE_WEB_UNAVAILABLE",
+      "No web search provider is configured.",
+      `Set one of: ${SEARCH_PROVIDERS.map((p) => PROVIDER_KEY_ENV[p]).join(", ")}.`
+    );
+  }
+  return configured;
 }
 
-const BRAVE_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
-
 /**
- * Web search via the Brave Search API. Requires BRAVE_API_KEY — Brave was
- * chosen over Bing/Google for the free tier (2000 queries/month) and a
- * single flat REST endpoint with no cloud-project/OAuth setup.
+ * Web search across pluggable providers — Brave, Tavily, or Firecrawl.
+ * Picks the first provider with a configured API key when none is given
+ * explicitly (checked in that order: Brave's free tier first, then Tavily's
+ * LLM-tuned results, then Firecrawl).
  */
-export async function webSearch(query: string, limit = 5): Promise<WebSearchResult[]> {
-  const apiKey = process.env.BRAVE_API_KEY;
-  if (!apiKey) {
-    throw new OracleError(
-      "ORACLE_WEB_UNAVAILABLE",
-      "BRAVE_API_KEY is not set.",
-      "Get a free key at https://brave.com/search/api/ and set BRAVE_API_KEY."
-    );
+export async function webSearch(query: string, limit = 5, provider?: SearchProviderName): Promise<WebSearchResult[]> {
+  const selected = provider ?? resolveProvider();
+  switch (selected) {
+    case "brave": return braveSearch(query, limit);
+    case "tavily": return tavilySearch(query, limit);
+    case "firecrawl": return firecrawlSearch(query, limit);
+    default: throw new OracleError("ORACLE_INVALID_REQUEST", `Unknown search provider: ${selected}`, `Use one of: ${SEARCH_PROVIDERS.join(", ")}.`);
   }
-
-  const url = new URL(BRAVE_ENDPOINT);
-  url.searchParams.set("q", query);
-  url.searchParams.set("count", String(Math.min(Math.max(limit, 1), 20)));
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: { Accept: "application/json", "X-Subscription-Token": apiKey }
-    });
-  } catch (error) {
-    throw new OracleError(
-      "ORACLE_WEB_UNAVAILABLE",
-      `Web search request failed: ${error instanceof Error ? error.message : String(error)}`,
-      "Check network connectivity and try again."
-    );
-  }
-
-  if (!response.ok) {
-    throw new OracleError(
-      "ORACLE_WEB_UNAVAILABLE",
-      `Brave Search API returned ${response.status}: ${response.statusText}`,
-      response.status === 401
-        ? "BRAVE_API_KEY looks invalid — check the key at https://brave.com/search/api/."
-        : "Try again later; the search API may be rate-limiting or temporarily unavailable."
-    );
-  }
-
-  const data = (await response.json()) as {
-    web?: { results?: Array<{ title?: string; url?: string; description?: string }> };
-  };
-  const results = data.web?.results ?? [];
-  return results.slice(0, limit).map((r) => ({
-    title: r.title ?? "",
-    url: r.url ?? "",
-    description: r.description ?? ""
-  }));
 }

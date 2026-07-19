@@ -2,52 +2,54 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { webSearch } from "./search.js";
 import { OracleError } from "../errors.js";
 
-describe("webSearch", () => {
+describe("webSearch dispatch", () => {
   const originalFetch = global.fetch;
-  const originalKey = process.env.BRAVE_API_KEY;
+  const keys = ["BRAVE_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY"] as const;
+  const originalEnv = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
 
   afterEach(() => {
     global.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.BRAVE_API_KEY;
-    else process.env.BRAVE_API_KEY = originalKey;
+    for (const k of keys) {
+      if (originalEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = originalEnv[k];
+    }
   });
 
-  it("throws ORACLE_WEB_UNAVAILABLE when BRAVE_API_KEY is unset", async () => {
-    delete process.env.BRAVE_API_KEY;
+  it("throws when no provider has a configured key", async () => {
+    for (const k of keys) delete process.env[k];
     await expect(webSearch("test")).rejects.toThrow(OracleError);
   });
 
-  it("returns mapped results on success", async () => {
-    process.env.BRAVE_API_KEY = "test-key";
+  it("auto-selects brave first when multiple keys are configured", async () => {
+    process.env.BRAVE_API_KEY = "b";
+    process.env.TAVILY_API_KEY = "t";
     global.fetch = vi.fn(async (url: any) => {
       expect(String(url)).toContain("api.search.brave.com");
-      return new Response(
-        JSON.stringify({
-          web: {
-            results: [
-              { title: "Redis Docs", url: "https://redis.io", description: "In-memory store" },
-              { title: "Extra", url: "https://example.com", description: "d" },
-            ],
-          },
-        }),
-        { status: 200 }
-      );
+      return new Response(JSON.stringify({ web: { results: [] } }), { status: 200 });
     }) as any;
-
-    const results = await webSearch("redis", 1);
-    expect(results).toHaveLength(1);
-    expect(results[0]).toEqual({ title: "Redis Docs", url: "https://redis.io", description: "In-memory store" });
+    await webSearch("test");
+    expect(global.fetch).toHaveBeenCalled();
   });
 
-  it("throws ORACLE_WEB_UNAVAILABLE on non-ok response", async () => {
-    process.env.BRAVE_API_KEY = "test-key";
-    global.fetch = vi.fn(async () => new Response("", { status: 401, statusText: "Unauthorized" })) as any;
-    await expect(webSearch("x")).rejects.toThrow(OracleError);
+  it("falls back to tavily when only TAVILY_API_KEY is set", async () => {
+    for (const k of keys) delete process.env[k];
+    process.env.TAVILY_API_KEY = "t";
+    global.fetch = vi.fn(async (url: any) => {
+      expect(String(url)).toContain("api.tavily.com");
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }) as any;
+    await webSearch("test");
+    expect(global.fetch).toHaveBeenCalled();
   });
 
-  it("throws ORACLE_WEB_UNAVAILABLE when the request itself fails", async () => {
-    process.env.BRAVE_API_KEY = "test-key";
-    global.fetch = vi.fn(async () => { throw new Error("network down"); }) as any;
-    await expect(webSearch("x")).rejects.toThrow(OracleError);
+  it("respects an explicit provider override even if a higher-priority key is set", async () => {
+    process.env.BRAVE_API_KEY = "b";
+    process.env.TAVILY_API_KEY = "t";
+    global.fetch = vi.fn(async (url: any) => {
+      expect(String(url)).toContain("api.tavily.com");
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }) as any;
+    await webSearch("test", 5, "tavily");
+    expect(global.fetch).toHaveBeenCalled();
   });
 });
