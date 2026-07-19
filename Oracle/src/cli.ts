@@ -30,7 +30,7 @@ import { ProfileStore } from "./identity/profile.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
-import { webSearch } from "./web/search.js";
+import { webSearchWithTrace } from "./web/search.js";
 import { fetchUrl } from "./web/fetchUrl.js";
 import { agentqlExtract } from "./web/providers/agentql.js";
 
@@ -361,10 +361,16 @@ webCmd
   .argument("<query>", "Search query")
   .option("-n, --limit <number>", "Max results", "5")
   .option("--provider <provider>", "brave | tavily | firecrawl")
+  .option("--trace", "Print the provider routing/fallback chain")
   .action(async (query, options) => {
-    const results = await webSearch(query, Number(options.limit), options.provider);
-    if (!results.length) { console.log("No results."); return; }
-    for (const r of results) {
+    const outcome = await webSearchWithTrace(query, Number(options.limit), options.provider);
+    if (options.trace) {
+      for (const a of outcome.attempts) {
+        console.error(`[${a.provider}] ${a.reason} → ${a.outcome} (${a.latencyMs}ms)${a.errorMessage ? `: ${a.errorMessage}` : ""}`);
+      }
+    }
+    if (!outcome.results.length) { console.log("No results."); return; }
+    for (const r of outcome.results) {
       console.log(`${r.title}\n  ${r.url}\n  ${r.description}\n`);
     }
   });
@@ -386,8 +392,9 @@ webCmd
   .argument("<url>", "URL to extract from")
   .argument("<prompt>", "What to extract, e.g. 'the product name and price'")
   .action(async (url, prompt) => {
-    const data = await agentqlExtract(url, prompt);
-    console.log(JSON.stringify(data, null, 2));
+    const result = await agentqlExtract(url, prompt);
+    console.log(JSON.stringify(result.data, null, 2));
+    console.error(`\nSource: ${result.sourceUrl}`);
   });
 
 // ── peer ─────────────────────────────────────────────────────────

@@ -69,13 +69,23 @@ Four pluggable providers, each doing a different job:
 | AgentQL (TinyFish) | Structured field extraction from a URL | `AGENTQL_API_KEY` |
 
 `oracle web search` picks the first configured provider (Brave → Tavily →
-Firecrawl) unless `--provider` is given. `oracle web fetch` defaults to
-Oracle's own SSRF-guarded HTML-to-text fetch (`native`); pass
-`--provider firecrawl` for pages that need real JS rendering.
+Firecrawl) unless `--provider` is given — and on failure falls through to the
+*next* configured provider (a real fallback chain, not just "give up").
+`oracle web fetch` defaults to Oracle's own SSRF-guarded HTML-to-text fetch
+(`native`); pass `--provider firecrawl` for pages that need real JS rendering.
+
+Every search/fetch/extract call logs one JSON line to stderr (`[oracle:web]
+{...}`) with provider, why it was chosen, outcome, and latency — set
+`ORACLE_WEB_LOG=0` to silence it. `oracle web search --trace` prints the same
+routing/fallback chain to the terminal. `oracle_web_extract` results carry
+`sourceUrl` alongside the extracted data so a downstream fact can always be
+traced back to where it came from, and reject outright if the page yielded
+nothing extractable rather than returning an empty result as if it were valid.
 
 ```bash
 oracle web search "redis connection pool exhausted" -n 5
 oracle web search "redis connection pool exhausted" --provider tavily
+oracle web search "redis connection pool exhausted" --trace
 oracle web fetch https://redis.io/docs/latest/develop/connect/clients/pool/
 oracle web fetch https://spa-docs.example.com/ --provider firecrawl
 oracle web extract https://shop.example.com/item/42 "the product name and price"
