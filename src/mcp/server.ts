@@ -7,6 +7,8 @@ import type { ProjectConfig } from "../config/project.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../context/bundle.js";
 import type { ConsultService } from "../core/consult.js";
 import { OracleError, serializeOracleError } from "../errors.js";
+import { OracleToolError, ErrorCode, isOracleError } from "./oracleErrors.js";
+import { ToolCache } from "./toolCache.js";
 import { checkProvider } from "../providers/factory.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { OracleRegistry } from "../oracles/registry.js";
@@ -63,7 +65,14 @@ function success(text: string, structuredContent: Record<string, unknown>) {
 }
 
 function failure(error: unknown) {
-  const serialized = serializeOracleError(error);
+  let serialized: Record<string, any>;
+  if (isOracleError(error)) {
+    serialized = error.toJSON();
+  } else if (error instanceof OracleError) {
+    serialized = serializeOracleError(error);
+  } else {
+    serialized = { error: error instanceof Error ? error.message : String(error) };
+  }
   return {
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify(serialized) }],
@@ -84,16 +93,31 @@ export function registerOracleTools({
   providerChecks = checkProvider,
   soulsDir = path.join(os.homedir(), ".oracle", "souls")
 }: OracleServerDependencies & { soulsDir?: string }): void {
+  // Initialize caching layer for expensive operations
+  const cache = new ToolCache();
   server.registerTool(
     "oracle_consult",
     {
       title: "Consult Oracle",
-      description: "Analyze project files with a focused engineering skill.",
+      description: "Analyze project files with a focused engineering skill. Applies the skill's system prompt to the given code, returning structured analysis with file references and session ID for followup.",
       inputSchema: {
-        prompt: z.string().min(1),
-        skill: z.string().optional(),
-        files: z.array(z.string()).optional(),
-        previousSessionId: z.string().optional()
+        prompt: z
+          .string()
+          .min(1)
+          .max(50000)
+          .describe("The analysis request or review task"),
+        skill: z
+          .string()
+          .optional()
+          .describe("Skill name (review, debug, security, etc.). Defaults to 'review'"),
+        files: z
+          .array(z.string())
+          .optional()
+          .describe("File glob patterns to analyze (e.g. ['src/**/*.ts', '!*.test.ts'])"),
+        previousSessionId: z
+          .string()
+          .optional()
+          .describe("Prior session ID to include previous context for continuity")
       }
     },
     async ({ prompt, skill, files, previousSessionId }, extra) => {
@@ -109,7 +133,13 @@ export function registerOracleTools({
         await progress(1, "Resolving and validating project files");
         const skillName = skill ?? "review";
         const selected = skills.get(skillName);
-        if (!selected) throw new OracleError("ORACLE_INVALID_REQUEST", `Unknown skill: ${skillName}`, `Available: ${skills.names().join(", ")}`);
+        if (!selected) {
+          throw new OracleToolError(
+            ErrorCode.INVALID_SKILL,
+            `Unknown skill: ${skillName}`,
+            `Available: ${skills.names().join(", ")}`
+          );
+        }
         const patterns = [...(files ?? config.include), ...config.exclude.map((item) => `!${item}`)];
         await progress(2, "Consulting the configured provider");
         let previousResponseId: string | undefined;
@@ -336,8 +366,24 @@ export function registerOracleTools({
     "oracle_memory_list",
     {
       title: "List Memory",
-      description: "Show memory entries from the .oracle-memory store.",
-      inputSchema: { agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(100).default(10) }
+      description: "Show memory entries from the .oracle-memory store, filtered by agent, type, and recency.",
+      inputSchema: {
+        agent: z
+          .string()
+          .optional()
+          .describe("Agent name to filter by (your name or oracle profile name)"),
+        type: z
+          .enum(["fact", "insight", "chunk", "working"])
+          .optional()
+          .describe("Memory type: fact (durable), insight (analysis), chunk (code), working (session temp)"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(10)
+          .describe("Max entries to return")
+      }
     },
     async ({ agent, type, limit }) => {
       try {
@@ -351,8 +397,29 @@ export function registerOracleTools({
     "oracle_memory_search",
     {
       title: "Search Memory",
-      description: "Search memory contents by keyword.",
-      inputSchema: { query: z.string().min(1), agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(200).default(20) }
+      description: "Full-text search over memory contents by keyword, returning ranked results.",
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .max(500)
+          .describe("Search keyword or phrase"),
+        agent: z
+          .string()
+          .optional()
+          .describe("Filter to a specific agent's memory"),
+        type: z
+          .enum(["fact", "insight", "chunk", "working"])
+          .optional()
+          .describe("Filter by memory type"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .default(20)
+          .describe("Max results to return")
+      }
     },
     async ({ query, agent, type, limit }) => {
       try {
