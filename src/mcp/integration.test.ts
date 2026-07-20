@@ -61,7 +61,8 @@ afterAll(async () => {
 describe("Oracle MCP tools", () => {
   test("lists all focused tools", async () => {
     const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
-    expect(tools).toContain("oracle_consult");
+    expect(tools).toContain("oracle_ask");
+    expect(tools).not.toContain("oracle_consult");
     expect(tools).toContain("oracle_doctor");
     expect(tools).toContain("oracle_skills");
     expect(tools).toContain("oracle_oracle_list");
@@ -73,16 +74,14 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_persona_set");
   });
 
-  test("consults, lists, retrieves, and diagnoses", async () => {
+  test("asks with files, lists, retrieves, and diagnoses", async () => {
     const consultation = await client.callTool({
-      name: "oracle_consult",
-      arguments: { prompt: "Review", skill: "debug" }
+      name: "oracle_ask",
+      arguments: { question: "Review", files: ["src/**/*.ts"] }
     });
     expect(consultation.isError).not.toBe(true);
     expect(consultation.structuredContent).toMatchObject({
-      status: "completed",
-      provider: "codex",
-      preset: "debug",
+      soul: "default",
       filesIncluded: 1
     });
 

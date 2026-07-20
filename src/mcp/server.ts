@@ -4,11 +4,9 @@ import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ProjectConfig } from "../config/project.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../context/bundle.js";
 import type { ConsultService } from "../core/consult.js";
 import { OracleError, serializeOracleError } from "../errors.js";
-import { OracleToolError, ErrorCode, isOracleError } from "./oracleErrors.js";
-import { ToolCache } from "./toolCache.js";
+import { isOracleError } from "./oracleErrors.js";
 import { checkProvider } from "../providers/factory.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { OracleRegistry } from "../oracles/registry.js";
@@ -93,139 +91,6 @@ export function registerOracleTools({
   providerChecks = checkProvider,
   soulsDir = path.join(os.homedir(), ".oracle", "souls")
 }: OracleServerDependencies & { soulsDir?: string }): void {
-  // Initialize caching layer for expensive operations
-  const cache = new ToolCache();
-  server.registerTool(
-    "oracle_consult",
-    {
-      title: "Consult Oracle",
-      description: "Analyze project files with a focused engineering skill. Applies the skill's system prompt to the given code, returning structured analysis with file references and session ID for followup.",
-      inputSchema: {
-        prompt: z
-          .string()
-          .min(1)
-          .max(50000)
-          .describe("The analysis request or review task"),
-        oracle: z
-          .string()
-          .optional()
-          .describe("Oracle profile name to use (e.g. 'coding', 'security'). Auto-scopes memory to this profile"),
-        skill: z
-          .string()
-          .optional()
-          .describe("Skill name (review, debug, security, etc.). Defaults to 'review'"),
-        files: z
-          .array(z.string())
-          .optional()
-          .describe("File glob patterns to analyze (e.g. ['src/**/*.ts', '!*.test.ts'])"),
-        previousSessionId: z
-          .string()
-          .optional()
-          .describe("Prior session ID to include previous context for continuity")
-      }
-    },
-    async ({ prompt, oracle, skill, files, previousSessionId }, extra) => {
-      try {
-        const progressToken = extra._meta?.progressToken;
-        const progress = async (value: number, message: string) => {
-          if (progressToken === undefined) return;
-          await extra.sendNotification({
-            method: "notifications/progress",
-            params: { progressToken, progress: value, total: 3, message }
-          });
-        };
-        await progress(1, "Resolving and validating project files");
-
-        // Auto-detect skill + model from oracle profile if specified
-        let skillName = skill ?? "review";
-        let modelOverride: string | undefined;
-        let agentScope = oracle; // Memory scoping
-
-        if (oracle) {
-          const oracleProfile = await oracles.getOracle(oracle);
-          if (!oracleProfile) {
-            throw new OracleToolError(
-              ErrorCode.INVALID_ORACLE_PROFILE,
-              `Unknown oracle profile: ${oracle}`,
-              `Run oracle_oracle_list to see available profiles`
-            );
-          }
-          skillName = oracleProfile.skill ?? skillName;
-          modelOverride = oracleProfile.model;
-        }
-
-        const selected = skills.get(skillName);
-        if (!selected) {
-          throw new OracleToolError(
-            ErrorCode.INVALID_SKILL,
-            `Unknown skill: ${skillName}`,
-            `Available: ${skills.names().join(", ")}`
-          );
-        }
-
-        const patterns = [...(files ?? config.include), ...config.exclude.map((item) => `!${item}`)];
-        await progress(2, "Consulting the configured provider");
-        let previousResponseId: string | undefined;
-        if (previousSessionId) {
-          const prev = await service.session(previousSessionId);
-          previousResponseId = prev?.responseId;
-        }
-
-        // Inject memory context if oracle profile has memory enabled
-        const basePrompt = skills.compose(skillName, DEFAULT_SYSTEM_PROMPT);
-        const personalCtx = await profile.buildPersonalContext();
-        let systemPrompt = personalCtx ? `${personalCtx}\n\n${basePrompt}` : basePrompt;
-
-        if (agentScope) {
-          const oracleProfile = await oracles.getOracle(agentScope);
-          if (oracleProfile?.memory) {
-            const memoryEntries = await memory.recall({ agent: agentScope, limit: 5 });
-            if (memoryEntries.length > 0) {
-              const memoryBlock = memoryEntries
-                .map((e) => `[${e.type.toUpperCase()}] ${e.content.slice(0, 300)}`)
-                .join("\n\n");
-              systemPrompt = `${systemPrompt}\n\n## Memory Context (agent: ${agentScope})\n${memoryBlock}`;
-            }
-          }
-        }
-        const result = await service.consult({
-          prompt,
-          preset: skillName,
-          provider: providerId,
-          files: patterns,
-          model: modelOverride ?? selected.model ?? config.model,
-          cwd: workspaceRoot,
-          maxFileSizeBytes: config.maxFileSizeBytes,
-          maxInputBytes: config.maxInputBytes,
-          previousResponseId,
-          systemPrompt
-        });
-
-        // Auto-save insight to memory if oracle profile has memory enabled
-        if (agentScope) {
-          const oracleProfile = await oracles.getOracle(agentScope);
-          if (oracleProfile?.memory && result.status === "completed") {
-            await memory.remember(agentScope, "insight", result.output.slice(0, 500), {
-              tags: [skillName, "consult"],
-              importance: 0.6
-            });
-          }
-        }
-
-        await progress(3, "Session persisted");
-        return success(result.output, {
-          ...result,
-          provider: providerId,
-          preset: skillName,
-          filesIncluded: result.files.length,
-          agentScope
-        });
-      } catch (error) {
-        return failure(error);
-      }
-    }
-  );
-
   server.registerTool(
     "oracle_ask",
     {
