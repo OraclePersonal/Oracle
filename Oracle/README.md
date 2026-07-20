@@ -1,5 +1,9 @@
 # Oracle
 
+<p align="center">
+  <img src="docs/oracle-logo.png" alt="Oracle logo" width="720">
+</p>
+
 MCP-powered AI coding consultant with persistent memory, a docs knowledge
 base, web access, GitHub integration, and multi-agent peer coordination.
 Ships both a CLI (`oracle`) and an MCP server (`oracle-mcp`) for Claude Code,
