@@ -1,7 +1,7 @@
 {
   "name": "oracle",
   "version": "0.0.2",
-  "description": "Oracle Assistant — an MCP-powered AI assistant with persistent memory, a knowledge base, web access, and GitHub integration for Claude Code, opencode, and other coding agents.",
+  "description": "Oracle Assistant — an MCP-powered AI assistant with persistent memory, a knowledge base, and web access for Claude Code, opencode, and other coding agents.",
   "keywords": [
     "oracle-assistant",
     "mcp",
