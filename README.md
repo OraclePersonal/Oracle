@@ -75,10 +75,10 @@ Wire `oracle-mcp` (built to `dist/mcp.js`) into your MCP client:
 
 Or run `oracle setup-mcp` to generate it.
 
-## MCP tools (26)
+## MCP tools (25)
 
-**Ask / consult**
-`oracle_ask`, `oracle_consult`
+**Ask**
+`oracle_ask` — one entry point; pass `files` when the answer needs real code, omit for plain Q&A
 
 **Memory**
 `oracle_memory_list`, `oracle_memory_search`, `oracle_memory_update`,

@@ -1,6 +1,6 @@
 # Oracle MCP Tool Standards
 
-This document defines the standardization layer for all Oracle MCP tools, ensuring consistency, quality, and maintainability across the 26-tool surface.
+This document defines the standardization layer for all Oracle MCP tools, ensuring consistency, quality, and maintainability across the 25-tool surface.
 
 ## Architecture
 
@@ -66,15 +66,15 @@ cache.invalidatePattern("skill-.*");
 
 ## Tool Categories
 
-### 1. Consult (2 tools)
-- `oracle_consult` — Analyze files with a skill
-- `oracle_ask` — Freeform question with optional files
+### 1. Ask (1 tool)
+- `oracle_ask` — Single entry point: freeform question, or "look at these files and tell me X" when `files` is passed
 
 **Standards:**
-- Prompt max 50KB
-- File glob support with `!exclude` patterns
-- Session continuity via `previousSessionId`
-- Progress notifications for long operations
+- Question max 50KB
+- File glob support with `!exclude` patterns (optional — omit for plain Q&A)
+- Conversation continuity via `conversationId`
+- Optional docs injection via `include_docs`
+- Auto-scopes memory to an oracle profile via `oracle` (recall before, save insight after)
 - Auto-injects identity + memory context
 
 ### 2. Memory (8 tools)
@@ -160,19 +160,19 @@ All inputs use Zod validators with `.describe()` for every field:
 
 ```typescript
 inputSchema: {
-  prompt: z
+  question: z
     .string()
     .min(1)
     .max(50000)
-    .describe("The analysis request or question"),
-  skill: z
+    .describe("The question or what you're stuck on"),
+  oracle: z
     .string()
     .optional()
-    .describe("Skill name (review, debug, security, etc.). Defaults to 'review'"),
+    .describe("Oracle profile name (e.g. 'coding'). Auto-scopes memory to this profile"),
   files: z
     .array(z.string())
     .optional()
-    .describe("File glob patterns to analyze"),
+    .describe("File glob patterns to include when the answer needs real code"),
 }
 ```
 
@@ -216,7 +216,6 @@ Example:
 
 | Tool | Rate Limit | Cacheable | TTL |
 |---|---|---|---|
-| `oracle_consult` | 10/min | No | — |
 | `oracle_ask` | 10/min | No | — |
 | `oracle_memory_*` | — | Yes (update clears) | 5min |
 | `oracle_docs_search` | 20/min | Yes | 10min |
@@ -252,7 +251,7 @@ New tools go in `src/mcp/tools/<category>.ts`:
 
 ```
 src/mcp/tools/
-  ├── consult.ts    (oracle_consult, oracle_ask)
+  ├── consult.ts    (oracle_ask)
   ├── memory.ts     (oracle_memory_*, oracle_memory_wiki_*)
   ├── docs.ts       (oracle_docs_*)
   ├── web.ts        (oracle_web_*)
@@ -333,5 +332,5 @@ npm test
 ---
 
 **Last updated:** 2026-07-20  
-**Tool count:** 26  
+**Tool count:** 25  
 **MCP version:** OpenAI-compatible (MCP SDK 0.8+)
