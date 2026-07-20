@@ -352,7 +352,7 @@ export function registerOracleTools({
     },
     async ({ agent, type, limit }) => {
       try {
-        const entries = await memory.recall({ type: type as any, agent: agent ?? undefined, limit });
+        const entries = await memory.recall({ type, agent: agent ?? undefined, limit });
         return success(JSON.stringify(entries, null, 2), { entries });
       } catch (error) { return failure(error); }
     }
