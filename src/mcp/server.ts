@@ -7,13 +7,13 @@ import type { ProjectConfig } from "../config/project.js";
 import { DEFAULT_SYSTEM_PROMPT } from "../context/bundle.js";
 import type { ConsultService } from "../core/consult.js";
 import { OracleError, serializeOracleError } from "../errors.js";
+import { OracleToolError, ErrorCode, isOracleError } from "./oracleErrors.js";
+import { ToolCache } from "./toolCache.js";
 import { checkProvider } from "../providers/factory.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { OracleRegistry } from "../oracles/registry.js";
 import { ProfileStore } from "../identity/profile.js";
 import type { MemoryPort } from "../orchestrator/ports.js";
-import type { PRFile } from "../github/types.js";
-import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
 import { getConversationContext, recordSelfLog } from "../core/selfMemory.js";
 import { loadSoul } from "../core/souls.js";
@@ -65,7 +65,14 @@ function success(text: string, structuredContent: Record<string, unknown>) {
 }
 
 function failure(error: unknown) {
-  const serialized = serializeOracleError(error);
+  let serialized: Record<string, any>;
+  if (isOracleError(error)) {
+    serialized = error.toJSON();
+  } else if (error instanceof OracleError) {
+    serialized = serializeOracleError(error);
+  } else {
+    serialized = { error: error instanceof Error ? error.message : String(error) };
+  }
   return {
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify(serialized) }],
@@ -86,16 +93,31 @@ export function registerOracleTools({
   providerChecks = checkProvider,
   soulsDir = path.join(os.homedir(), ".oracle", "souls")
 }: OracleServerDependencies & { soulsDir?: string }): void {
+  // Initialize caching layer for expensive operations
+  const cache = new ToolCache();
   server.registerTool(
     "oracle_consult",
     {
       title: "Consult Oracle",
-      description: "Analyze project files with a focused engineering skill.",
+      description: "Analyze project files with a focused engineering skill. Applies the skill's system prompt to the given code, returning structured analysis with file references and session ID for followup.",
       inputSchema: {
-        prompt: z.string().min(1),
-        skill: z.string().optional(),
-        files: z.array(z.string()).optional(),
-        previousSessionId: z.string().optional()
+        prompt: z
+          .string()
+          .min(1)
+          .max(50000)
+          .describe("The analysis request or review task"),
+        skill: z
+          .string()
+          .optional()
+          .describe("Skill name (review, debug, security, etc.). Defaults to 'review'"),
+        files: z
+          .array(z.string())
+          .optional()
+          .describe("File glob patterns to analyze (e.g. ['src/**/*.ts', '!*.test.ts'])"),
+        previousSessionId: z
+          .string()
+          .optional()
+          .describe("Prior session ID to include previous context for continuity")
       }
     },
     async ({ prompt, skill, files, previousSessionId }, extra) => {
@@ -111,7 +133,13 @@ export function registerOracleTools({
         await progress(1, "Resolving and validating project files");
         const skillName = skill ?? "review";
         const selected = skills.get(skillName);
-        if (!selected) throw new OracleError("ORACLE_INVALID_REQUEST", `Unknown skill: ${skillName}`, `Available: ${skills.names().join(", ")}`);
+        if (!selected) {
+          throw new OracleToolError(
+            ErrorCode.INVALID_SKILL,
+            `Unknown skill: ${skillName}`,
+            `Available: ${skills.names().join(", ")}`
+          );
+        }
         const patterns = [...(files ?? config.include), ...config.exclude.map((item) => `!${item}`)];
         await progress(2, "Consulting the configured provider");
         let previousResponseId: string | undefined;
@@ -338,8 +366,24 @@ export function registerOracleTools({
     "oracle_memory_list",
     {
       title: "List Memory",
-      description: "Show memory entries from the .oracle-memory store.",
-      inputSchema: { agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(100).default(10) }
+      description: "Show memory entries from the .oracle-memory store, filtered by agent, type, and recency.",
+      inputSchema: {
+        agent: z
+          .string()
+          .optional()
+          .describe("Agent name to filter by (your name or oracle profile name)"),
+        type: z
+          .enum(["fact", "insight", "chunk", "working"])
+          .optional()
+          .describe("Memory type: fact (durable), insight (analysis), chunk (code), working (session temp)"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .default(10)
+          .describe("Max entries to return")
+      }
     },
     async ({ agent, type, limit }) => {
       try {
@@ -353,8 +397,29 @@ export function registerOracleTools({
     "oracle_memory_search",
     {
       title: "Search Memory",
-      description: "Search memory contents by keyword.",
-      inputSchema: { query: z.string().min(1), agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(200).default(20) }
+      description: "Full-text search over memory contents by keyword, returning ranked results.",
+      inputSchema: {
+        query: z
+          .string()
+          .min(1)
+          .max(500)
+          .describe("Search keyword or phrase"),
+        agent: z
+          .string()
+          .optional()
+          .describe("Filter to a specific agent's memory"),
+        type: z
+          .enum(["fact", "insight", "chunk", "working"])
+          .optional()
+          .describe("Filter by memory type"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .default(20)
+          .describe("Max results to return")
+      }
     },
     async ({ query, agent, type, limit }) => {
       try {
@@ -693,261 +758,4 @@ export function registerOracleTools({
       }
     }
   );
-
-  // ── GitHub tools ────────────────────────────────────────────────
-
-  server.registerTool(
-    "oracle_github_pr_get",
-    {
-      title: "Get PR Details",
-      description: "Get details of a GitHub pull request.",
-      inputSchema: {
-        number: z.number().int().positive(),
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
-      }
-    },
-    async ({ number, repo }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        const pr = gh.getPR(number, r);
-        return success(JSON.stringify(pr, null, 2), pr as unknown as Record<string, unknown>);
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_pr_list",
-    {
-      title: "List PRs",
-      description: "List GitHub pull requests with filters.",
-      inputSchema: {
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote"),
-        state: z.enum(["open", "closed", "merged", "all"]).default("open"),
-        limit: z.number().int().min(1).max(100).default(30),
-        base: z.string().optional(),
-        head: z.string().optional(),
-        author: z.string().optional(),
-        labels: z.string().optional().describe("comma-separated")
-      }
-    },
-    async ({ repo, state, limit, base, head, author, labels }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        const prs = gh.listPRs({ repo: r, state, limit, base, head, author, labels: labels?.split(",") });
-        return success(JSON.stringify(prs, null, 2), { count: prs.length, prs: prs as unknown as Record<string, unknown>[] });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_pr_diff",
-    {
-      title: "Get PR Diff",
-      description: "Get the full diff for a pull request.",
-      inputSchema: {
-        number: z.number().int().positive(),
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
-      }
-    },
-    async ({ number, repo }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        const diff = gh.getPRDiff(number, r);
-        return success(diff, { number, diffLength: diff.length });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_pr_files",
-    {
-      title: "Get PR Files",
-      description: "Get the list of changed files in a pull request.",
-      inputSchema: {
-        number: z.number().int().positive(),
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
-      }
-    },
-    async ({ number, repo }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        const files = gh.getPRFiles(number, r);
-        return success(JSON.stringify(files, null, 2), { count: files.length, files: files as unknown as Record<string, unknown>[] });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_pr_review",
-    {
-      title: "Review PR",
-      description: "Review a pull request using Oracle's consult engine. Returns AI analysis. Does NOT post the review to GitHub — use oracle_github_pr_review_submit to post.",
-      inputSchema: {
-        number: z.number().int().positive(),
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
-      }
-    },
-    async ({ number, repo }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        const pr = gh.getPR(number, r);
-        const diff = gh.getPRDiff(number, r);
-        const files = gh.getPRFiles(number, r);
-        const fileList = files.map((f: PRFile) => `  ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`).join("\n");
-        const reviewPrompt = [
-          `## PR Review: #${number} — ${pr.title}`,
-          `**Author:** ${pr.author}  **Repo:** ${r}`,
-          `**Base:** ${pr.baseRef} ← **Head:** ${pr.headRef}`,
-          "",
-          pr.body ? `### Description\n${pr.body}\n` : "",
-          `### Changed Files (${files.length})`,
-          fileList,
-          "",
-          "### Diff",
-          "```diff",
-          diff.slice(0, 50000),
-          "```",
-          "",
-          "Review this PR for correctness, edge cases, security, and maintainability.",
-          "Be specific — cite line numbers from the diff. Categorize findings by severity (critical/major/minor/nit).",
-        ].filter(Boolean).join("\n");
-
-        const result = await service.consult({
-          prompt: reviewPrompt,
-          preset: "review",
-          provider: providerId,
-          model: config.model,
-          cwd: workspaceRoot,
-          systemPrompt: "You are a senior code reviewer. Analyze the PR diff and files. Be specific, cite line numbers, and categorize findings by severity (critical/major/minor/nit). End with a verdict: approve, request changes, or comment."
-        });
-
-        return success(result.output, {
-          sessionId: result.sessionId,
-          prNumber: number,
-          repo: r,
-          files: files.length,
-          diffBytes: diff.length
-        });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_pr_review_submit",
-    {
-      title: "Submit PR Review",
-      description: "Submit a review on a pull request (APPROVE, REQUEST_CHANGES, or COMMENT).",
-      inputSchema: {
-        number: z.number().int().positive(),
-        body: z.string().describe("Review body text"),
-        event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]).default("COMMENT"),
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
-      }
-    },
-    async ({ number, body, event, repo }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        gh.submitPRReview(number, body, event, r);
-        return success(`Review submitted on PR #${number}`, { number, event, repo: r });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_issue_get",
-    {
-      title: "Get Issue",
-      description: "Get details of a GitHub issue.",
-      inputSchema: {
-        number: z.number().int().positive(),
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
-      }
-    },
-    async ({ number, repo }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        const issue = gh.getIssue(number, r);
-        return success(JSON.stringify(issue, null, 2), issue as unknown as Record<string, unknown>);
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_issue_list",
-    {
-      title: "List Issues",
-      description: "List GitHub issues with filters.",
-      inputSchema: {
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote"),
-        state: z.enum(["open", "closed", "all"]).default("open"),
-        limit: z.number().int().min(1).max(100).default(30),
-        author: z.string().optional(),
-        labels: z.string().optional().describe("comma-separated")
-      }
-    },
-    async ({ repo, state, limit, author, labels }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        const issues = gh.listIssues({ repo: r, state, limit, author, labels: labels?.split(",") });
-        return success(JSON.stringify(issues, null, 2), { count: issues.length, issues: issues as unknown as Record<string, unknown>[] });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_comment",
-    {
-      title: "Create GitHub Comment",
-      description: "Create a comment on a GitHub issue or pull request.",
-      inputSchema: {
-        number: z.number().int().positive(),
-        body: z.string().min(1),
-        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
-      }
-    },
-    async ({ number, body, repo }) => {
-      try {
-        const r = repo ?? gh.inferRepo(workspaceRoot);
-        gh.createComment(number, body, r);
-        return success(`Comment posted on #${number}`, { number, repo: r });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_search",
-    {
-      title: "Search GitHub Code",
-      description: "Search code across GitHub repositories.",
-      inputSchema: {
-        query: z.string().min(1),
-        limit: z.number().int().min(1).max(50).default(10)
-      }
-    },
-    async ({ query, limit }) => {
-      try {
-        const results = gh.searchCode(query, limit);
-        return success(JSON.stringify(results, null, 2), { count: results.length, results: results as unknown as Record<string, unknown>[] });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_github_api",
-    {
-      title: "GitHub API",
-      description: "Raw GitHub API GET request via gh CLI.",
-      inputSchema: {
-        endpoint: z.string().min(1).describe("e.g. /repos/owner/repo/pulls")
-      }
-    },
-    async ({ endpoint }) => {
-      try {
-        const data = gh.apiRequest(endpoint);
-        return success(JSON.stringify(data, null, 2), { endpoint });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  // ── /GitHub tools ───────────────────────────────────────────────
 }

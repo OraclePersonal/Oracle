@@ -5,7 +5,7 @@
 </p>
 
 MCP-powered AI coding consultant with persistent memory, a docs knowledge
-base, web access, and GitHub integration.
+base, and web access.
 Ships both a CLI (`oracle`) and an MCP server (`oracle-mcp`) for Claude Code,
 opencode, Clew Code, and any MCP-compatible agent.
 
@@ -14,8 +14,7 @@ opencode, Clew Code, and any MCP-compatible agent.
 Oracle answers questions and reviews code with project context, and remembers
 across conversations. It pulls context from four sources — persistent memory
 (facts, insights, a compiled wiki), a local docs store (`.oracle/docs/`), the
-web, and your project files — then asks a configured provider/model. It can
-also read/review GitHub PRs and issues.
+web, and your project files — then asks a configured provider/model.
 
 ## Install & build
 
@@ -42,7 +41,7 @@ Commands:
 | Command | Purpose |
 |---|---|
 | `ask` | One-shot question; `-f` to include files, `--soul` for persona, `--conversation` for continuity |
-| `consult` | Review with project context; `-f` globs, `--diff [target]`, `--github-pr owner/repo#n` |
+| `consult` | Review with project context; `-f` globs, `--diff [target]` |
 | `watch` | Auto-review the working-tree diff on save |
 | `memory` `list\|clear` | Inspect / clear the memory store |
 | `wiki` `build\|list\|show` | Compile and browse the memory wiki |
@@ -50,7 +49,6 @@ Commands:
 | `web` `search\|fetch\|extract` | Web search, fetch a URL, structured extract |
 | `oracle` `list\|register\|unregister\|show` | Manage oracle profiles |
 | `session` `list\|show` | Browse past consult sessions |
-| `github` `check\|pr\|issue\|search\|get` | GitHub PR/issue access |
 | `identity` `show\|setup`, `persona`, `skill`, `forget` | Identity, persona, skills, memory reset |
 | `login` / `logout` | Anthropic OAuth |
 | `doctor` | Check provider wiring |
@@ -77,7 +75,7 @@ Wire `oracle-mcp` (built to `dist/mcp.js`) into your MCP client:
 
 Or run `oracle setup-mcp` to generate it.
 
-## MCP tools (46)
+## MCP tools (26)
 
 **Ask / consult**
 `oracle_ask`, `oracle_consult`
@@ -94,13 +92,6 @@ Or run `oracle setup-mcp` to generate it.
 
 **Web**
 `oracle_web_search`, `oracle_web_fetch`, `oracle_web_extract`
-
-**GitHub**
-`oracle_github_pr_list`, `oracle_github_pr_get`, `oracle_github_pr_diff`,
-`oracle_github_pr_files`, `oracle_github_pr_review`,
-`oracle_github_pr_review_submit`, `oracle_github_issue_get`,
-`oracle_github_issue_list`, `oracle_github_comment`, `oracle_github_search`,
-`oracle_github_api`
 
 **Oracle profiles**
 `oracle_oracle_list`, `oracle_oracle_register`
