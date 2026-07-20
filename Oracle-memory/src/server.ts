@@ -188,6 +188,86 @@ File-backed persistent memory for AI coding agents.
     }
   });
 
+  server.registerTool("consolidate", {
+    description: "Merge near-duplicate memories that share tag sets into one archived entry. Reduces clutter without losing information.",
+    inputSchema: {},
+  }, async () => {
+    try {
+      const result = await memory.consolidate();
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, ...result }, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: (e as Error).message }) }], isError: true };
+    }
+  });
+
+  server.registerTool("promote_memory", {
+    description: "Promote working memories retrieved 3+ times into durable 'insight' (or 'fact') memories. The working→long-term tier transition, callable on demand.",
+    inputSchema: {
+      min_access_count: z.number().int().min(1).max(100).optional().describe("Min retrievals to promote (default 3)"),
+      target_type: z.enum(MEMORY_TYPES).optional().describe("Target type (default insight)"),
+    },
+  }, async (args) => {
+    try {
+      const promoted = await memory.promoteWorkingMemories({
+        minAccessCount: args.min_access_count,
+        targetType: (args.target_type as "fact" | "insight") ?? undefined,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, promoted: promoted.length, memories: promoted }, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: (e as Error).message }) }], isError: true };
+    }
+  });
+
+  server.registerTool("prune_memories", {
+    description: "Soft-archive durable memories untouched for min_stale_days whose decayed importance fell below min_importance. Recoverable via list_memories with includeExpired.",
+    inputSchema: {
+      min_importance: z.number().min(0).max(1).optional().describe("Decayed-importance floor (default 0.2)"),
+      min_stale_days: z.number().int().min(1).optional().describe("Untouched days threshold (default 60)"),
+    },
+  }, async (args) => {
+    try {
+      const pruned = await memory.pruneStaleMemories({
+        minImportance: args.min_importance,
+        minStaleDays: args.min_stale_days,
+      });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, pruned: pruned.length, memories: pruned }, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: (e as Error).message }) }], isError: true };
+    }
+  });
+
+  server.registerTool("reflect", {
+    description: "LLM insight synthesis: cluster related memories and distill NEW higher-level insights, saved as durable 'insight' memories tagged 'reflection'. Requires ANTHROPIC_API_KEY + ORACLE_MEMORY_LLM_GRAPH=1; no-op (returns []) otherwise.",
+    inputSchema: {
+      agent: z.string().optional().describe("Agent name for the reflection (default 'reflector')"),
+      max_clusters: z.number().int().min(1).max(50).optional().describe("Max clusters to process (default 8)"),
+    },
+  }, async (args) => {
+    try {
+      const created = await memory.reflect({ agent: args.agent, maxClusters: args.max_clusters });
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, created: created.length, memories: created }, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: (e as Error).message }) }], isError: true };
+    }
+  });
+
+  server.registerTool("verify_memory", {
+    description: "Resolve a contradiction explicitly. 'keep' un-quarantines a memory and invalidates what it contradicted; 'reject' invalidates the target itself. Manual override for write-time arbitration ties.",
+    inputSchema: {
+      id: z.string().min(1).describe("Memory ID to verify"),
+      type: z.enum(MEMORY_TYPES),
+      decision: z.enum(["keep", "reject"]),
+    },
+  }, async (args) => {
+    try {
+      const entry = await memory.verifyMemory(args.id, args.type as MemoryType, args.decision);
+      if (!entry) return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: "Memory not found" }) }], isError: true };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: true, memory: entry }, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, error: (e as Error).message }) }], isError: true };
+    }
+  });
+
   // ─── Resources ─────────────────────────────────────────
 
   server.resource("All Memories", "oracle-memory://memories",
@@ -275,6 +355,28 @@ export async function runHttp(rootDir: string, disableVectors?: boolean, port?: 
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, MCP-Session-Id");
+
+    // ponytail: public HTTP hub has no body cap by default — bound request
+    // size (1MB) + idle timeout (30s) so a single agent can't OOM the daemon.
+    // Raise MAX_BODY_BYTES / REQ_TIMEOUT_MS if real payloads exceed them.
+    const MAX_BODY_BYTES = 1_000_000;
+    const REQ_TIMEOUT_MS = 30_000;
+    req.setTimeout(REQ_TIMEOUT_MS, () => {
+      if (!res.headersSent) {
+        res.writeHead(408, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Request timeout" }));
+      }
+      req.destroy();
+    });
+    let received = 0;
+    req.on("data", (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > MAX_BODY_BYTES) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Payload too large" }));
+        req.destroy();
+      }
+    });
 
     if (req.method === "OPTIONS") {
       res.writeHead(204);

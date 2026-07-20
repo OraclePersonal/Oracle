@@ -33,9 +33,18 @@ async function callJson(name: string, args: Record<string, unknown>) {
 }
 
 describe("Oracle Memory MCP tools (simplified)", () => {
-  it("lists 3 tools: remember, recall, forget", async () => {
+  it("lists 8 tools: remember, recall, forget, consolidate, promote_memory, prune_memories, reflect, verify_memory", async () => {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(tools).toEqual(["forget", "recall", "remember"]);
+    expect(tools).toEqual([
+      "consolidate",
+      "forget",
+      "promote_memory",
+      "prune_memories",
+      "recall",
+      "reflect",
+      "remember",
+      "verify_memory",
+    ]);
   });
 
   it("remember saves and recall finds it", async () => {
