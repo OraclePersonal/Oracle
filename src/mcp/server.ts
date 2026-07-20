@@ -106,6 +106,10 @@ export function registerOracleTools({
           .min(1)
           .max(50000)
           .describe("The analysis request or review task"),
+        oracle: z
+          .string()
+          .optional()
+          .describe("Oracle profile name to use (e.g. 'coding', 'security'). Auto-scopes memory to this profile"),
         skill: z
           .string()
           .optional()
@@ -120,7 +124,7 @@ export function registerOracleTools({
           .describe("Prior session ID to include previous context for continuity")
       }
     },
-    async ({ prompt, skill, files, previousSessionId }, extra) => {
+    async ({ prompt, oracle, skill, files, previousSessionId }, extra) => {
       try {
         const progressToken = extra._meta?.progressToken;
         const progress = async (value: number, message: string) => {
@@ -131,7 +135,25 @@ export function registerOracleTools({
           });
         };
         await progress(1, "Resolving and validating project files");
-        const skillName = skill ?? "review";
+
+        // Auto-detect skill + model from oracle profile if specified
+        let skillName = skill ?? "review";
+        let modelOverride: string | undefined;
+        let agentScope = oracle; // Memory scoping
+
+        if (oracle) {
+          const oracleProfile = await oracles.getOracle(oracle);
+          if (!oracleProfile) {
+            throw new OracleToolError(
+              ErrorCode.INVALID_ORACLE_PROFILE,
+              `Unknown oracle profile: ${oracle}`,
+              `Run oracle_oracle_list to see available profiles`
+            );
+          }
+          skillName = oracleProfile.skill ?? skillName;
+          modelOverride = oracleProfile.model;
+        }
+
         const selected = skills.get(skillName);
         if (!selected) {
           throw new OracleToolError(
@@ -140,6 +162,7 @@ export function registerOracleTools({
             `Available: ${skills.names().join(", ")}`
           );
         }
+
         const patterns = [...(files ?? config.include), ...config.exclude.map((item) => `!${item}`)];
         await progress(2, "Consulting the configured provider");
         let previousResponseId: string | undefined;
@@ -147,27 +170,55 @@ export function registerOracleTools({
           const prev = await service.session(previousSessionId);
           previousResponseId = prev?.responseId;
         }
+
+        // Inject memory context if oracle profile has memory enabled
         const basePrompt = skills.compose(skillName, DEFAULT_SYSTEM_PROMPT);
         const personalCtx = await profile.buildPersonalContext();
-        const systemPrompt = personalCtx ? `${personalCtx}\n\n${basePrompt}` : basePrompt;
+        let systemPrompt = personalCtx ? `${personalCtx}\n\n${basePrompt}` : basePrompt;
+
+        if (agentScope) {
+          const oracleProfile = await oracles.getOracle(agentScope);
+          if (oracleProfile?.memory) {
+            const memoryEntries = await memory.recall({ agent: agentScope, limit: 5 });
+            if (memoryEntries.length > 0) {
+              const memoryBlock = memoryEntries
+                .map((e) => `[${e.type.toUpperCase()}] ${e.content.slice(0, 300)}`)
+                .join("\n\n");
+              systemPrompt = `${systemPrompt}\n\n## Memory Context (agent: ${agentScope})\n${memoryBlock}`;
+            }
+          }
+        }
         const result = await service.consult({
           prompt,
           preset: skillName,
           provider: providerId,
           files: patterns,
-          model: selected.model ?? config.model,
+          model: modelOverride ?? selected.model ?? config.model,
           cwd: workspaceRoot,
           maxFileSizeBytes: config.maxFileSizeBytes,
           maxInputBytes: config.maxInputBytes,
           previousResponseId,
           systemPrompt
         });
+
+        // Auto-save insight to memory if oracle profile has memory enabled
+        if (agentScope) {
+          const oracleProfile = await oracles.getOracle(agentScope);
+          if (oracleProfile?.memory && result.status === "completed") {
+            await memory.remember(agentScope, "insight", result.output.slice(0, 500), {
+              tags: [skillName, "consult"],
+              importance: 0.6
+            });
+          }
+        }
+
         await progress(3, "Session persisted");
         return success(result.output, {
           ...result,
           provider: providerId,
           preset: skillName,
-          filesIncluded: result.files.length
+          filesIncluded: result.files.length,
+          agentScope
         });
       } catch (error) {
         return failure(error);
@@ -182,7 +233,14 @@ export function registerOracleTools({
       description: "Ask Oracle anything — a question, or 'look at these files and tell me X'. One entry point: pass `files` when the answer needs actual code, omit it for a plain conversation. Pass `conversationId` across calls in the same exchange so Oracle remembers what it already told you.",
       inputSchema: {
         question: z.string().min(1).describe("Your question or what you're stuck on"),
-        soul: z.string().optional().describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
+        oracle: z
+          .string()
+          .optional()
+          .describe("Oracle profile name (e.g. 'coding', 'security'). Auto-scopes memory and uses profile's soul"),
+        soul: z
+          .string()
+          .optional()
+          .describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
         context: z.string().optional().describe("Additional context: code snippets, error messages, what you've tried"),
         files: z.array(z.string()).optional().describe("File paths or glob patterns to read and include, when the question needs real code (e.g. ['src/**/*.ts'])"),
         conversationId: z.string().optional().describe("Stable id for this exchange — pass the same value across multiple oracle_ask calls so Oracle recalls what it already said"),
@@ -190,9 +248,10 @@ export function registerOracleTools({
         doc_search: z.string().optional().describe("Specific doc query (defaults to using the question itself)")
       }
     },
-    async ({ question, soul, context, files, conversationId, include_docs, doc_search }) => {
+    async ({ question, oracle, soul, context, files, conversationId, include_docs, doc_search }) => {
       try {
-        const soulName = soul ?? "default";
+        let agentScope = oracle;
+        const soulName = soul ?? (oracle ? oracle : "default");
         const soulPrompt = await loadSoul(soulName, soulsDir);
         let ctxBlock = context ? `\n\n## Context from the asking agent\n${context}` : "";
 
@@ -212,7 +271,22 @@ export function registerOracleTools({
           }
         }
 
-        const prompt = `${ctxBlock}\n\n## Question\n${question}`;
+        // Inject memory context if oracle profile has memory enabled
+        let memoryCtx = "";
+        if (agentScope) {
+          const oracleProfile = await oracles.getOracle(agentScope);
+          if (oracleProfile?.memory) {
+            const memoryEntries = await memory.recall({ agent: agentScope, limit: 5 });
+            if (memoryEntries.length > 0) {
+              const memoryBlock = memoryEntries
+                .map((e) => `[${e.type.toUpperCase()}] ${e.content.slice(0, 200)}`)
+                .join("\n\n");
+              memoryCtx = `\n\n## Memory Context (agent: ${agentScope})\n${memoryBlock}`;
+            }
+          }
+        }
+
+        const prompt = `${ctxBlock}${memoryCtx}\n\n## Question\n${question}`;
         const systemPrompt = `${soulPrompt}\n\nAnswer concisely and directly. If you don't know, say so.`;
         const hasFiles = files !== undefined && files.length > 0;
         const result = await service.consult({
@@ -232,10 +306,22 @@ export function registerOracleTools({
           await recordSelfLog(memory, conversationId, { question, answerSummary: result.output.slice(0, 400) });
         }
 
+        // Auto-save insight to memory if oracle profile has memory enabled
+        if (agentScope) {
+          const oracleProfile = await oracles.getOracle(agentScope);
+          if (oracleProfile?.memory && result.status === "completed") {
+            await memory.remember(agentScope, "insight", result.output.slice(0, 500), {
+              tags: ["ask", "qa"],
+              importance: 0.5
+            });
+          }
+        }
+
         return success(result.output, {
           soul: soulName,
           sessionId: result.sessionId,
-          filesIncluded: result.files.length
+          filesIncluded: result.files.length,
+          agentScope
         });
       } catch (error) {
         return failure(error);
