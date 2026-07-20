@@ -1,51 +1,45 @@
 # Oracle Dashboard
 
-> See the swarm at a glance. Memory stats, message activity, agent status.
+A local web dashboard that visualizes the on-disk state of the Oracle memory and messaging systems.
 
-Live web dashboard for the Oracle ecosystem — memory counts, message bus activity,
-and peer/agent status in one dark-themed UI.
+## What it does
 
-## Quick start
+Oracle Dashboard is a small Express server that serves a static web frontend and exposes HTTP API routes which read stats from sibling Oracle projects on disk. The `memory` route counts files in the `Oracle-memory/.oracle-memory` directory (facts, insights, chunks, working), and the `messages` route lists JSON files in `Oracle-messages/.oracle/messages`. The `status` route reports server health, uptime, and version. It does not modify any data; it only reads and aggregates counts.
+
+## Install / Build
 
 ```bash
 npm install
-npm run dev        # http://localhost:3456
+npm run build      # compile TypeScript to dist/ (tsc)
 ```
 
-## API
+## Run
 
-| Route | Description |
-|-------|-------------|
-| `/api/status` | Server health + uptime |
-| `/api/memory` | `.oracle-memory/` counts |
-| `/api/messages` | `.oracle/messages/` stats |
-| `/api/status/peers` | Discovered peer agents |
-
-## Layout
-
-```
-public/
-├── index.html   # Dashboard page
-└── style.css    # Dark theme
-src/
-├── index.ts     # Express server
-└── api/
-    ├── status.ts
-    ├── memory.ts
-    └── messages.ts
+```bash
+npm start          # run compiled server: node dist/index.js
+npm run dev        # run directly with tsx: tsx src/index.ts
 ```
 
-## Scripts
+The server starts on port `3456` by default (override with the `PORT` environment variable) and serves the dashboard at `http://localhost:3456`.
 
-| Script | Purpose |
-|--------|---------|
-| `npm run dev` | Start dev server (tsx) |
-| `npm run build` | Compile TypeScript |
-| `npm start` | Run compiled |
+## API routes
 
-## Related
+All routes are read-only JSON endpoints mounted under `/api`:
 
-- [Oracle](https://github.com/JonusNattapong/Oracle) — CLI for AI code consulting
-- [Oracle-memory](https://github.com/JonusNattapong/Oracle-memory) — File-backed MCP memory server
-- [Oracle-messages](https://github.com/JonusNattapong/Oracle-messages) — MCP message bus
-- [Oracle-templates](https://github.com/JonusNattapong/Oracle-templates) — Template system
+- `GET /api/memory` — counts of memory files (facts, insights, chunks, working) and whether the memory directory exists.
+- `GET /api/messages` — message file stats: total files, JSON file count, and the 10 most recent message filenames.
+- `GET /api/status` — server status, uptime (seconds), server name, version, and timestamp.
+- `GET /api/status/peers` — returns an empty peer list (`[]`).
+
+The root path serves the static frontend from `public/`.
+
+## Configuration
+
+- `PORT` — TCP port for the server (default `3456`).
+
+The dashboard expects two sibling directories relative to the project root (parent of `Oracle-dashboard`):
+
+- `../Oracle-memory/.oracle-memory` — memory store (facts, insights, chunks, working subdirs)
+- `../Oracle-messages/.oracle/messages` — message store (`.json` files)
+
+If a directory is missing, its stats report `exists: false` rather than failing.

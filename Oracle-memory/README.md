@@ -1,82 +1,131 @@
 # Oracle Memory
 
-> The notebook your AI agents never lose. No database, no server farm — just JSON files and a really good search.
+File-backed Memory MCP server for multi-agent coordination.
 
-Every coding session, your agent learns something: a port number, a gotcha, a decision.
-And every session, it forgets. **Oracle Memory** is the fix — a file-backed MCP memory
-server that lets agents *remember* across sessions and *find* what they wrote with
-hybrid keyword + semantic search.
+## What it does
 
-```
-remember ──▶ .oracle-memory/* ──▶ recall
-               (atomic writes)    (BM25 + vectors + entity graph)
-```
+Oracle Memory is an MCP server that lets AI coding agents persist and retrieve
+knowledge across sessions. There is no database — memories are stored as JSON
+files under a `.oracle-memory/` directory (default: `.oracle-memory/` in the
+server's working directory, overridable). Four memory types are supported:
+`fact` (permanent knowledge), `insight` (lessons learned), `chunk`
+(session/context snapshots, optionally TTL-scoped), and `working` (a
+session scratchpad, auto-cleared by maintenance). Retrieval uses hybrid
+ranking: BM25 keyword search, optional semantic vector search, and an entity
+relationship graph. Durable writes run contradiction detection; background
+maintenance promotes reused working memories and prunes stale low-value ones.
 
-No Postgres. No Redis. No migrations.
-
-## Quick start
-
-```bash
-npm install && npm run build
-npm start              # stdio MCP server
-```
-
-Wire it into Claude Code:
+## Install / Build
 
 ```bash
-claude mcp add oracle-memory -- node /path/to/oracle-memory/dist/index.js
+npm install
+npm run build        # tsc → dist/
 ```
 
-## Tools (3)
+Dev mode (no build):
 
-| Tool | What it does |
-|------|--------------|
-| `remember` | Save a memory. `entry_id` to update existing. |
-| `recall` | Search with `query`, fetch one with `id`, explore graph with `graph_query` |
-| `forget` | Delete one by `id`+`type`, or clear `working` by `agent` |
-
-Auto-maintained every 15 min: consolidation (merge duplicates), promotion
-(working→insight), pruning (stale→archive). No manual tools needed.
-
-## Layout
-
-```
-.oracle-memory/
-├── facts/          # Permanent knowledge
-├── insights/       # Lessons learned
-├── chunks/         # Session snapshots (TTL)
-├── working/        # Scratchpads (auto-cleared)
-├── graph/          # Entity relationship graph
-└── vectors/        # Embeddings (optional)
+```bash
+npm run dev          # tsx src/index.ts
 ```
 
-## Scripts
+Type-check / test:
 
-| Script | Purpose |
-|--------|---------|
-| `npm run build` | Compile TypeScript |
-| `npm run check` | Type-check only |
-| `npm run dev` | Run via tsx |
-| `npm start` | Run compiled |
-| `npm test` | Run tests |
-| `npm run bench` | Run benchmarks |
+```bash
+npm run check        # tsc --noEmit
+npm test             # vitest run
+```
 
-## Environment
+## Run
+
+The compiled entry point is `dist/index.js` (also available as the
+`oracle-memory` bin).
+
+```bash
+node dist/index.js                                   # stdio (default)
+npm start                                            # same as above
+ORACLE_MEMORY_TRANSPORT=http node dist/index.js      # HTTP / streamable transport
+```
+
+Register with an MCP client (stdio):
+
+```json
+{ "mcpServers": { "oracle-memory": { "command": "node", "args": ["/path/to/oracle-memory/dist/index.js"] } } }
+```
+
+HTTP (multi-agent hub):
+
+```bash
+ORACLE_MEMORY_TRANSPORT=http ORACLE_MEMORY_PORT=8765 node dist/index.js
+```
+
+## MCP Tools
+
+The server exposes three MCP tools:
+
+- `remember` — Save a memory (`agent`, `type`, `content`, plus optional
+  `tags`, `source`, `importance`, `ttl`, `confidence`, `sourceTrust`,
+  `checkConflicts`). If `entry_id` is supplied it updates an existing memory
+  instead of creating a new one.
+- `recall` — Search memories. Pass `query` (empty lists all), or `id` to fetch
+  a single memory, or `graph_query` to explore related entities. Supports
+  `agent`, `type`, `tags`, `limit` (default 20, max 200), and
+  `includeExpired` filters.
+- `forget` — Permanently delete a memory by `id` + `type`, or clear all
+  `working` memories for an `agent`.
+
+(`getMemory`, `updateMemory`, `listMemories`, `consolidate`, `getStats`,
+`clearWorking`, and conflict handling exist internally but are not surfaced
+as separate MCP tools — they are reachable through `remember`/`recall`/`forget`
+or via the resources below.)
+
+## MCP Resources
+
+- `oracle-memory://memories` — all memories (newest first, max 200)
+- `oracle-memory://memories/{type}` — memories filtered by type
+- `oracle-memory://stats` — counts by type and agent
+- `oracle-memory://sessions` — currently connected agent sessions
+- `oracle-memory://conflicts` — flagged contradictions and quarantined memories
+
+## HTTP endpoints (HTTP transport only)
+
+| Path | Method | Description |
+|------|--------|-------------|
+| `/mcp` | POST | MCP JSON-RPC messages |
+| `/health` | GET | Health check: `{"status":"ok","uptime":123,"sessions":2}` |
+
+## Configuration
+
+All configuration is via environment variables. Variable names with the
+`AGOYA_` prefix are accepted as aliases for the corresponding `ORACLE_MEMORY_`
+variable.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ORACLE_MEMORY_ROOT_DIR` | `cwd` | Store root |
-| `ORACLE_MEMORY_DISABLE_VECTORS` | `false` | `1` to disable vector search |
-| `ORACLE_MEMORY_TRANSPORT` | `stdio` | `stdio` or `http` |
+| `ORACLE_MEMORY_ROOT_DIR` | `cwd` | Data root; memories stored in `<root>/.oracle-memory/` |
+| `ORACLE_MEMORY_DISABLE_VECTORS` | `false` | Set `1`/`true` to disable semantic vector search |
+| `ORACLE_MEMORY_TRANSPORT` | `stdio` | `stdio` or `http`/`streamable` |
 | `ORACLE_MEMORY_HOST` | `0.0.0.0` | HTTP bind host |
 | `ORACLE_MEMORY_PORT` | `8765` | HTTP port |
-| `ORACLE_MEMORY_HTTP_TOKEN` | — | Bearer token |
+| `ORACLE_MEMORY_HTTP_TOKEN` | — | Bearer token required for HTTP requests when set |
+| `ORACLE_MEMORY_LOG_LEVEL` | `info` | `debug`/`info`/`warn`/`error` |
+| `ORACLE_MEMORY_LLM_GRAPH` | `false` | Set `1` to enable the LLM triple extractor (requires `ANTHROPIC_API_KEY`) |
+
+## On-disk layout
+
+```
+.oracle-memory/
+├── config.json
+├── facts/        # type="fact"   (permanent)
+├── insights/     # type="insight" (lessons)
+├── chunks/       # type="chunk"   (snapshots, TTL)
+├── working/      # type="working" (scratchpad)
+├── graph/        # entity relationship graph (json) or sqlite
+└── vectors/      # embedding index (optional, when vectors enabled)
+```
 
 ## Related
 
 - [Oracle](https://github.com/JonusNattapong/Oracle) — CLI for AI code consulting
 - [Oracle-messages](https://github.com/JonusNattapong/Oracle-messages) — MCP message bus
-- [Oracle-skill](https://github.com/JonusNattapong/Oracle-skill) — Cross-agent workflow docs
-- [Oracle-templates](https://github.com/JonusNattapong/Oracle-templates) — Template system
-- [Oracle-dashboard](https://github.com/JonusNattapong/Oracle-dashboard) — Live web dashboard
-- [Oracle-eval](https://github.com/JonusNattapong/Oracle-eval) — Benchmark suite
+- [Oracle-dashboard](https://github.com/JonusNattapong/Oracle-dashboard) — live web dashboard
+- [Oracle-eval](https://github.com/JonusNattapong/Oracle-eval) — benchmark suite

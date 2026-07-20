@@ -1,70 +1,81 @@
 # Oracle-templates
 
-> Scaffold skills, oracles, and sessions — never start from scratch.
+Template management system for the Oracle ecosystem — create, list, install, and uninstall skill, oracle, and session templates.
 
-Template management system for the Oracle ecosystem. Create, list, install,
-uninstall, and apply reusable templates.
+## What it does
 
-## Quick start
+Oracle-templates manages reusable JSON template definitions for the Oracle ecosystem. It scaffolds skill and oracle templates (writing them to `.oracle/templates/`), lists installed and built-in templates, installs/uninstalls templates from JSON files, and applies a template by writing its declared scaffold files to a target directory.
+
+## Install / Build
 
 ```bash
-npm install && npm run build
+npm install
+npm run build      # compile TypeScript to dist/
 ```
 
-## CLI Usage
+## Usage
+
+The CLI is `oracle-templates` (bin → `dist/cli.js`).
 
 ```
-oracle-templates list                 List installed templates
-oracle-templates list --builtin       List built-in templates
-oracle-templates install <file>       Install from JSON
-oracle-templates uninstall <name>     Remove by name
-oracle-templates apply <name>         Apply to cwd
-oracle-templates create skill <name>  Scaffold a skill
-oracle-templates create oracle <name> Scaffold an oracle
+oracle-templates list                  List installed templates
+oracle-templates list --builtin        List templates shipped with the package
+oracle-templates install <file>        Install a template from a JSON file
+oracle-templates uninstall <name>      Remove an installed template by name
+oracle-templates apply <name>          Write the template's scaffold files (to cwd)
+oracle-templates apply <name> -o <dir> Write scaffold files to <dir>
+oracle-templates create skill <name>   Scaffold a skill template
+oracle-templates create oracle <name>  Scaffold an oracle template
 ```
 
-## Programmatic API
+Options for `create skill` and `create oracle`:
 
-```typescript
-import { listTemplates, installTemplate, createSkillTemplate } from "oracle-templates";
-const { data: templates } = await listTemplates();
-```
+- `-d, --description <desc>` — description
+- `-a, --author <author>` — author
+- `-t, --tags <tags>` — comma-separated tags
+- `-m, --model <model>` — default model (oracle only, e.g. `sonnet`, `opus`)
+
+Templates are stored as JSON files in `<projectRoot>/.oracle/templates/` (default project root is `process.cwd()`). There is no environment variable or config file; the store location is derived from the current working directory.
+
+Note: `session` is accepted as a `type` value in the template schema, but no `create session` subcommand or session-scaffolding function exists in this version.
+
+## Library API
+
+Importable from `oracle-templates` (`main` → `dist/index.js`):
+
+- `createSkillTemplate(opts)` — returns a `Template` for a skill scaffold
+- `createOracleTemplate(opts)` — returns a `Template` for an oracle agent manifest
+- `listTemplates(projectRoot?)` — list installed templates
+- `listBuiltinTemplates()` — list built-in templates
+- `installTemplate(sourcePath, projectRoot?)` — install from a JSON file
+- `uninstallTemplate(name, projectRoot?)` — remove by name
+- `applyTemplate(name, targetDir?, projectRoot?)` — write scaffold files
+
+All store functions return a `TemplateResult` (`{ ok, summary, data? }`).
 
 ## Template format
 
+A template is a JSON object validated by `TemplateSchema`:
+
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Unique name |
-| `type` | string | `skill`, `oracle`, or `session` |
-| `description` | string | Description |
-| `version` | string | Semver |
-| `files` | object[] | Files to scaffold |
-| `metadata` | object | Type-specific data |
+| `name` | string | Unique template name |
+| `type` | `"skill" \| "oracle" \| "session"` | Template category |
+| `description` | string | Human-readable description |
+| `version` | string | Semver (default `"1.0.0"`) |
+| `author` | string | Optional author |
+| `tags` | string[] | Search/filter tags |
+| `files` | `{ path, content }[]` | Files written on apply |
+| `metadata` | object | Type-specific payload |
 
 ## Layout
 
 ```
-.oracle/templates/      # Installed templates
-templates/built-in/     # Shipped templates
+templates/built-in/   # templates shipped with the package
 src/
-├── cli.ts              # CLI entry point
-├── templates/          # Template logic
-└── types.ts            # Shared types
+├── cli.ts            # CLI entry point
+├── index.ts          # library barrel
+├── types.ts          # Template schema & types
+├── utils.ts          # filesystem / path helpers
+└── templates/        # store + skill/oracle scaffolding
 ```
-
-## Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `npm run build` | Compile TypeScript |
-| `npm run check` | Type-check only |
-| `npm run dev` | Run CLI via tsx |
-| `npm start` | Run compiled |
-| `npm test` | Run tests |
-
-## Related
-
-- [Oracle](https://github.com/JonusNattapong/Oracle) — CLI for AI code consulting
-- [Oracle-memory](https://github.com/JonusNattapong/Oracle-memory) — File-backed MCP memory server
-- [Oracle-messages](https://github.com/JonusNattapong/Oracle-messages) — MCP message bus
-- [Oracle-skill](https://github.com/JonusNattapong/Oracle-skill) — Cross-agent workflow docs

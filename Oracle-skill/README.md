@@ -1,43 +1,29 @@
 # Oracle Skill
 
-> The instruction manual you hand your AI. One file that teaches any agent how to use the Oracle stack *correctly*.
+A single portable `SKILL.md` that teaches an AI agent the habits for using the Oracle stack (oracle-messages bus and oracle-memory) across sessions and between agents.
 
-Giving an agent access to memory and a message bus is easy. Teaching it the *habits* —
-recall before you start, onboard before you message, write down what you learned
-before you stop — is the hard part. **Oracle Skill** is that habit, packaged as
-a single portable `SKILL.md`.
+## What's here
 
-## Quick start
+This repository contains one workflow document and its supporting files. `SKILL.md` is the product — a Claude Code / Codex / Gemini-compatible skill that instructs an agent to detect the Oracle MCP servers, recall memory, onboard onto the message bus, run a wait-for-message core loop, and write back durable learnings. `README.md` is this overview. `.clew/workspace.json` records a linked workspace path (`D:\Github\Oracle`).
 
-Drop [`SKILL.md`](./SKILL.md) into your agent's skills directory:
+## Structure
+
+- `SKILL.md` — the skill body. Frontmatter (`name`, `description`, triggers) plus sections: detect available servers, session-start sequence, core dev loop, when to write memory (fact/insight/chunk/working), combined full loop, tool-surface reference for both MCP servers, setup/install steps, a Windows note, and anti-patterns.
+- `README.md` — this file.
+- `.clew/workspace.json` — Clew workspace metadata linking to a sibling `Oracle` repo.
+
+## Usage
+
+Copy `SKILL.md` into an agent's skills directory so it auto-loads:
 
 ```bash
-# Claude Code
-cp SKILL.md .claude/skills/oracle/
+# User-wide
+mkdir -p ~/.claude/skills/oracle
+cp SKILL.md ~/.claude/skills/oracle/SKILL.md
+
+# Or project-scoped
+mkdir -p ./.claude/skills/oracle
+cp SKILL.md ./.claude/skills/oracle/SKILL.md
 ```
 
-The agent discovers it automatically. No config, no wiring.
-
-## What your agent learns
-
-| Habit | Why |
-|-------|-----|
-| Detect first | Check which MCP servers are connected |
-| Start right | Recall memory, then onboard onto the bus |
-| Core loop | Wait → resolve threads → handle tasks → write memory → repeat |
-| Remember where | When to write fact vs insight vs chunk vs working |
-| Full toolbox | Complete tool/resource reference for both MCP surfaces |
-
-## Layout
-
-```
-SKILL.md       # The product — this is what agents read
-README.md      # The trailer (this file)
-```
-
-## Related
-
-- [Oracle](https://github.com/JonusNattapong/Oracle) — CLI for AI code consulting
-- [Oracle-memory](https://github.com/JonusNattapong/Oracle-memory) — File-backed MCP memory server
-- [Oracle-messages](https://github.com/JonusNattapong/Oracle-messages) — MCP message bus
-- [Oracle-templates](https://github.com/JonusNattapong/Oracle-templates) — Template system
+The skill applies only when the `oracle` (messages) and/or `oracle-memory` MCP servers are connected — it is documentation for the agent, not a runnable package. Detailed setup for the broader Oracle ecosystem (Oracle CLI, Oracle-memory, Oracle-messages) lives in section 6 of `SKILL.md`.

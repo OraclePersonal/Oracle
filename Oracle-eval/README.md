@@ -1,65 +1,58 @@
-# Oracle-eval
+# oracle-eval
 
-> The benchmark suite that tells you if the stack is actually working.
+MCP server and standalone runner for benchmarking the Oracle multi-agent stack (oracle-memory and oracle-messages).
 
-MCP server for evaluating and benchmarking the Oracle multi-agent coordination stack.
-Measures memory retrieval quality (recall@k, MRR, temporal accuracy) and message
-bus throughput (send/poll latency). Generates SVG bar-chart reports.
+## What it does
 
-## Quick start
+A TypeScript MCP server that runs quality and throughput benchmarks against live Oracle stack components over HTTP, and renders the results as an SVG bar-chart report. The memory evaluator measures `recall@k`, MRR, and temporal correctness (whether newer info displaces older info). The messages evaluator measures send/poll latency and throughput against an `oracle-messages` server. It can run as an MCP server (`oracle-eval`) or as a standalone benchmark harness via the `bench` script.
 
-```bash
-npm install && npm run build
-npm run dev              # MCP server (stdio)
-npm run bench            # run benchmarks
-```
-
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `eval_memory` | Benchmark oracle-memory retrieval quality (recall@k, MRR, temporal) |
-| `eval_messages` | Benchmark oracle-messages throughput (send/poll latency) |
-
-## Benchmarks
+## Build / Install
 
 ```bash
-npm run bench                              # full suite
-npm run bench -- --quick                   # memory quality only
-npm run bench -- --memory http://host:8765 # custom endpoint
-npm run bench -- --output ./report.svg     # custom output
+npm install
+npm run build      # compile TypeScript to dist/ (tsc)
+npm run check      # type-check only
+npm run dev        # run MCP server directly via tsx (no build)
+npm start          # run built server (node dist/index.js)
+npm test           # run vitest suite
 ```
 
-Results rendered as `bench/results/results.svg`.
+## Usage
 
-## Layout
+### As an MCP server
 
-```
-src/
-├── index.ts            # MCP server entry point
-├── types.ts            # Shared types
-├── eval/
-│   ├── memory.ts       # Memory evaluator
-│   └── messages.ts     # Messages evaluator
-└── report.ts           # SVG report generator
-bench/
-└── run.ts              # Standalone runner
+```bash
+npm run dev        # stdio MCP server
+# or, after building:
+oracle-eval        # bin -> dist/index.js
 ```
 
-## Scripts
+The server exposes two tools (called via MCP `tools/call`):
 
-| Script | Purpose |
-|--------|---------|
-| `npm run build` | Compile TypeScript |
-| `npm run check` | Type-check only |
-| `npm run dev` | Run MCP server via tsx |
-| `npm start` | Run compiled |
-| `npm test` | Run tests |
-| `npm run bench` | Run benchmarks |
+- `eval_memory` — benchmark oracle-memory retrieval quality.
+  - `memoryEndpoint` (string, default `http://localhost:8765`)
+  - `limit` (number, default `5`) — k for recall@k
+  - `quick` (boolean, default `false`) — skip scale phase
+- `eval_messages` — benchmark oracle-messages throughput.
+  - `messagesEndpoint` (string, default `http://localhost:8766`)
+  - `iterations` (number, default `50`)
+  - `payloadSize` (number, default `256` bytes)
 
-## Related
+### As a benchmark runner (SVG report)
 
-- [Oracle](https://github.com/JonusNattapong/Oracle) — CLI for AI code consulting
-- [Oracle-memory](https://github.com/JonusNattapong/Oracle-memory) — File-backed MCP memory server
-- [Oracle-messages](https://github.com/JonusNattapong/Oracle-messages) — MCP message bus
-- [Oracle-templates](https://github.com/JonusNattapong/Oracle-templates) — Template system
+```bash
+npm run bench                                       # full suite (memory + messages)
+npm run bench -- --quick                            # memory quality only
+npm run bench -- --memory http://localhost:8765     # custom memory endpoint
+npm run bench -- --messages http://localhost:8766   # custom messages endpoint
+npm run bench -- --output ./custom-report.svg       # custom output path
+```
+
+Outputs an SVG report to `bench/results/results.svg` (or the path given with `--output`).
+
+## Configuration / environment variables
+
+- `ORACLE_EVAL_MEMORY_ENDPOINT` — default memory endpoint (falls back to `http://localhost:8765`).
+- `ORACLE_EVAL_MESSAGES_ENDPOINT` — default messages endpoint (falls back to `http://localhost:8766`).
+
+If no endpoint is set, the corresponding benchmark phase is skipped unless supplied explicitly.
