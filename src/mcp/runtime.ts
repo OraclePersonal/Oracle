@@ -3,7 +3,8 @@ import os from "node:os";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { loadProjectConfig } from "../config/project.js";
 import { ConsultService } from "../core/consult.js";
-import { createProvider } from "../providers/factory.js";
+import { createProvider, createAgentProvider } from "../providers/factory.js";
+import { AgentService } from "../agent/service.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { ProfileStore } from "../identity/profile.js";
@@ -26,6 +27,16 @@ export async function createOracleMcpServer(
   const orchestrator = new OrchestratorFactory(workspaceRoot, homeDir);
   const memory = await orchestrator.createMemoryAdapter();
 
+  // The agentic loop (oracle_agent) needs a tool-capable provider; wire it when
+  // the configured provider supports tool use, otherwise leave a clear reason.
+  let agent: AgentService | undefined;
+  let agentUnavailableReason: string | undefined;
+  try {
+    agent = new AgentService(createAgentProvider(config.provider));
+  } catch (error) {
+    agentUnavailableReason = error instanceof Error ? error.message : String(error);
+  }
+
   registerOracleTools({
     server,
     service: new ConsultService(createProvider(config.provider)),
@@ -35,7 +46,9 @@ export async function createOracleMcpServer(
     skills,
     oracles,
     memory,
-    profile: new ProfileStore(homeDir)
+    profile: new ProfileStore(homeDir),
+    agent,
+    agentUnavailableReason
   });
   return server;
 }

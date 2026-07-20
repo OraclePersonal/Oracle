@@ -10,8 +10,10 @@ import { ConsultService } from "./core/consult.js";
 import {
   checkProvider,
   createProvider,
+  createAgentProvider,
   parseProviderName
 } from "./providers/factory.js";
+import { AgentService } from "./agent/service.js";
 import { FileSessionStore } from "./session/store.js";
 import {
   ensureProjectConfig,
@@ -220,6 +222,43 @@ program
 
     console.log(result.output);
     process.exitCode = result.status === "completed" ? 0 : 1;
+  });
+
+// ── agent (autonomous coding loop) ────────────────────────────────
+program
+  .command("agent")
+  .description("Autonomously carry out a coding task — reads/writes/edits files and runs commands in a tool-use loop")
+  .argument("<task>", "The task to carry out, e.g. 'add a --verbose flag and update the README'")
+  .option("--provider <provider>", "Provider override (agent needs anthropic or opencode)")
+  .option("-m, --model <model>", "Model override", "auto")
+  .option("--read-only", "Investigate only — disables write_file/edit_file/bash")
+  .option("--max-steps <n>", "Max agent turns before stopping", "20")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (task, options) => {
+    const cwd = path.resolve(options.cwd);
+    const parsedProvider = parseProviderName(options.provider ?? "anthropic");
+    const checks = await checkProvider(parsedProvider);
+    const failedCheck = checks.find((chk) => !chk.ok);
+    if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
+
+    const agent = new AgentService(createAgentProvider(parsedProvider));
+    const result = await agent.run({
+      prompt: task,
+      workspaceRoot: cwd,
+      model: options.model,
+      readOnly: Boolean(options.readOnly),
+      maxSteps: Number(options.maxSteps),
+      onStep: (step) => {
+        const tools = step.toolsUsed.length ? ` → ${step.toolsUsed.join(", ")}` : " → done";
+        console.error(`[turn ${step.turn}]${tools}`);
+      }
+    });
+
+    console.log(result.finalText);
+    if (result.stoppedOnLimit) {
+      console.error(`\n(stopped after hitting the ${options.maxSteps}-turn limit)`);
+    }
+    process.exitCode = 0;
   });
 
 // ── watch (autonomy layer) ────────────────────────────────────────

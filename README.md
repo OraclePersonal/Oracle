@@ -4,8 +4,8 @@
   <img src="docs/oracle-logo.png" alt="Oracle logo" width="720">
 </p>
 
-MCP-powered AI coding consultant with persistent memory, a docs knowledge
-base, and web access.
+MCP-powered AI coding assistant with an autonomous agent, persistent memory, a
+docs knowledge base, and web access.
 Ships both a CLI (`oracle`) and an MCP server (`oracle-mcp`) for Claude Code,
 opencode, Clew Code, and any MCP-compatible agent.
 
@@ -15,6 +15,11 @@ Oracle answers questions and reviews code with project context, and remembers
 across conversations. It pulls context from four sources — persistent memory
 (facts, insights, a compiled wiki), a local docs store (`.oracle/docs/`), the
 web, and your project files — then asks a configured provider/model.
+
+It also runs as an **autonomous coding agent** (like Claude Code / opencode):
+give it a task and it reads, writes, and edits files, searches the codebase, and
+runs shell commands in a tool-use loop until the work is done — see
+[`docs/AGENT.md`](docs/AGENT.md).
 
 ## Install & build
 
@@ -33,6 +38,8 @@ Scripts: `build`, `dev` (tsx src/cli.ts), `mcp` (tsx src/mcp.ts),
 oracle ask "what does ECONNRESET on a Redis client mean?"
 oracle ask "review this for edge cases" -f "src/**/*.ts" --soul engineer
 oracle consult -p "Review this" -f "src/**/*.ts" --diff HEAD~1
+oracle agent "add a --verbose flag to the CLI and update the README"
+oracle agent "explain how sessions are stored" --read-only
 oracle doctor
 ```
 
@@ -41,6 +48,7 @@ Commands:
 | Command | Purpose |
 |---|---|
 | `ask` | One-shot question; `-f` to include files, `--soul` for persona, `--conversation` for continuity |
+| `agent` | Autonomous coding loop: reads/writes/edits files + runs commands (`--read-only`, `--max-steps`); needs `anthropic`/`opencode` |
 | `consult` | Review with project context; `-f` globs, `--diff [target]` |
 | `watch` | Auto-review the working-tree diff on save |
 | `memory` `list\|clear` | Inspect / clear the memory store |
@@ -75,10 +83,11 @@ Wire `oracle-mcp` (built to `dist/mcp.js`) into your MCP client:
 
 Or run `oracle setup-mcp` to generate it.
 
-## MCP tools (25)
+## MCP tools (26)
 
-**Ask**
-`oracle_ask` — one entry point; pass `files` when the answer needs real code, omit for plain Q&A
+**Ask & Agent**
+`oracle_ask` — one entry point for Q&A; pass `files` when the answer needs real code, omit for plain Q&A
+`oracle_agent` — autonomous coding loop; reads/writes/edits files + runs commands until the task is done (`readOnly` to investigate only)
 
 **Memory**
 `oracle_memory_list`, `oracle_memory_search`, `oracle_memory_update`,

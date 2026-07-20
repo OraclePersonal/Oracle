@@ -20,6 +20,7 @@ import { webSearchWithTrace } from "../web/search.js";
 import { fetchUrl } from "../web/fetchUrl.js";
 import { agentqlExtract } from "../web/providers/agentql.js";
 import { SEARCH_PROVIDERS, FETCH_PROVIDERS } from "../web/types.js";
+import type { AgentService } from "../agent/service.js";
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -32,6 +33,10 @@ interface OracleServerDependencies {
   memory: MemoryPort;
   profile: ProfileStore;
   providerChecks?: typeof checkProvider;
+  /** Present only when the configured provider supports agentic tool use. */
+  agent?: AgentService;
+  /** Why the agent is unavailable, surfaced by oracle_agent when agent is undefined. */
+  agentUnavailableReason?: string;
 }
 
 /**
@@ -89,8 +94,81 @@ export function registerOracleTools({
   memory,
   profile,
   providerChecks = checkProvider,
+  agent,
+  agentUnavailableReason,
   soulsDir = path.join(os.homedir(), ".oracle", "souls")
 }: OracleServerDependencies & { soulsDir?: string }): void {
+  server.registerTool(
+    "oracle_agent",
+    {
+      title: "Run Oracle Agent",
+      description:
+        "Autonomously carry out a coding task in the workspace: Oracle reads/writes/edits files, searches the codebase, and runs shell commands (build, tests, git) in a tool-use loop until the task is done. Use for 'implement X', 'fix the failing test', 'refactor Y'. Set readOnly to investigate without changing anything. Requires an agent-capable provider (anthropic or opencode).",
+      inputSchema: {
+        prompt: z
+          .string()
+          .min(1)
+          .max(50000)
+          .describe("The task to carry out, e.g. 'add a --verbose flag to the CLI and update the README'"),
+        readOnly: z
+          .boolean()
+          .optional()
+          .describe("Investigate only — disables write_file/edit_file/bash (default false)"),
+        maxSteps: z
+          .number()
+          .int()
+          .min(1)
+          .max(50)
+          .optional()
+          .describe("Max agent turns before stopping (default 20)")
+      }
+    },
+    async ({ prompt, readOnly, maxSteps }, extra) => {
+      try {
+        if (!agent) {
+          throw new OracleError(
+            "ORACLE_AGENT_UNAVAILABLE",
+            "The agent is not available with the configured provider.",
+            agentUnavailableReason ??
+              "Set provider to 'anthropic' or 'opencode' in .oracle/config.json."
+          );
+        }
+        const progressToken = extra._meta?.progressToken;
+        const result = await agent.run({
+          prompt,
+          workspaceRoot,
+          model: config.model,
+          readOnly,
+          maxSteps,
+          onStep: async (step) => {
+            if (progressToken === undefined) return;
+            await extra.sendNotification({
+              method: "notifications/progress",
+              params: {
+                progressToken,
+                progress: step.turn,
+                message:
+                  step.toolsUsed.length > 0
+                    ? `Turn ${step.turn}: ${step.toolsUsed.join(", ")}`
+                    : `Turn ${step.turn}: finalizing`
+              }
+            });
+          }
+        });
+        return success(result.finalText, {
+          finalText: result.finalText,
+          steps: result.steps,
+          stoppedOnLimit: result.stoppedOnLimit,
+          turns: result.steps.length,
+          usage: result.usage,
+          readOnly: readOnly ?? false
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    }
+  );
+
   server.registerTool(
     "oracle_ask",
     {
