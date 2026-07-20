@@ -11,8 +11,8 @@ export interface ProcessInfo {
 }
 
 /**
- * ProcessSupervisor manages the lifecycle of oracle-memory and oracle-messages
- * as background daemon processes. Each process:
+ * ProcessSupervisor manages the lifecycle of oracle-memory as a background
+ * daemon process. The process:
  * - Is spawned once and left running (not killed per CLI invocation)
  * - Exits via idle-timeout (10 min default, set via env var in the process)
  * - Stores pid/port in ~/.oracle/run/<service>.{pid,port} lockfiles
@@ -31,7 +31,7 @@ export class ProcessSupervisor {
    * or spawns a new one if needed. Returns the endpoint (URL) or null if fallback is required.
    */
   async ensureRunning(
-    service: "memory" | "messages"
+    service: "memory"
   ): Promise<{ endpoint: string; pid: number; port: number } | null> {
     const existing = await this.readLockFile(service);
 
@@ -52,7 +52,7 @@ export class ProcessSupervisor {
   }
 
   private async spawnServiceExclusive(
-    service: "memory" | "messages"
+    service: "memory"
   ): Promise<{ endpoint: string; pid: number; port: number } | null> {
     const lockPath = path.join(this.runDir, `${service}.spawn.lock`);
     await fs.mkdir(this.runDir, { recursive: true });
@@ -83,7 +83,7 @@ export class ProcessSupervisor {
   }
 
   private async waitForSibling(
-    service: "memory" | "messages",
+    service: "memory",
     lockPath: string
   ): Promise<{ endpoint: string; pid: number; port: number } | null> {
     const STALE_MS = 30_000;
@@ -110,7 +110,7 @@ export class ProcessSupervisor {
   }
 
   private async readLockFile(
-    service: "memory" | "messages"
+    service: "memory"
   ): Promise<{ endpoint: string; pid: number; port: number } | null> {
     try {
       const pidFile = path.join(this.runDir, `${service}.pid`);
@@ -131,7 +131,7 @@ export class ProcessSupervisor {
     }
   }
 
-  private async writeLockFile(service: "memory" | "messages", pid: number, port: number): Promise<void> {
+  private async writeLockFile(service: "memory", pid: number, port: number): Promise<void> {
     await fs.mkdir(this.runDir, { recursive: true });
     const pidFile = path.join(this.runDir, `${service}.pid`);
     const portFile = path.join(this.runDir, `${service}.port`);
@@ -145,7 +145,7 @@ export class ProcessSupervisor {
     await fs.rename(portTmp, portFile);
   }
 
-  private async removeLockFile(service: "memory" | "messages"): Promise<void> {
+  private async removeLockFile(service: "memory"): Promise<void> {
     try {
       await fs.unlink(path.join(this.runDir, `${service}.pid`));
     } catch {
@@ -158,19 +158,12 @@ export class ProcessSupervisor {
     }
   }
 
-  private async healthCheck(service: "memory" | "messages", endpoint: string): Promise<boolean> {
+  private async healthCheck(service: "memory", endpoint: string): Promise<boolean> {
     try {
       const controller = new AbortController();
       const timeoutHandle = setTimeout(() => controller.abort(), 3000);
 
-      // oracle-memory exposes a real /health route (200 when up) — check it
-      // strictly. oracle-messages has no dedicated health route; its /mcp
-      // endpoint answers a bare GET with 406 (wrong Accept header for the
-      // MCP streamable-http protocol) rather than 200, so *any* HTTP
-      // response — not just 2xx — proves the process is up and listening.
-      // Only a network-level failure (connection refused, timeout) means
-      // "not running".
-      const url = service === "memory" ? `${endpoint.replace("/mcp", "")}/health` : endpoint;
+      const url = `${endpoint.replace("/mcp", "")}/health`;
 
       const resp = await fetch(url, {
         method: "GET",
@@ -178,7 +171,7 @@ export class ProcessSupervisor {
       });
 
       clearTimeout(timeoutHandle);
-      return service === "memory" ? resp.ok : true;
+      return resp.ok;
     } catch {
       return false;
     }
@@ -209,19 +202,9 @@ export class ProcessSupervisor {
     }
   }
 
-  private async spawnService(service: "memory" | "messages"): Promise<{ endpoint: string; pid: number; port: number } | null> {
+  private async spawnService(service: "memory"): Promise<{ endpoint: string; pid: number; port: number } | null> {
     const port = await this.findFreePort();
-    // oracle-messages' cargo bin is literally named "oracle" (collides with
-    // this CLI's own bin name — see Oracle-skill/SKILL.md), so there is no
-    // safe default bare command for it: spawning "oracle" could invoke the
-    // wrong binary if this CLI's own `oracle` happens to resolve first on
-    // PATH. ORACLE_MESSAGES_BIN lets a workspace point at the exact built
-    // binary; ORACLE_MEMORY_BIN is the equivalent override for symmetry,
-    // though oracle-memory's npm bin name matches the default already.
-    const command =
-      service === "memory"
-        ? process.env.ORACLE_MEMORY_BIN || "oracle-memory"
-        : process.env.ORACLE_MESSAGES_BIN || "oracle-messages-mcp";
+    const command = process.env.ORACLE_MEMORY_BIN || "oracle-memory";
 
     // Resolve how to actually launch the command cross-platform. A bare
     // ".exe"/POSIX binary spawns directly, but two common install shapes need
@@ -245,27 +228,15 @@ export class ProcessSupervisor {
     }
 
     try {
-      // Both binaries take zero CLI args and read transport/port purely from
-      // env vars — oracle-memory (Node) would silently ignore stray argv,
-      // but oracle-messages (Rust/clap) hard-errors and exits immediately on
-      // any unrecognized flag, which used to make every spawn attempt fail
-      // the health check without ever actually starting the server.
+      // oracle-memory takes zero CLI args and reads transport/port from env.
       const proc = spawn(execCommand, execArgs, {
         detached: true,
         stdio: "ignore",
         shell: useShell,
         env: {
           ...process.env,
-          ...(service === "memory" && { ORACLE_MEMORY_PORT: String(port), ORACLE_MEMORY_TRANSPORT: "http" }),
-          // Give the shared messages daemon a default agent identity so
-          // identity-scoped tools (sync_messages, etc.) resolve without every
-          // caller passing --agent. "oracle" matches the CLI's default sender.
-          // An explicit ORACLE_SELF in the environment still wins.
-          ...(service === "messages" && {
-            ORACLE_PORT: String(port),
-            ORACLE_TRANSPORT: "http",
-            ORACLE_SELF: process.env.ORACLE_SELF || "oracle",
-          }),
+          ORACLE_MEMORY_PORT: String(port),
+          ORACLE_MEMORY_TRANSPORT: "http",
         },
       });
 
@@ -325,7 +296,7 @@ export class ProcessSupervisor {
    * Gracefully shutdown a managed process (if we spawned it).
    * In practice, this is rarely needed since the daemon self-exits on idle timeout.
    */
-  async shutdown(service: "memory" | "messages"): Promise<void> {
+  async shutdown(service: "memory"): Promise<void> {
     const proc = this.activeProcesses.get(service);
     if (proc) {
       try {

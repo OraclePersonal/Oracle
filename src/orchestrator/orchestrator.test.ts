@@ -72,20 +72,7 @@ describe("OrchestratorFactory", () => {
     expect(memAdapter.remember).toBeDefined();
 
     // Verify it's the file adapter by checking the status
-    const status = factory.getStatus("memory");
-    expect(status).toBeDefined();
-    expect(status?.transport).toBe("fallback");
-  });
-
-  it("should fallback to file adapter for messages when MCP spawn fails", async () => {
-    const msgAdapter = await factory.createMessagesAdapter();
-
-    // Should return a valid adapter (file-based fallback)
-    expect(msgAdapter).toBeDefined();
-    expect(msgAdapter.send).toBeDefined();
-
-    // Verify it's the file adapter by checking the status
-    const status = factory.getStatus("messages");
+    const status = factory.getStatus();
     expect(status).toBeDefined();
     expect(status?.transport).toBe("fallback");
   });
@@ -133,30 +120,4 @@ describe("OrchestratorFactory", () => {
     expect(recalled[1].id).toBe(written[3].id);
   });
 
-  it("file-based message adapters should work correctly", async () => {
-    const msgAdapter = await factory.createMessagesAdapter();
-
-    // Test send
-    const msg = await msgAdapter.send("alice", "bob", "Hello Bob", "message", {
-      subject: "Test message",
-    });
-
-    expect(msg).toBeDefined();
-    expect(msg.sender).toBe("alice");
-    expect(msg.recipient).toBe("bob");
-    expect(msg.body).toBe("Hello Bob");
-
-    // Test getMessages
-    const messages = await msgAdapter.getMessages({ agent: "bob" });
-    expect(messages.length).toBeGreaterThan(0);
-    expect(messages[messages.length - 1].id).toBe(msg.id);
-
-    // Test broadcast
-    const broadcast = await msgAdapter.broadcast("alice", "Hello everyone", "note");
-    expect(broadcast.recipient).toBe("*");
-
-    // Test getMessages includes broadcast
-    const allMsgs = await msgAdapter.getMessages();
-    expect(allMsgs.some((m) => m.id === broadcast.id)).toBe(true);
-  });
 });
