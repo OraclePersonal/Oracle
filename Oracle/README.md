@@ -5,7 +5,7 @@
 </p>
 
 MCP-powered AI coding consultant with persistent memory, a docs knowledge
-base, web access, GitHub integration, and multi-agent peer coordination.
+base, web access, and GitHub integration.
 Ships both a CLI (`oracle`) and an MCP server (`oracle-mcp`) for Claude Code,
 opencode, Clew Code, and any MCP-compatible agent.
 
@@ -14,9 +14,8 @@ opencode, Clew Code, and any MCP-compatible agent.
 Oracle answers questions and reviews code with project context, and remembers
 across conversations. It pulls context from four sources — persistent memory
 (facts, insights, a compiled wiki), a local docs store (`.oracle/docs/`), the
-web, and your project files — then asks a configured provider/model. It also
-coordinates with other agents through a peer mesh (messages, locks) and can
-read/review GitHub PRs and issues.
+web, and your project files — then asks a configured provider/model. It can
+also read/review GitHub PRs and issues.
 
 ## Install & build
 
@@ -49,7 +48,6 @@ Commands:
 | `wiki` `build\|list\|show` | Compile and browse the memory wiki |
 | `docs` `list\|search\|add\|remove` | Manage the local docs knowledge base |
 | `web` `search\|fetch\|extract` | Web search, fetch a URL, structured extract |
-| `peer` `send\|list\|monitor\|lock\|unlock\|export\|import` | Multi-agent mesh coordination |
 | `oracle` `list\|register\|unregister\|show` | Manage oracle profiles |
 | `session` `list\|show` | Browse past consult sessions |
 | `github` `check\|pr\|issue\|search\|get` | GitHub PR/issue access |
@@ -103,11 +101,6 @@ Or run `oracle setup-mcp` to generate it.
 `oracle_github_pr_review_submit`, `oracle_github_issue_get`,
 `oracle_github_issue_list`, `oracle_github_comment`, `oracle_github_search`,
 `oracle_github_api`
-
-**Peer / mesh**
-`oracle_peer_send`, `oracle_peer_broadcast`, `oracle_peer_list`,
-`oracle_peer_unread`, `oracle_peer_thread`, `oracle_peer_lock_acquire`,
-`oracle_peer_lock_release`, `oracle_peer_lock_renew`, `oracle_peer_lock_check`
 
 **Oracle profiles**
 `oracle_oracle_list`, `oracle_oracle_register`
