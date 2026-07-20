@@ -1,6 +1,37 @@
 import OpenAI from "openai";
 import type { Provider, ProviderRequest } from "./provider.js";
 import type { ProviderResponse } from "../types.js";
+import type { AgentMessage, AgentProvider, AgentTool, AgentTurn, ToolCall } from "../agent/types.js";
+
+/** Translate the neutral transcript into OpenAI chat-completion messages. */
+function toOpenAIMessages(
+  system: string,
+  messages: AgentMessage[]
+): OpenAI.Chat.ChatCompletionMessageParam[] {
+  const out: OpenAI.Chat.ChatCompletionMessageParam[] = [{ role: "system", content: system }];
+  for (const m of messages) {
+    if (m.role === "user") {
+      out.push({ role: "user", content: m.content });
+    } else if (m.role === "assistant") {
+      out.push({
+        role: "assistant",
+        content: m.text || null,
+        tool_calls: m.toolCalls.length
+          ? m.toolCalls.map((c) => ({
+              id: c.id,
+              type: "function" as const,
+              function: { name: c.name, arguments: JSON.stringify(c.input) },
+            }))
+          : undefined,
+      });
+    } else {
+      for (const r of m.results) {
+        out.push({ role: "tool", tool_call_id: r.id, content: r.content });
+      }
+    }
+  }
+  return out;
+}
 
 export class OpenAIProvider implements Provider {
   readonly id = "openai";
@@ -54,7 +85,7 @@ export class OpenAIProvider implements Provider {
  * OpenAI-compatible provider for third-party APIs (OpenRouter, Groq, local LLMs, etc.).
  * Set OPENAI_API_KEY + OPENAI_API_BASE (or pass via constructor).
  */
-export class OpenCodeProvider implements Provider {
+export class OpenCodeProvider implements Provider, AgentProvider {
   readonly id = "opencode";
   private readonly client: OpenAI;
   private readonly defaultModel: string;
@@ -95,6 +126,45 @@ export class OpenCodeProvider implements Provider {
         inputTokens: response.usage?.prompt_tokens,
         outputTokens: response.usage?.completion_tokens,
         totalTokens: response.usage?.total_tokens,
+      },
+    };
+  }
+
+  /** Runs one agentic turn via chat-completions function calling. */
+  async runAgentTurn(params: {
+    model: string;
+    system: string;
+    messages: AgentMessage[];
+    tools: AgentTool[];
+  }): Promise<AgentTurn> {
+    const model = params.model === "gpt-5.4" ? this.defaultModel : params.model;
+    const response = await this.client.chat.completions.create({
+      model,
+      messages: toOpenAIMessages(params.system, params.messages),
+      tools: params.tools.map((t) => ({
+        type: "function" as const,
+        function: { name: t.name, description: t.description, parameters: t.inputSchema },
+      })),
+    });
+
+    const choice = response.choices[0]?.message;
+    const toolCalls: ToolCall[] = [];
+    for (const c of choice?.tool_calls ?? []) {
+      if (c.type !== "function") continue;
+      let input: Record<string, unknown> = {};
+      try {
+        input = JSON.parse(c.function.arguments || "{}");
+      } catch {
+        input = {};
+      }
+      toolCalls.push({ id: c.id, name: c.function.name, input });
+    }
+
+    return {
+      message: { role: "assistant", text: choice?.content ?? "", toolCalls },
+      usage: {
+        inputTokens: response.usage?.prompt_tokens,
+        outputTokens: response.usage?.completion_tokens,
       },
     };
   }

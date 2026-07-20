@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Provider, ProviderRequest } from "./provider.js";
 import type { ProviderResponse } from "../types.js";
 import { AnthropicOAuthClient, type PlanTier } from "../auth/anthropic-oauth.js";
+import type { AgentMessage, AgentProvider, AgentTool, AgentTurn, ToolCall } from "../agent/types.js";
 
 const OAUTH_BETA_HEADER = "oauth-2025-04-20";
 
@@ -19,7 +20,34 @@ const TIER_MAX_RETRIES: Record<PlanTier, number> = {
   max: 5
 };
 
-export class AnthropicProvider implements Provider {
+/** Translate the neutral transcript into Anthropic message params. */
+function toAnthropicMessages(messages: AgentMessage[]): Anthropic.MessageParam[] {
+  return messages.map((m): Anthropic.MessageParam => {
+    if (m.role === "user") {
+      return { role: "user", content: m.content };
+    }
+    if (m.role === "assistant") {
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      if (m.text) blocks.push({ type: "text", text: m.text });
+      for (const call of m.toolCalls) {
+        blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.input });
+      }
+      return { role: "assistant", content: blocks.length ? blocks : [{ type: "text", text: "" }] };
+    }
+    // tool results are sent back as a user message of tool_result blocks
+    return {
+      role: "user",
+      content: m.results.map((r) => ({
+        type: "tool_result" as const,
+        tool_use_id: r.id,
+        content: r.content,
+        is_error: r.isError,
+      })),
+    };
+  });
+}
+
+export class AnthropicProvider implements Provider, AgentProvider {
   readonly id = "anthropic";
   private client?: Anthropic;
   private planTier: PlanTier = "api";
@@ -109,6 +137,49 @@ export class AnthropicProvider implements Provider {
             ? msg.usage.input_tokens + msg.usage.output_tokens
             : undefined
       }
+    };
+  }
+
+  /**
+   * Runs one agentic turn with tools available: sends the current transcript
+   * plus tool schemas, and returns the assistant's text + any tool_use blocks
+   * as a neutral AgentTurn for the provider-agnostic loop to act on.
+   */
+  async runAgentTurn(params: {
+    model: string;
+    system: string;
+    messages: AgentMessage[];
+    tools: AgentTool[];
+  }): Promise<AgentTurn> {
+    const client = await this.getClient();
+    const msg = await client.messages.create({
+      model: this.resolveModel(params.model),
+      max_tokens: 8192,
+      system: params.system,
+      messages: toAnthropicMessages(params.messages),
+      tools: params.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        input_schema: t.inputSchema as Anthropic.Tool.InputSchema,
+      })),
+    });
+
+    let text = "";
+    const toolCalls: ToolCall[] = [];
+    for (const block of msg.content) {
+      if (block.type === "text") text += block.text;
+      else if (block.type === "tool_use") {
+        toolCalls.push({
+          id: block.id,
+          name: block.name,
+          input: (block.input ?? {}) as Record<string, unknown>,
+        });
+      }
+    }
+
+    return {
+      message: { role: "assistant", text, toolCalls },
+      usage: { inputTokens: msg.usage?.input_tokens, outputTokens: msg.usage?.output_tokens },
     };
   }
 

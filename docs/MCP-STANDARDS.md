@@ -1,6 +1,6 @@
 # Oracle MCP Tool Standards
 
-This document defines the standardization layer for all Oracle MCP tools, ensuring consistency, quality, and maintainability across the 25-tool surface.
+This document defines the standardization layer for all Oracle MCP tools, ensuring consistency, quality, and maintainability across the 26-tool surface.
 
 ## Architecture
 
@@ -66,16 +66,24 @@ cache.invalidatePattern("skill-.*");
 
 ## Tool Categories
 
-### 1. Ask (1 tool)
-- `oracle_ask` — Single entry point: freeform question, or "look at these files and tell me X" when `files` is passed
+### 1. Ask & Agent (2 tools)
+- `oracle_ask` — Single entry point for Q&A: freeform question, or "look at these files and tell me X" when `files` is passed
+- `oracle_agent` — Autonomous coding loop: reads/writes/edits files, searches, and runs shell commands in a tool-use loop until the task is done (see [`AGENT.md`](AGENT.md))
 
-**Standards:**
+**Standards (`oracle_ask`):**
 - Question max 50KB
 - File glob support with `!exclude` patterns (optional — omit for plain Q&A)
 - Conversation continuity via `conversationId`
 - Optional docs injection via `include_docs`
 - Auto-scopes memory to an oracle profile via `oracle` (recall before, save insight after)
 - Auto-injects identity + memory context
+
+**Standards (`oracle_agent`):**
+- Prompt max 50KB; `maxSteps` bounded 1..50 (default 20)
+- `readOnly` drops all mutating tools (write/edit/bash) for investigation-only runs
+- All filesystem tools confined to the workspace root (traversal rejected)
+- Emits per-turn MCP progress notifications when a progress token is passed
+- Requires an agent-capable provider (`anthropic` or `opencode`); otherwise returns `ORACLE_AGENT_UNAVAILABLE`
 
 ### 2. Memory (8 tools)
 - `oracle_memory_list` — Recall entries
@@ -217,6 +225,7 @@ Example:
 | Tool | Rate Limit | Cacheable | TTL |
 |---|---|---|---|
 | `oracle_ask` | 10/min | No | — |
+| `oracle_agent` | 5/min | No | — |
 | `oracle_memory_*` | — | Yes (update clears) | 5min |
 | `oracle_docs_search` | 20/min | Yes | 10min |
 | `oracle_web_*` | 5/min | Yes (fetch) | 30min |
@@ -332,5 +341,5 @@ npm test
 ---
 
 **Last updated:** 2026-07-20  
-**Tool count:** 25  
+**Tool count:** 26  
 **MCP version:** OpenAI-compatible (MCP SDK 0.8+)
