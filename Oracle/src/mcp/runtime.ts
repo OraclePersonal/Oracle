@@ -6,9 +6,7 @@ import { ConsultService } from "../core/consult.js";
 import { createProvider } from "../providers/factory.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
-import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
-import { MessagesAdapter } from "../peer/mesh.js";
 import { OrchestratorFactory } from "../orchestrator/factory.js";
 import { VERSION } from "../version.js";
 import { registerOracleTools } from "./server.js";
@@ -27,7 +25,6 @@ export async function createOracleMcpServer(
   // Use OrchestratorFactory to create adapters with MCP support
   const orchestrator = new OrchestratorFactory(workspaceRoot, homeDir);
   const memory = await orchestrator.createMemoryAdapter();
-  const messages = await orchestrator.createMessagesAdapter();
 
   registerOracleTools({
     server,
@@ -38,8 +35,7 @@ export async function createOracleMcpServer(
     skills,
     oracles,
     memory,
-    profile: new ProfileStore(homeDir),
-    messages
+    profile: new ProfileStore(homeDir)
   });
   return server;
 }

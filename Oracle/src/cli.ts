@@ -25,7 +25,6 @@ import { SkillRegistry } from "./skills/registry.js";
 import { OracleRegistry } from "./oracles/registry.js";
 import { OrchestratorFactory } from "./orchestrator/factory.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
-import * as peer from "./peer/peer.js";
 import { ProfileStore } from "./identity/profile.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
@@ -281,7 +280,6 @@ program
   .description("Watch the working tree and auto-review uncommitted changes — Oracle reacts on its own instead of waiting to be asked")
   .option("--skill <name>", "Skill to apply", "review")
   .option("--debounce <ms>", "Quiet period after the last change before reviewing", "3000")
-  .option("--to <agent>", "Also send the review via oracle-messages to this agent")
   .option("-m, --model <model>", "Model override")
   .option("--provider <provider>", "Provider override")
   .option("--cwd <path>", "Working directory", process.cwd())
@@ -304,9 +302,6 @@ program
     const systemPrompt = skillReg.compose(skillName, DEFAULT_SYSTEM_PROMPT);
     const model = options.model ?? skill.model ?? "gpt-5.4";
 
-    const orchestrator = options.to ? new OrchestratorFactory(cwd, homeDir()) : undefined;
-    const mesh = orchestrator ? await orchestrator.createMessagesAdapter() : undefined;
-
     let reviewing = false;
     async function runReview() {
       if (reviewing) return; // a review is already in flight; the next fs change will trigger another round after it finishes
@@ -318,14 +313,6 @@ program
           return;
         }
         console.log(`\n[watch] ${new Date().toISOString()} — reviewed ${result.diff.length} chars of diff\n${result.output}\n`);
-        if (mesh && options.to) {
-          try {
-            await mesh.send("oracle-watch", options.to, result.output.slice(0, 4000), "review-result", { subject: "Auto-review: working tree change" });
-            console.log(`[watch] sent to ${options.to}`);
-          } catch (e) {
-            console.error(`[watch] failed to send to ${options.to}: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        }
       } catch (e) {
         console.error(`[watch] review failed: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
@@ -349,7 +336,6 @@ program
       shuttingDown = true;
       debouncer.cancel();
       await watcher.close();
-      await mesh?.close?.();
       process.exit(0);
     };
     process.on("SIGINT", shutdown);
@@ -573,180 +559,6 @@ webCmd
     const result = await agentqlExtract(url, prompt);
     console.log(JSON.stringify(result.data, null, 2));
     console.error(`\nSource: ${result.sourceUrl}`);
-  });
-
-// ── peer ─────────────────────────────────────────────────────────
-const peerCmd = program.command("peer").description("Share oracles and messages between instances");
-
-peerCmd
-  .command("export")
-  .description("Export oracle(s) to a shareable file")
-  .requiredOption("-o, --output <file>", "Output file path")
-  .argument("<names...>", "Oracle name(s) to export")
-  .action(async (names, options) => {
-    const reg = new OracleRegistry(homeDir());
-    const pkg = await peer.exportPeerPackage(reg, names);
-    await fs.writeFile(options.output, JSON.stringify(pkg, null, 2), "utf8");
-    console.log(`Exported ${names.length} oracle(s) to ${options.output}`);
-  });
-
-peerCmd
-  .command("import")
-  .description("Import oracle(s) from a peer file")
-  .argument("<file>", "Peer package file path")
-  .action(async (file) => {
-    const reg = new OracleRegistry(homeDir());
-    const imported = await peer.importPeerPackage(reg, file);
-    console.log(`Imported: ${imported.join(", ")}`);
-  });
-
-peerCmd
-  .command("send")
-  .description("Send a message via Oracle-messages mesh")
-  .requiredOption("--to <agent>", "Recipient agent name (or * for broadcast)")
-  .requiredOption("-b, --body <text>", "Message body")
-  .option("--from <agent>", "Sender name", "oracle")
-  .option("--kind <kind>", "Message kind", "message")
-  .option("--subject <subject>", "Message subject")
-  .action(async (options) => {
-    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
-    const mesh = await orchestrator.createMessagesAdapter();
-    try {
-      const msg = await mesh.send(options.from, options.to, options.body, options.kind as any, {
-        subject: options.subject
-      });
-      console.log(`Sent: ${msg.id}`);
-    } finally {
-      await mesh.close?.();
-    }
-  });
-
-peerCmd
-  .command("list")
-  .description("List messages from Oracle-messages mesh")
-  .option("--agent <agent>", "Filter by recipient")
-  .option("--kind <kind>", "Filter by kind")
-  .option("-n, --limit <number>", "Messages", "20")
-  .action(async (options) => {
-    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
-    const mesh = await orchestrator.createMessagesAdapter();
-    try {
-      const msgs = await mesh.getMessages({
-        agent: options.agent,
-        kind: options.kind as any,
-        limit: Number(options.limit)
-      });
-      for (const m of msgs) {
-        console.log(`${m.id.slice(0, 22)}  ${m.sender.padEnd(12)} → ${m.recipient.padEnd(12)}  ${(m.subject ?? m.body).slice(0, 50)}`);
-      }
-    } finally {
-      await mesh.close?.();
-    }
-  });
-
-peerCmd
-  .command("monitor")
-  .description("Follow incoming messages live (poll-based)")
-  .option("--agent <agent>", "Your agent name", "oracle")
-  .option("--since <id>", "Start from message id")
-  .option("-i, --interval <ms>", "Poll interval (ms)", "5000")
-  .action(async (options) => {
-    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
-    const mesh = await orchestrator.createMessagesAdapter();
-    let cursor = options.since;
-    console.log(`Monitoring messages for ${options.agent}...`);
-    try {
-      for (;;) {
-        const msgs = await mesh.getUnread(options.agent, cursor);
-        for (const m of msgs) {
-          console.log(`[${m.kind}] ${m.sender}: ${(m.subject ?? m.body).slice(0, 80)}`);
-          cursor = m.id;
-        }
-        await new Promise((r) => setTimeout(r, Number(options.interval)));
-      }
-    } finally {
-      await mesh.close?.();
-    }
-  });
-
-peerCmd
-  .command("lock")
-  .description("Acquire a short lease on a resource (e.g. a file path) so two agents don't edit it at once. Prints a token — save it, lock-renew/unlock need it.")
-  .argument("<resource>", "Resource identifier, typically a file path")
-  .requiredOption("--agent <agent>", "Your agent name")
-  .option("--ttl <ms>", "Lease length — an abandoned lease older than this can be stolen", "60000")
-  .action(async (resource, options) => {
-    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
-    const mesh = await orchestrator.createMessagesAdapter();
-    try {
-      if (!mesh.acquireLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
-      const result = await mesh.acquireLock(resource, options.agent, Number(options.ttl));
-      if (result.acquired) console.log(`Locked: ${resource} (token ${result.lock?.token})`);
-      else {
-        console.log(`Already locked by ${result.lock?.agent} since ${result.lock?.acquiredAt}`);
-        process.exitCode = 1;
-      }
-    } finally {
-      await mesh.close?.();
-    }
-  });
-
-peerCmd
-  .command("lock-renew")
-  .description("Extend a lease you hold — needed if your critical section runs longer than the original ttl")
-  .argument("<resource>", "Resource identifier")
-  .requiredOption("--agent <agent>", "Your agent name")
-  .requiredOption("--token <n>", "Fencing token from the acquire (or previous renew) call")
-  .option("--ttl <ms>", "New lease length", "60000")
-  .action(async (resource, options) => {
-    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
-    const mesh = await orchestrator.createMessagesAdapter();
-    try {
-      if (!mesh.renewLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
-      const result = await mesh.renewLock(resource, options.agent, Number(options.token), Number(options.ttl));
-      if (result.acquired) console.log(`Renewed: ${resource} (token ${result.lock?.token})`);
-      else {
-        console.log(`Renew failed — lease expired or held by someone else${result.lock ? ` (${result.lock.agent})` : ""}.`);
-        process.exitCode = 1;
-      }
-    } finally {
-      await mesh.close?.();
-    }
-  });
-
-peerCmd
-  .command("unlock")
-  .description("Release a lock you hold")
-  .argument("<resource>", "Resource identifier")
-  .requiredOption("--agent <agent>", "Your agent name")
-  .option("--token <n>", "Fencing token — if given, must match the current lease")
-  .action(async (resource, options) => {
-    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
-    const mesh = await orchestrator.createMessagesAdapter();
-    try {
-      if (!mesh.releaseLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
-      const released = await mesh.releaseLock(resource, options.agent, options.token !== undefined ? Number(options.token) : undefined);
-      console.log(released ? `Unlocked: ${resource}` : `Not locked by ${options.agent} (with a matching token, if given): ${resource}`);
-      if (!released) process.exitCode = 1;
-    } finally {
-      await mesh.close?.();
-    }
-  });
-
-peerCmd
-  .command("lock-status")
-  .description("Check who currently holds a lock, if anyone")
-  .argument("<resource>", "Resource identifier")
-  .action(async (resource) => {
-    const orchestrator = new OrchestratorFactory(process.cwd(), homeDir());
-    const mesh = await orchestrator.createMessagesAdapter();
-    try {
-      if (!mesh.checkLock) throw new Error("This messages backend doesn't support locks (file-based mesh only).");
-      const lock = await mesh.checkLock(resource);
-      console.log(lock ? `Locked by ${lock.agent} since ${lock.acquiredAt} (ttl ${lock.ttlMs}ms, token ${lock.token})` : `Unlocked: ${resource}`);
-    } finally {
-      await mesh.close?.();
-    }
   });
 
 // ── existing commands ────────────────────────────────────────────
@@ -1178,8 +990,7 @@ try {
   // commands may leave an MCP HTTP transport/socket handle open, aborts with
   // a libuv "UV_HANDLE_CLOSING" assertion instead of a clean exit. Convert it
   // into a friendly one-line error and a non-zero exit. MCP errors from a
-  // sidecar (e.g. "Agent identity not specified" when listing the mesh with
-  // no --agent) are expected user-facing conditions, not crashes.
+  // sidecar failures are expected user-facing conditions, not crashes.
   const message = err instanceof Error ? err.message : String(err);
   console.error(`Error: ${message}`);
   // Set exitCode and let the event loop drain instead of calling

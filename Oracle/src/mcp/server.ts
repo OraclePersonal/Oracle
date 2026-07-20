@@ -11,8 +11,7 @@ import { checkProvider } from "../providers/factory.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { OracleRegistry } from "../oracles/registry.js";
 import { ProfileStore } from "../identity/profile.js";
-import type { MessageKind } from "../peer/mesh.js";
-import type { MemoryPort, MessagesPort } from "../orchestrator/ports.js";
+import type { MemoryPort } from "../orchestrator/ports.js";
 import type { PRFile } from "../github/types.js";
 import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
@@ -34,7 +33,6 @@ interface OracleServerDependencies {
   oracles: OracleRegistry;
   memory: MemoryPort;
   profile: ProfileStore;
-  messages: MessagesPort;
   providerChecks?: typeof checkProvider;
 }
 
@@ -62,12 +60,6 @@ function stringOrStringArray() {
     });
 }
 
-const MESSAGE_KINDS = [
-  "message", "note", "question", "review-request", "review-result",
-  "proposal", "proposal-response", "wake", "end", "task",
-  "task-assign", "task-update", "task-complete", "task-fail"
-] as const;
-
 function success(text: string, structuredContent: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text }], structuredContent };
 }
@@ -91,7 +83,6 @@ export function registerOracleTools({
   oracles,
   memory,
   profile,
-  messages,
   providerChecks = checkProvider,
   soulsDir = path.join(os.homedir(), ".oracle", "souls")
 }: OracleServerDependencies & { soulsDir?: string }): void {
@@ -700,177 +691,6 @@ export function registerOracleTools({
       } catch (error) {
         return failure(error);
       }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_send",
-    {
-      title: "Send Peer Message",
-      description: "Send a message to another agent (or * for broadcast) via the oracle-messages mesh.",
-      inputSchema: {
-        to: z.string().min(1),
-        body: z.string().min(1),
-        from: z.string().default("oracle"),
-        kind: z.enum(MESSAGE_KINDS).default("message"),
-        subject: z.string().optional(),
-        parentId: z.string().optional()
-      }
-    },
-    async ({ to, body, from, kind, subject, parentId }) => {
-      try {
-        const msg = await messages.send(from, to, body, kind as MessageKind, { subject, parentId });
-        return success(`Sent: ${msg.id}`, { message: msg });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_broadcast",
-    {
-      title: "Broadcast Peer Message",
-      description: "Broadcast a message to all agents via the oracle-messages mesh.",
-      inputSchema: {
-        body: z.string().min(1),
-        from: z.string().default("oracle"),
-        kind: z.enum(MESSAGE_KINDS).default("note"),
-        subject: z.string().optional()
-      }
-    },
-    async ({ body, from, kind, subject }) => {
-      try {
-        const msg = await messages.broadcast(from, body, kind as MessageKind, { subject });
-        return success(`Broadcast: ${msg.id}`, { message: msg });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_list",
-    {
-      title: "List Peer Messages",
-      description: "List messages from the oracle-messages mesh.",
-      inputSchema: {
-        agent: z.string().optional(),
-        kind: z.enum(MESSAGE_KINDS).optional(),
-        limit: z.number().int().min(1).max(100).default(20)
-      }
-    },
-    async ({ agent, kind, limit }) => {
-      try {
-        const msgs = await messages.getMessages({ agent, kind: kind as MessageKind | undefined, limit });
-        return success(JSON.stringify(msgs, null, 2), { messages: msgs });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_unread",
-    {
-      title: "Get Unread Peer Messages",
-      description: "Get unread messages for an agent, optionally since a message id.",
-      inputSchema: {
-        agent: z.string().min(1),
-        sinceId: z.string().optional()
-      }
-    },
-    async ({ agent, sinceId }) => {
-      try {
-        const msgs = await messages.getUnread(agent, sinceId);
-        return success(JSON.stringify(msgs, null, 2), { messages: msgs });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_thread",
-    {
-      title: "Get Peer Message Thread",
-      description: "Get all messages belonging to a thread by root message id.",
-      inputSchema: { rootId: z.string().min(1) }
-    },
-    async ({ rootId }) => {
-      try {
-        const msgs = await messages.getThread(rootId);
-        return success(JSON.stringify(msgs, null, 2), { messages: msgs });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_lock_acquire",
-    {
-      title: "Acquire Lock",
-      description: "Acquire a short lease on a resource (e.g. a file path) so two agents don't edit it concurrently. Returns a fencing token — pass it to oracle_peer_lock_renew/release. Hold the lease only for the critical section (read-latest → modify → write → release), not a whole task's lifetime; renew if it genuinely runs long. An abandoned lease older than its TTL can be stolen.",
-      inputSchema: {
-        resource: z.string().min(1).describe("Resource identifier, typically a file path"),
-        agent: z.string().min(1),
-        ttlMs: z.number().int().positive().optional().describe("Lease length in ms (default 60s)")
-      }
-    },
-    async ({ resource, agent, ttlMs }) => {
-      try {
-        if (!messages.acquireLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
-        const result = await messages.acquireLock(resource, agent, ttlMs);
-        return success(JSON.stringify(result, null, 2), { ...result });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_lock_renew",
-    {
-      title: "Renew Lock",
-      description: "Extend a lease you currently hold. Requires the fencing token from the acquire (or previous renew) call — a mismatched token means your lease already expired and was taken by someone else.",
-      inputSchema: {
-        resource: z.string().min(1),
-        agent: z.string().min(1),
-        token: z.number().int().describe("Fencing token from the acquire or previous renew call"),
-        ttlMs: z.number().int().positive().optional().describe("New lease length in ms (default 60s)")
-      }
-    },
-    async ({ resource, agent, token, ttlMs }) => {
-      try {
-        if (!messages.renewLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
-        const result = await messages.renewLock(resource, agent, token, ttlMs);
-        return success(JSON.stringify(result, null, 2), { ...result });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_lock_release",
-    {
-      title: "Release Lock",
-      description: "Release a lock you hold. Fails if another agent holds it, or (when token is given) if it doesn't match the current lease.",
-      inputSchema: {
-        resource: z.string().min(1),
-        agent: z.string().min(1),
-        token: z.number().int().optional().describe("Fencing token — if given, must match the current lease")
-      }
-    },
-    async ({ resource, agent, token }) => {
-      try {
-        if (!messages.releaseLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
-        const released = await messages.releaseLock(resource, agent, token);
-        return success(released ? `Released: ${resource}` : `Not held by ${agent} (with a matching token, if given): ${resource}`, { released });
-      } catch (error) { return failure(error); }
-    }
-  );
-
-  server.registerTool(
-    "oracle_peer_lock_check",
-    {
-      title: "Check Lock",
-      description: "Check who currently holds a lock, if anyone, without acquiring it.",
-      inputSchema: { resource: z.string().min(1) }
-    },
-    async ({ resource }) => {
-      try {
-        if (!messages.checkLock) throw new OracleError("ORACLE_INVALID_REQUEST", "This messages backend doesn't support locks.", "Locks require the file-based mesh, not an MCP-backed oracle-messages server.");
-        const lock = await messages.checkLock(resource);
-        return success(lock ? JSON.stringify(lock, null, 2) : "unlocked", { lock });
-      } catch (error) { return failure(error); }
     }
   );
 
