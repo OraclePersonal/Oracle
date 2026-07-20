@@ -26,8 +26,6 @@ import { OracleRegistry } from "./oracles/registry.js";
 import { OrchestratorFactory } from "./orchestrator/factory.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import { ProfileStore } from "./identity/profile.js";
-import * as gh from "./github/gh.js";
-import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
 import { webSearchWithTrace } from "./web/search.js";
 import { fetchUrl } from "./web/fetchUrl.js";
@@ -58,7 +56,6 @@ program
   .option("--provider <provider>", "Provider override")
   .option("--cwd <path>", "Working directory", process.cwd())
   .option("--json", "Print JSON result")
-  .option("--github-pr <ref>", "Fetch PR context: owner/repo#number")
   .action(async (options) => {
     const cwd = path.resolve(options.cwd);
     const skillReg = new SkillRegistry(homeDir(), cwd);
@@ -113,54 +110,6 @@ program
       }
     }
 
-    let hasGitHubPr = false;
-    // Include PR context if --github-pr is passed
-    if (options.githubPr) {
-      hasGitHubPr = true;
-      const ref = options.githubPr as string;
-      let repo: string | undefined;
-      let number: number;
-      if (ref.includes("/")) {
-        // owner/repo#number
-        const parts = ref.split("#");
-        if (parts.length !== 2) throw new Error("Invalid github-pr format. Use: owner/repo#number (e.g. remix-run/react-router#12345)");
-        repo = parts[0];
-        number = Number(parts[1]);
-      } else if (ref.startsWith("#")) {
-        // #number — infer repo from git remote
-        repo = gh.inferRepo(cwd);
-        number = Number(ref.slice(1));
-      } else {
-        throw new Error("Invalid github-pr format. Use: owner/repo#number or #number");
-      }
-      if (isNaN(number)) throw new Error(`Invalid PR number: ${ref}`);
-      try {
-        const pr = gh.getPR(number, repo);
-        const diff = gh.getPRDiff(number, repo);
-        const files = gh.getPRFiles(number, repo);
-        const fileList = files.map((f: PRFile) => `  ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`).join("\n");
-        const prContext = [
-          `## PR #${number}: ${pr.title}`,
-          `**Author:** ${pr.author}  **Repo:** ${repo}`,
-          `**Base:** ${pr.baseRef} ← **Head:** ${pr.headRef}`,
-          `**State:** ${pr.state}`,
-          "",
-          pr.body ? `### Description\n${pr.body}\n` : "",
-          `### Changed Files (${files.length})`,
-          fileList,
-          "",
-          "### Diff",
-          "```diff",
-          diff.slice(0, 50000),
-          "```",
-        ].filter(Boolean).join("\n");
-        options.prompt = `${options.prompt}\n\n[GITHUB PR #${number}]\n${prContext}`;
-        console.error(`Fetched PR #${number} — ${pr.title}`);
-      } catch (e: any) {
-        throw new Error(`Failed to fetch PR #${number}: ${e.message}`);
-      }
-    }
-
     // Include git diff if --diff is passed
     if (options.diff !== undefined) {
       const target = options.diff || "HEAD~1";
@@ -182,8 +131,7 @@ program
       files: options.file,
       model: model ?? skill.model ?? "gpt-5.4",
       cwd,
-      systemPrompt: finalSystemPrompt,
-      allowEmptyFiles: hasGitHubPr
+      systemPrompt: finalSystemPrompt
     });
 
     // Save memory if oracle has memory enabled
@@ -742,244 +690,6 @@ identityCmd
     const store = new ProfileStore(homeDir());
     await store.saveIdentity({ name: "" });
     console.log("Identity cleared.");
-  });
-
-// ── github ────────────────────────────────────────────────────
-const githubCmd = program.command("github").description("GitHub integration via gh CLI");
-
-githubCmd
-  .command("check")
-  .description("Check gh CLI installation and authentication")
-  .action(() => {
-    const inst = gh.checkGh();
-    if (!inst.ok) {
-      console.error("gh CLI not found. Install from https://cli.github.com/");
-      process.exitCode = 1;
-      return;
-    }
-    console.log(`gh: ${inst.version}`);
-    const auth = gh.checkGhAuth();
-    if (auth.ok) {
-      console.log(`Authenticated as: ${auth.user}`);
-    } else {
-      console.error(`Not authenticated: ${auth.error}`);
-      console.error("Run: gh auth login");
-      process.exitCode = 1;
-    }
-  });
-
-githubCmd
-  .command("pr")
-  .description("Pull request operations")
-  .argument("<action>", "list | view | diff | files | review | comment | approve | request-changes")
-  .argument("[number]", "PR number (required for view/diff/files/review/comment/approve/request-changes)")
-  .option("-R, --repo <repo>", "Repository (owner/repo)")
-  .option("-s, --state <state>", "PR state filter: open | closed | merged | all (default: open)")
-  .option("-b, --body <text>", "Comment/review body")
-  .option("--base <branch>", "Filter by base branch")
-  .option("--head <branch>", "Filter by head branch")
-  .option("-n, --limit <number>", "Max results", "30")
-  .option("--author <author>", "Filter by author")
-  .option("--label <labels>", "Filter by labels (comma-separated)")
-  .action(async (action: string, number: string, options) => {
-    const repo = options.repo ?? gh.inferRepo(options.cwd ?? process.cwd());
-    const num = number ? Number(number) : undefined;
-    switch (action) {
-      case "list": {
-        const prs = gh.listPRs({
-          repo,
-          state: options.state as any,
-          limit: Number(options.limit),
-          base: options.base,
-          head: options.head,
-          author: options.author,
-          labels: options.label?.split(","),
-        });
-        if (!prs.length) { console.log("No PRs found."); return; }
-        for (const pr of prs) {
-          const s = pr.state === "open" ? "\x1b[32mopen\x1b[0m" : pr.state === "merged" ? "\x1b[35mmerged\x1b[0m" : "\x1b[31mclosed\x1b[0m";
-          console.log(`#${String(pr.number).padEnd(4)} ${s}  ${pr.title}`);
-        }
-        break;
-      }
-      case "view":
-        if (!num) throw new Error("PR number required");
-        {
-          const pr = gh.getPR(num, repo);
-          console.log(`#${pr.number} ${pr.title}`);
-          console.log(`State: ${pr.state}  Author: ${pr.author}`);
-          console.log(`Base: ${pr.baseRef} ← Head: ${pr.headRef}`);
-          console.log(`Created: ${pr.createdAt.slice(0, 10)}`);
-          if (pr.body) console.log(`\n${pr.body.slice(0, 2000)}`);
-        }
-        break;
-      case "diff":
-        if (!num) throw new Error("PR number required");
-        console.log(gh.getPRDiff(num, repo));
-        break;
-      case "files":
-        if (!num) throw new Error("PR number required");
-        {
-          const files = gh.getPRFiles(num, repo);
-          let add = 0, del = 0;
-          for (const f of files) { add += f.additions; del += f.deletions; }
-          console.log(`${files.length} file(s), +${add} -${del}\n`);
-          for (const f of files) {
-            const icon = f.status === "added" ? "\x1b[32m+\x1b[0m" : f.status === "removed" ? "\x1b[31m-\x1b[0m" : f.status === "renamed" ? "\x1b[33m→\x1b[0m" : "\x1b[34m~\x1b[0m";
-            console.log(` ${icon} ${f.path}  (+${f.additions}, -${f.deletions})`);
-          }
-        }
-        break;
-      case "review":
-        if (!num) throw new Error("PR number required");
-        {
-          const pr = gh.getPR(num, repo);
-          const diff = gh.getPRDiff(num, repo);
-          const files = gh.getPRFiles(num, repo);
-          console.log(`\nReviewing PR #${num}: ${pr.title}`);
-          console.log(`Repository: ${repo ?? "unknown"}`);
-          console.log(`Files: ${files.length}, Diff: ${(diff.length / 1024).toFixed(1)}KB\n`);
-
-          const fileList = files.map((f: PRFile) => `  ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`).join("\n");
-          const reviewPrompt = [
-            `## PR Review: #${num} — ${pr.title}`,
-            `**Author:** ${pr.author}  **Repo:** ${repo}`,
-            `**Base:** ${pr.baseRef} ← **Head:** ${pr.headRef}`,
-            "",
-            pr.body ? `### Description\n${pr.body}\n` : "",
-            `### Changed Files (${files.length})`,
-            fileList,
-            "",
-            "### Diff",
-            "```diff",
-            diff.slice(0, 50000),
-            "```",
-            "",
-            "Review this PR for correctness, edge cases, security, and maintainability.",
-            "Be specific — cite line numbers from the diff.",
-          ].filter(Boolean).join("\n");
-
-          const { ConsultService } = await import("./core/consult.js");
-          const { createProvider, parseProviderName } = await import("./providers/factory.js");
-          const providerName = options.provider ?? "codex";
-          const parsedProvider = parseProviderName(providerName);
-          const checks = await (await import("./providers/factory.js")).checkProvider(parsedProvider);
-          const failedCheck = checks.find((chk: any) => !chk.ok);
-          if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
-
-          const service = new ConsultService(createProvider(parsedProvider));
-          const result = await service.consult({
-            prompt: reviewPrompt,
-            preset: "review",
-            provider: providerName,
-            model: options.model ?? "gpt-5.4",
-            cwd: options.cwd ?? process.cwd(),
-            systemPrompt: "You are a senior code reviewer. Analyze the PR diff and files. Be specific, cite line numbers, and categorize findings by severity (critical/major/minor/nit). End with a verdict: approve, request changes, or comment.",
-            allowEmptyFiles: true,
-          });
-
-          console.log(`\n${result.output}`);
-          if (options.body) {
-            gh.submitPRReview(num, options.body, "COMMENT", repo);
-            console.log("\nReview posted as comment.");
-          }
-        }
-        break;
-      case "comment":
-        if (!num) throw new Error("PR number required");
-        if (!options.body) throw new Error("Comment body required (-b)");
-        gh.createComment(num, options.body, repo);
-        console.log("Comment posted.");
-        break;
-      case "approve":
-        if (!num) throw new Error("PR number required");
-        gh.submitPRReview(num, options.body ?? "LGTM.", "APPROVE", repo);
-        console.log("PR approved.");
-        break;
-      case "request-changes":
-        if (!num) throw new Error("PR number required");
-        if (!options.body) throw new Error("Review body required (-b) for request-changes");
-        gh.submitPRReview(num, options.body, "REQUEST_CHANGES", repo);
-        console.log("Changes requested.");
-        break;
-      default:
-        throw new Error(`Unknown action: ${action}. Use: list, view, diff, files, review, comment, approve, request-changes`);
-    }
-  });
-
-githubCmd
-  .command("issue")
-  .description("Issue operations")
-  .argument("<action>", "list | view | comment")
-  .argument("[number]", "Issue number (required for view/comment)")
-  .option("-R, --repo <repo>", "Repository (owner/repo)")
-  .option("-s, --state <state>", "Issue state filter: open | closed | all (default: open)")
-  .option("-b, --body <text>", "Comment body")
-  .option("-n, --limit <number>", "Max results", "30")
-  .option("--author <author>", "Filter by author")
-  .option("--label <labels>", "Filter by labels (comma-separated)")
-  .action(async (action: string, number: string, options) => {
-    const repo = options.repo ?? gh.inferRepo(options.cwd ?? process.cwd());
-    const num = number ? Number(number) : undefined;
-    switch (action) {
-      case "list": {
-        const issues = gh.listIssues({
-          repo,
-          state: options.state as any,
-          limit: Number(options.limit),
-          author: options.author,
-          labels: options.label?.split(","),
-        });
-        if (!issues.length) { console.log("No issues found."); return; }
-        for (const i of issues) {
-          const s = i.state === "open" ? "\x1b[32mopen\x1b[0m" : "\x1b[31mclosed\x1b[0m";
-          console.log(`#${String(i.number).padEnd(4)} ${s}  ${i.title}`);
-        }
-        break;
-      }
-      case "view":
-        if (!num) throw new Error("Issue number required");
-        {
-          const i = gh.getIssue(num, repo);
-          console.log(`#${i.number} ${i.title}`);
-          console.log(`State: ${i.state}  Author: ${i.author}`);
-          console.log(`Created: ${i.createdAt.slice(0, 10)}`);
-          if (i.body) console.log(`\n${i.body.slice(0, 2000)}`);
-        }
-        break;
-      case "comment":
-        if (!num) throw new Error("Issue number required");
-        if (!options.body) throw new Error("Comment body required (-b)");
-        gh.createComment(num, options.body, repo);
-        console.log("Comment posted.");
-        break;
-      default:
-        throw new Error(`Unknown action: ${action}. Use: list, view, comment`);
-    }
-  });
-
-githubCmd
-  .command("search")
-  .description("Search GitHub code")
-  .argument("<query>", "Search query")
-  .option("-n, --limit <number>", "Max results", "10")
-  .action(async (query: string, options) => {
-    const results = gh.searchCode(query, Number(options.limit));
-    for (const r of results) {
-      console.log(`${r.repo}:${r.path}`);
-      for (const m of r.matches) {
-        console.log(`  ${m.slice(0, 200)}`);
-      }
-    }
-  });
-
-githubCmd
-  .command("get")
-  .description("Raw GitHub API GET request")
-  .argument("<endpoint>", "API endpoint (e.g. /repos/owner/repo)")
-  .action(async (endpoint: string) => {
-    const result = gh.apiRequest(endpoint);
-    console.log(JSON.stringify(result, null, 2));
   });
 
 try {

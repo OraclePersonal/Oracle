@@ -27,11 +27,6 @@ const BUILT_IN: Skill[] = [
     name: "security",
     description: "Audit trust boundaries, data exposure, injection risks, credential handling, and safe mitigations.",
     systemPrompt: "Audit trust boundaries, data exposure, injection risks, credential handling, and safe mitigations."
-  },
-  {
-    name: "github-pr-review",
-    description: "Review a GitHub pull request for correctness, edge cases, security, and maintainability.",
-    systemPrompt: "You are reviewing a GitHub pull request. Analyze the diff and changed files thoroughly. Categorize every finding by severity (critical/major/minor/nit). Critical issues block merge. For each finding, cite the exact file and line number from the diff. Distinguish between issues in the PR's own code vs pre-existing issues in the surrounding code. End with a clear verdict: approve, request changes, or comment."
   }
 ];
 
