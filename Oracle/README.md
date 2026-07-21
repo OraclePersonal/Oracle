@@ -4,38 +4,62 @@
   <img src="docs/oracle-logo.png" alt="Oracle logo" width="720">
 </p>
 
-MCP-powered AI coding consultant with persistent memory, a docs knowledge
-base, web access, and GitHub integration.
-Ships both a CLI (`oracle`) and an MCP server (`oracle-mcp`) for Claude Code,
-opencode, Clew Code, and any MCP-compatible agent.
+> **Oracle Assistant** — a memory, knowledge, and coordination layer for AI
+> coding agents. *(Not the Oracle database or Oracle Corp — this is an
+> independent open-source project.)*
 
-Requires **Node.js ≥ 24**.
+**Oracle turns a stateless coding agent into a persistent, coordinated
+teammate.** It is an MCP server plus a CLI that any MCP-compatible agent
+(Claude Code, opencode, Codex, Gemini CLI, …) wires up to gain four things it
+doesn't have on its own:
 
-## What it does
+| Pillar | What Oracle adds | Entry points |
+|---|---|---|
+| 🧠 **Remember** | Persistent memory that survives across every session — facts, insights, a compiled wiki, and an entity knowledge graph that ranks what's relevant | `oracle_memory_*`, `oracle ask` |
+| 💬 **Consult** | Ask an expert model a question *with your project's real context* (files + memory + docs + web) and get a reviewed answer back | `oracle_ask`, `oracle ask` |
+| 🛠️ **Act** | An autonomous agent that reads/writes/edits files to complete a task — **confined to the workspace, no shell**, with an audit trail of every change | `oracle_agent`, `oracle agent` |
+| 📨 **Coordinate** | An inter-agent message bus so multiple agent sessions on one machine can talk, hand off work, and wake each other up | `oracle_msg_*`, `oracle msg` |
 
-Oracle answers questions and reviews code with project context, and remembers
-across conversations. It pulls context from four sources — persistent memory
-(facts, insights, a compiled wiki), a local docs store (`.oracle/docs/`), the
-web, and your project files — then asks a configured provider/model. It can
-also read/review GitHub PRs and issues.
+On top of those: a **persona + identity** so Oracle knows who you are and
+speaks in a voice you choose, a local **docs knowledge base**, **web access**
+(search / fetch / structured extract), **GitHub** PR & issue integration, and
+**structured observability logging** throughout.
 
-**Autonomous agent mode** (`oracle_agent`): Run agentic tasks autonomously with
-file system access, shell execution, and **multimodal input** (images, videos).
-Apply engineering skills (review, debug, security, architecture, tests) to guide
-agent reasoning. Discover and invoke tools from external MCP servers.
+Requires **Node.js ≥ 24**. Ships three binaries — `oracle` (CLI), `oracle-mcp`
+(full MCP server), `oracle-msg-mcp` (messaging-only MCP server).
 
-**Supported providers:** `codex`, `openai`, `anthropic`, `opencode`
+**Supported model providers:** `codex`, `openai`, `anthropic`, `opencode`
 
-## Install & build
+## Why "Oracle"?
+
+An oracle is something you *consult* — it remembers, it knows, and it answers.
+This project is that for your agents: a shared source of memory and truth they
+return to across sessions, and a switchboard they use to reach each other. It
+is deliberately **provider-neutral** (works with any model backend) and
+**agent-neutral** (works with any MCP client), so it sits *beside* your coding
+agent rather than replacing it.
+
+## Install
+
+From npm (installs the `oracle`, `oracle-mcp`, and `oracle-msg-mcp` binaries):
+
+```bash
+npm install -g @oraclepersonal/oracle
+oracle doctor                          # verify a provider is wired up
+# or run without installing: npx -p @oraclepersonal/oracle oracle ask "..."
+```
+
+From source (for development):
 
 ```bash
 npm install
 npm run build              # tsc -> dist/
-node dist/cli.js doctor    # verify provider is wired up
+node dist/cli.js doctor
 ```
 
 Scripts: `build`, `dev` (tsx src/cli.ts), `mcp` (tsx src/mcp.ts),
-`typecheck` (tsc --noEmit), `test` (vitest run src).
+`mcp:messaging` (tsx src/mcp-messaging.ts), `typecheck` (tsc --noEmit),
+`test` (vitest run src).
 
 ## CLI usage
 
@@ -111,15 +135,6 @@ serves just the four `oracle_msg_*` tools over the same `~/.oracle/messages` bus
   }
 }
 ```
-
-## Install from npm
-
-```bash
-npm install -g @oraclepersonal/oracle   # or: npx -p @oraclepersonal/oracle oracle ...
-```
-
-Ships three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), and
-`oracle-msg-mcp` (messaging-only MCP server).
 
 ## Smart memory
 
