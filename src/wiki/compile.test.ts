@@ -15,7 +15,9 @@ describe("memory wiki", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmp, { recursive: true, force: true });
+    // Let fire-and-forget entity graph writes finish before cleanup
+    await new Promise((r) => setTimeout(r, 100));
+    await fs.rm(tmp, { recursive: true, force: true, maxRetries: 3 });
   });
 
   describe("groupByTopic", () => {

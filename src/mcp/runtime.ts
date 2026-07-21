@@ -27,8 +27,13 @@ export async function createOracleMcpServer(
   const orchestrator = new OrchestratorFactory(workspaceRoot, homeDir);
   const memory = await orchestrator.createMemoryAdapter();
 
-  // The agentic loop (oracle_agent) needs a tool-capable provider; wire it when
-  // the configured provider supports tool use, otherwise leave a clear reason.
+  // Start periodic background maintenance.
+  // Default: consolidate + prune+promote every 1h,
+  //          graph prune every 2h,
+  //          LLM reflection every 4h (if ANTHROPIC_API_KEY is set).
+  memory.startAutoMaintenance?.();
+  console.log("[oracle-mcp] background memory maintenance started (1h interval, graph prune 2h, reflection 4h)");
+
   let agent: AgentService | undefined;
   let agentUnavailableReason: string | undefined;
   try {

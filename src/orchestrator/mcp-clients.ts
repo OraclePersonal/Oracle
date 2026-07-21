@@ -107,6 +107,11 @@ export class McpMemoryAdapter implements MemoryPort {
     return (parsed.results || []) as MemoryStoreEntry[];
   }
 
+  async scoredSearchMemories(query: string, opts?: { type?: MemoryType; agent?: string; limit?: number }): Promise<MemoryStoreEntry[]> {
+    // Delegate to the MCP server's recall tool — scoring is done server-side
+    return this.searchMemories(query, opts);
+  }
+
   async updateMemory(id: string, type: MemoryType, updates: { content?: string; tags?: string[]; importance?: number }): Promise<MemoryStoreEntry | null> {
     await this.ensureConnected();
     try {
@@ -160,5 +165,71 @@ export class McpMemoryAdapter implements MemoryPort {
     const parsed = JSON.parse(text);
     if (!parsed.success) throw new Error(parsed.error || "clear_working failed");
     return parsed.cleared as number;
+  }
+
+  // ── Advanced methods delegated to oracle-memory server ──────────
+
+  async graphQuery(query: string, opts?: { agent?: string; limit?: number }): Promise<MemoryStoreEntry[]> {
+    // oracle-memory server supports graph query via recall with graph_query param
+    await this.ensureConnected();
+    const result = (await this.client.callTool({
+      name: "recall",
+      arguments: {
+        graph_query: query,
+        agent: opts?.agent,
+        limit: Math.min(opts?.limit ?? 20, 200),
+      },
+    })) as ToolResult;
+    const text = this.extractText(result);
+    const parsed = JSON.parse(text);
+    if (!parsed.success) return [];
+    return (parsed.results || []) as MemoryStoreEntry[];
+  }
+
+  async consolidate(): Promise<{ consolidated: number; created: MemoryStoreEntry | null; archived: string[] }> {
+    await this.ensureConnected();
+    const result = (await this.client.callTool({ name: "consolidate", arguments: {} })) as ToolResult;
+    const text = this.extractText(result);
+    const parsed = JSON.parse(text);
+    if (!parsed.success) return { consolidated: 0, created: null, archived: [] };
+    return { consolidated: parsed.consolidated ?? 0, created: parsed.created ?? null, archived: parsed.archived ?? [] };
+  }
+
+  async pruneStale(opts?: { minImportance?: number; minStaleDays?: number }): Promise<string[]> {
+    await this.ensureConnected();
+    const result = (await this.client.callTool({
+      name: "prune_memories",
+      arguments: { min_importance: opts?.minImportance, min_stale_days: opts?.minStaleDays },
+    })) as ToolResult;
+    const text = this.extractText(result);
+    const parsed = JSON.parse(text);
+    return (parsed.memories || []).map((m: any) => m.id);
+  }
+
+  async promoteWorking(opts?: { minAccessCount?: number }): Promise<string[]> {
+    await this.ensureConnected();
+    const result = (await this.client.callTool({
+      name: "promote_memory",
+      arguments: { min_access_count: opts?.minAccessCount },
+    })) as ToolResult;
+    const text = this.extractText(result);
+    const parsed = JSON.parse(text);
+    return (parsed.memories || []).map((m: any) => m.id);
+  }
+
+  async runMaintenance(opts?: { minImportance?: number; minStaleDays?: number; minAccessCount?: number }): Promise<{ pruned: string[]; promoted: string[] }> {
+    const [pruned, promoted] = await Promise.all([
+      this.pruneStale({ minImportance: opts?.minImportance, minStaleDays: opts?.minStaleDays }),
+      this.promoteWorking({ minAccessCount: opts?.minAccessCount }),
+    ]);
+    return { pruned, promoted };
+  }
+
+  async reflect(opts?: { agent?: string }): Promise<{ content: string; tags: string[]; confidence: number; sourceIds: string[] }[]> {
+    await this.ensureConnected();
+    const result = (await this.client.callTool({ name: "reflect", arguments: { agent: opts?.agent ?? "oracle" } })) as ToolResult;
+    const text = this.extractText(result);
+    const parsed = JSON.parse(text);
+    return (parsed.memories || []) as any[];
   }
 }

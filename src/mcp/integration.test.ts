@@ -13,8 +13,6 @@ import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
-import { AgentService } from "../agent/service.js";
-import type { AgentProvider, AgentTurn } from "../agent/types.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -23,26 +21,6 @@ const provider: Provider = {
     return { text: `ANSWER: ${request.userPrompt}`, usage: {} };
   }
 };
-
-/** Scripted agent provider: write a file, then finish. */
-const agentProvider: AgentProvider = {
-  id: "scripted",
-  calls: 0,
-  async runAgentTurn(): Promise<AgentTurn> {
-    const self = agentProvider as AgentProvider & { calls: number };
-    self.calls += 1;
-    if (self.calls === 1) {
-      return {
-        message: {
-          role: "assistant",
-          text: "Creating the file.",
-          toolCalls: [{ id: "c1", name: "write_file", input: { path: "agent-output.txt", content: "made by agent" } }],
-        },
-      };
-    }
-    return { message: { role: "assistant", text: "Done.", toolCalls: [] } };
-  },
-} as AgentProvider & { calls: number };
 
 let root: string;
 let client: Client;
@@ -67,8 +45,7 @@ beforeAll(async () => {
     oracles,
     memory: new MemoryAdapter(root),
     profile: new ProfileStore(root),
-    providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }],
-    agent: new AgentService(agentProvider)
+    providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
   await server.connect(serverTransport);
@@ -85,8 +62,6 @@ describe("Oracle MCP tools", () => {
   test("lists all focused tools", async () => {
     const tools = (await client.listTools()).tools.map((tool) => tool.name).sort();
     expect(tools).toContain("oracle_ask");
-    expect(tools).toContain("oracle_agent");
-    expect(tools).not.toContain("oracle_consult");
     expect(tools).toContain("oracle_doctor");
     expect(tools).toContain("oracle_skills");
     expect(tools).toContain("oracle_oracle_list");
@@ -98,16 +73,17 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_persona_set");
   });
 
-  test("asks with files, lists, retrieves, and diagnoses", async () => {
+  test("consults, lists, retrieves, and diagnoses", async () => {
     const consultation = await client.callTool({
       name: "oracle_ask",
-      arguments: { question: "Review", files: ["src/**/*.ts"] }
+      arguments: { question: "Review this project" }
     });
     expect(consultation.isError).not.toBe(true);
     expect(consultation.structuredContent).toMatchObject({
-      soul: "default",
-      filesIncluded: 1
+      soul: "auto",
+      filesIncluded: 0
     });
+    expect(typeof (consultation.structuredContent as { sessionId: string }).sessionId).toBe("string");
 
     const sessions = await client.callTool({ name: "oracle_sessions", arguments: { limit: 1 } });
     const sessionId = (sessions.structuredContent as { sessions: Array<{ sessionId: string }> }).sessions[0].sessionId;
@@ -120,22 +96,6 @@ describe("Oracle MCP tools", () => {
     expect((doctor.structuredContent as { checks: Array<{ name: string }> }).checks).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "provider" })])
     );
-  });
-
-  test("oracle_agent runs the tool-use loop and writes a file in the workspace", async () => {
-    const run = await client.callTool({
-      name: "oracle_agent",
-      arguments: { prompt: "create agent-output.txt" }
-    });
-    expect(run.isError).not.toBe(true);
-    expect(run.structuredContent).toMatchObject({
-      finalText: "Done.",
-      turns: 2,
-      stoppedOnLimit: false
-    });
-    // The agent actually wrote the file via the write_file tool.
-    const written = await fs.readFile(path.join(root, "agent-output.txt"), "utf8");
-    expect(written).toBe("made by agent");
   });
 
   test("identity_setup accepts a single freeform string as well as an array for list fields", async () => {

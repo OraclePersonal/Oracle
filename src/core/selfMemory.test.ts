@@ -15,7 +15,8 @@ describe("self-memory", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmp, { recursive: true, force: true });
+    await new Promise((r) => setTimeout(r, 100));
+    await fs.rm(tmp, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it("returns nothing for a session that has never recorded anything", async () => {

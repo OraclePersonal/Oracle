@@ -4,6 +4,29 @@ import crypto from "node:crypto";
 import type { MemoryPort } from "../orchestrator/ports.js";
 import { generateEmbedding } from "./ollama.js";
 import { VectorStore } from "./vectorStore.js";
+import { EntityGraph } from "./entityGraph.js";
+import { consolidateMemories, type ConsolidationResult } from "./consolidation.js";
+import { pruneStaleMemories, promoteWorkingMemories, runMaintenance, type MaintenanceOptions, type MaintenanceResult } from "./maintenance.js";
+import { reflectOnMemories, type Reflection } from "./reflect.js";
+
+/** Options for MemoryAdapter.startAutoMaintenance(). */
+export interface AutoMaintenanceOptions {
+  /** How often to run the maintenance cycle (ms). Default: 1 hour. */
+  intervalMs?: number;
+  /**
+   * Run LLM-based reflection every N maintenance cycles.
+   * 0 or undefined = never. Default: 4 (every ~4 hours with 1h interval).
+   * Requires ANTHROPIC_API_KEY to do anything.
+   */
+  reflectEvery?: number;
+  /**
+   * Prune stale isolated entities from the graph every N maintenance cycles.
+   * 0 or undefined = never. Default: 2 (every ~2 hours with 1h interval).
+   */
+  graphPruneEvery?: number;
+  /** Max age (days) for isolated graph nodes before pruning. Default: 90. */
+  graphMaxAgeDays?: number;
+}
 
 // ponytail: writes directly to .oracle-memory/ format — zero deps, no MCP needed.
 // oracle-memory server reads the same files, so memory is shared transparently.
@@ -23,6 +46,9 @@ export interface MemoryStoreEntry {
   importance?: number;
   archived?: boolean;
   consolidatedBy?: string;
+  accessCount: number;
+  lastAccessed: string;
+  decayRate: number;
 }
 
 const DATA_DIR = ".oracle-memory";
@@ -46,9 +72,11 @@ function generateId(): string {
 export class MemoryAdapter implements MemoryPort {
   private vectors: VectorStore;
   private vectorsLoaded = false;
+  private entityGraph: EntityGraph;
 
   constructor(private readonly rootDir: string) {
     this.vectors = new VectorStore(rootDir);
+    this.entityGraph = new EntityGraph(rootDir);
   }
 
   private dataDir(): string {
@@ -96,15 +124,19 @@ export class MemoryAdapter implements MemoryPort {
     opts?: { tags?: string[]; meta?: Record<string, unknown>; importance?: number }
   ): Promise<MemoryStoreEntry> {
     await this.ensureDirs();
+    const now = new Date().toISOString();
     const entry: MemoryStoreEntry = {
       id: generateId(),
-      ts: new Date().toISOString(),
+      ts: now,
       agent,
       type,
       content,
       tags: opts?.tags ?? [],
       meta: opts?.meta ?? {},
       importance: opts?.importance ?? 0.5,
+      accessCount: 0,
+      lastAccessed: now,
+      decayRate: 0.01,
     };
     await this.writeEntry(entry);
 
@@ -112,15 +144,20 @@ export class MemoryAdapter implements MemoryPort {
     if (USE_OLLAMA) {
       this.ensureVectors().then(() => this.vectors.index(entry.id, content)).catch(() => {});
     }
+    // ponytail: fire-and-forget entity graph index
+    this.entityGraph.indexMemory(entry.id, content, entry.tags).catch(() => {});
     return entry;
   }
 
-  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number; includeArchived?: boolean }): Promise<MemoryStoreEntry[]> {
+  async recall(opts?: { type?: MemoryType; agent?: string; tags?: string[]; limit?: number; includeArchived?: boolean; touch?: boolean }): Promise<MemoryStoreEntry[]> {
     const type = opts?.type;
     const agent = opts?.agent;
     const tags = opts?.tags;
     const limit = opts?.limit ?? 20;
     const includeArchived = opts?.includeArchived ?? false;
+    // Bulk/internal reads (maintenance, consolidation, stats) pass touch:false
+    // so loading an entry for inspection doesn't itself reset its staleness clock.
+    const touch = opts?.touch ?? true;
     const dirs = type
       ? [this.typeDir(type)]
       : Object.values(TYPE_DIR).map((d) => path.join(this.dataDir(), d));
@@ -140,7 +177,31 @@ export class MemoryAdapter implements MemoryPort {
         }
       } catch { /* dir not ready */ }
     }
-    return entries.sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit);
+    const results = entries.sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, limit);
+    // Track access — fire-and-forget so recall never blocks
+    if (touch) {
+      for (const e of results) {
+        this.touchEntry(e).catch(() => {});
+      }
+    }
+    return results;
+  }
+
+  private async touchEntry(entry: MemoryStoreEntry): Promise<void> {
+    entry.accessCount = (entry.accessCount ?? 0) + 1;
+    entry.lastAccessed = new Date().toISOString();
+    await this.writeEntry(entry).catch(() => {});
+  }
+
+  private recencyWeightedScore(semanticScore: number, entry: MemoryStoreEntry): number {
+    const age = Date.now() - new Date(entry.lastAccessed ?? entry.ts).getTime();
+    const days = age / 86400000;
+    const importance = entry.importance ?? 0.5;
+    const accessCount = entry.accessCount ?? 0;
+    const decayRate = entry.decayRate ?? 0.01;
+    const recencyBoost = Math.exp(-days * decayRate);
+    const freqBoost = Math.log1p(accessCount) * 0.1;
+    return (semanticScore * 0.6) + (importance * 0.2) + (recencyBoost * 0.15) + (freqBoost * 0.05);
   }
 
   async searchMemories(query: string, opts?: { type?: MemoryType; agent?: string; limit?: number }): Promise<MemoryStoreEntry[]> {
@@ -171,6 +232,50 @@ export class MemoryAdapter implements MemoryPort {
     return entries.filter((e) => e.content.toLowerCase().includes(q) || e.tags.some((t) => t.toLowerCase().includes(q)));
   }
 
+  /**
+   * scoredSearchMemories — recency-weighted semantic search.
+   * Uses the same vector index as searchMemories, then re-ranks results
+   * with recency, frequency, and importance factored in.
+   */
+  async scoredSearchMemories(query: string, opts?: { type?: MemoryType; agent?: string; limit?: number }): Promise<MemoryStoreEntry[]> {
+    const limit = opts?.limit ?? 50;
+    const q = query.toLowerCase();
+
+    if (USE_OLLAMA && q.length > 0) {
+      await this.ensureVectors();
+      const queryEmb = await generateEmbedding(query);
+      if (queryEmb) {
+        const hits = this.vectors.search(queryEmb.embedding, limit * 4);
+        if (hits.length > 0) {
+          const ids = new Map(hits.map((h) => [h.memoryId, h.score]));
+          const all = await this.recall({ type: opts?.type, agent: opts?.agent, limit: 10_000 });
+          const scored = all
+            .filter((e) => ids.has(e.id))
+            .map((e) => ({
+              entry: e,
+              score: this.recencyWeightedScore(ids.get(e.id)!, e),
+            }))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, limit);
+          // Track access for scored results too
+          for (const s of scored) {
+            this.touchEntry(s.entry).catch(() => {});
+          }
+          return scored.map((s) => s.entry);
+        }
+      }
+    }
+
+    // Fallback: keyword + recency sort
+    const entries = await this.recall({ type: opts?.type, agent: opts?.agent, limit: limit * 2 });
+    const filtered = entries.filter((e) => e.content.toLowerCase().includes(q) || e.tags.some((t) => t.toLowerCase().includes(q)));
+    return filtered.sort((a, b) => {
+      const scoreA = this.recencyWeightedScore(0.5, a);
+      const scoreB = this.recencyWeightedScore(0.5, b);
+      return scoreB - scoreA;
+    }).slice(0, limit);
+  }
+
   async updateMemory(id: string, type: MemoryType, updates: { content?: string; tags?: string[]; importance?: number }): Promise<MemoryStoreEntry | null> {
     const entry = await this.readEntry(type, id);
     if (!entry) return null;
@@ -185,7 +290,7 @@ export class MemoryAdapter implements MemoryPort {
   }
 
   async getStats(): Promise<{ total: number; byType: Record<string, number>; byAgent: Record<string, number> }> {
-    const all = await this.recall({ limit: 10_000 });
+    const all = await this.recall({ limit: 10_000, touch: false });
     const byType: Record<string, number> = {};
     const byAgent: Record<string, number> = {};
     for (const e of all) {
@@ -200,6 +305,7 @@ export class MemoryAdapter implements MemoryPort {
       await fs.unlink(this.filePath(type, id));
     } catch { /* ignore */ }
     if (USE_OLLAMA) this.vectors.remove(id).catch(() => {});
+    this.entityGraph.removeMemory(id).catch(() => {});
   }
 
   async clearWorking(agent?: string): Promise<number> {
@@ -222,5 +328,185 @@ export class MemoryAdapter implements MemoryPort {
       }
     } catch { /* ignore */ }
     return count;
+  }
+
+  // ── Entity graph ─────────────────────────────────────────────────
+
+  /** Entity-aware search: expand query with related entities. */
+  async graphQuery(query: string, opts?: { agent?: string; limit?: number }): Promise<MemoryStoreEntry[]> {
+    const { entities, related } = await this.entityGraph.expandQuery(query);
+    const entityNames = new Set([...entities, ...related.map((r) => r.name)]);
+    const limit = opts?.limit ?? 20;
+
+    // Search by expanded terms
+    const expandedTerms = [query, ...entityNames].join(" ");
+    const results = await this.scoredSearchMemories(expandedTerms, { agent: opts?.agent, limit });
+    return results.slice(0, limit);
+  }
+
+  /** Find relation path between two entities. */
+  async graphFindPath(from: string, to: string): Promise<import("./entityGraph.js").PathHop[]> {
+    return this.entityGraph.findPath(from, to);
+  }
+
+  /** Entity graph statistics. */
+  async getGraphStats(): Promise<{ entityCount: number; edgeCount: number }> {
+    return this.entityGraph.getStats();
+  }
+
+  /** Prune stale/isolated entities from the graph. */
+  async graphPrune(maxAgeDays?: number): Promise<{ removedEntities: number; removedEdges: number }> {
+    return this.entityGraph.pruneGraph(maxAgeDays);
+  }
+
+  // ── Consolidation ───────────────────────────────────────────────
+
+  /** Merge near-duplicate memories by tag overlap. */
+  async consolidate(): Promise<ConsolidationResult> {
+    const all = await this.recall({ limit: 10_000, touch: false });
+
+    const archiveFn = async (id: string, consolidatedBy: string): Promise<boolean> => {
+      for (const t of Object.values(TYPE_DIR) as string[]) {
+        try {
+          const fp = path.join(this.dataDir(), t, `${id}.json`);
+          const raw = await fs.readFile(fp, "utf8").catch(() => null);
+          if (!raw) continue;
+          const entry = JSON.parse(raw) as MemoryStoreEntry;
+          if (entry.id !== id) continue;
+          entry.archived = true;
+          entry.consolidatedBy = consolidatedBy;
+          await this.writeEntry(entry);
+          return true;
+        } catch { /* try next dir */ }
+      }
+      return false;
+    };
+
+    const saveFn = async (entry: MemoryStoreEntry): Promise<MemoryStoreEntry> => {
+      await this.writeEntry(entry);
+      return entry;
+    };
+
+    return consolidateMemories(all, saveFn, archiveFn);
+  }
+
+  // ── Maintenance ─────────────────────────────────────────────────
+
+  /** Prune stale low-importance memories. */
+  async pruneStale(opts?: MaintenanceOptions): Promise<string[]> {
+    const all = await this.recall({ limit: 10_000, touch: false });
+    const saveFn = async (entry: MemoryStoreEntry): Promise<void> => {
+      await this.writeEntry(entry);
+    };
+    return pruneStaleMemories(all, opts, saveFn);
+  }
+
+  /** Promote working memories with high access count to insight. */
+  async promoteWorking(opts?: MaintenanceOptions): Promise<string[]> {
+    const all = await this.recall({ limit: 10_000, touch: false });
+    const saveFn = async (entry: MemoryStoreEntry): Promise<void> => {
+      await this.writeEntry(entry);
+    };
+    const deleteFn = async (id: string, type: string): Promise<void> => {
+      await this.forget(id, type as MemoryType);
+    };
+    return promoteWorkingMemories(all, opts, saveFn, deleteFn);
+  }
+
+  /** Run both prune and promote in sequence. */
+  async runMaintenance(opts?: MaintenanceOptions): Promise<MaintenanceResult> {
+    const all = await this.recall({ limit: 10_000, touch: false });
+    const saveFn = async (entry: MemoryStoreEntry): Promise<void> => {
+      await this.writeEntry(entry);
+    };
+    const deleteFn = async (id: string, type: string): Promise<void> => {
+      await this.forget(id, type as MemoryType);
+    };
+    return runMaintenance(all, opts, saveFn, deleteFn);
+  }
+
+  // ── Reflection ──────────────────────────────────────────────────
+
+  /** LLM-based insight synthesis from related memories. Requires ANTHROPIC_API_KEY. */
+  async reflect(opts?: { agent?: string }): Promise<Reflection[]> {
+    const all = await this.recall({ limit: 200, agent: opts?.agent, touch: false });
+    return reflectOnMemories(all);
+  }
+
+  // ── Auto-Maintenance Scheduling ─────────────────────────────────
+
+  private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
+  private maintenanceCycle = 0;
+
+  /**
+   * Start periodic maintenance on an interval.
+   *
+   * Each cycle runs: consolidate → prune + promote → (optionally) graph prune → (optionally) reflect.
+   * Graph pruning and reflection are run at a reduced frequency (every N cycles)
+   * because they are more expensive operations.
+   *
+   * @returns A function to stop the scheduled maintenance.
+   */
+  startAutoMaintenance(opts?: AutoMaintenanceOptions): () => void {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+    }
+
+    const intervalMs = opts?.intervalMs ?? 3_600_000;
+    const reflectEvery = opts?.reflectEvery ?? 4;
+    const graphPruneEvery = opts?.graphPruneEvery ?? 2;
+    const graphMaxAgeDays = opts?.graphMaxAgeDays ?? 90;
+
+    const run = async () => {
+      this.maintenanceCycle++;
+      try {
+        // ── Consolidate ────────────────────────────────────────────
+        const consolidateResult = await this.consolidate();
+        if (consolidateResult.consolidated > 0) {
+          console.log(`[auto-maintenance] consolidated ${consolidateResult.consolidated} memories`);
+        }
+
+        // ── Prune + promote ────────────────────────────────────────
+        const maintResult = await this.runMaintenance();
+        if (maintResult.pruned.length > 0) {
+          console.log(`[auto-maintenance] pruned ${maintResult.pruned.length} stale memories`);
+        }
+        if (maintResult.promoted.length > 0) {
+          console.log(`[auto-maintenance] promoted ${maintResult.promoted.length} memories to insight`);
+        }
+
+        // ── Graph pruning (every N cycles) ─────────────────────────
+        if (graphPruneEvery > 0 && this.maintenanceCycle % graphPruneEvery === 0) {
+          const graphResult = await this.graphPrune(graphMaxAgeDays);
+          if (graphResult.removedEntities > 0 || graphResult.removedEdges > 0) {
+            console.log(`[auto-maintenance] pruned graph: ${graphResult.removedEntities} entities, ${graphResult.removedEdges} edges`);
+          }
+        }
+
+        // ── Reflection (every N cycles) ────────────────────────────
+        if (reflectEvery > 0 && this.maintenanceCycle % reflectEvery === 0) {
+          const reflections = await this.reflect();
+          if (reflections.length > 0) {
+            console.log(`[auto-maintenance] generated ${reflections.length} new insights via reflection`);
+          }
+        }
+      } catch (err) {
+        console.error("[auto-maintenance] error:", err);
+      }
+    };
+
+    // Run once immediately, then on the interval
+    run();
+    this.maintenanceTimer = setInterval(run, intervalMs);
+
+    return () => this.stopAutoMaintenance();
+  }
+
+  /** Stop the periodic maintenance if it was started. */
+  stopAutoMaintenance(): void {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = null;
+    }
   }
 }

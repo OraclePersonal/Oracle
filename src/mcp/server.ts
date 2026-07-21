@@ -4,14 +4,16 @@ import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ProjectConfig } from "../config/project.js";
+import { DEFAULT_SYSTEM_PROMPT } from "../context/bundle.js";
 import type { ConsultService } from "../core/consult.js";
 import { OracleError, serializeOracleError } from "../errors.js";
-import { isOracleError } from "./oracleErrors.js";
 import { checkProvider } from "../providers/factory.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { OracleRegistry } from "../oracles/registry.js";
 import { ProfileStore } from "../identity/profile.js";
 import type { MemoryPort } from "../orchestrator/ports.js";
+import type { PRFile } from "../github/types.js";
+import * as gh from "../github/gh.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
 import { getConversationContext, recordSelfLog } from "../core/selfMemory.js";
 import { loadSoul } from "../core/souls.js";
@@ -34,9 +36,7 @@ interface OracleServerDependencies {
   memory: MemoryPort;
   profile: ProfileStore;
   providerChecks?: typeof checkProvider;
-  /** Present only when the configured provider supports agentic tool use. */
   agent?: AgentService;
-  /** Why the agent is unavailable, surfaced by oracle_agent when agent is undefined. */
   agentUnavailableReason?: string;
 }
 
@@ -69,14 +69,7 @@ function success(text: string, structuredContent: Record<string, unknown>) {
 }
 
 function failure(error: unknown) {
-  let serialized: Record<string, any>;
-  if (isOracleError(error)) {
-    serialized = error.toJSON();
-  } else if (error instanceof OracleError) {
-    serialized = serializeOracleError(error);
-  } else {
-    serialized = { error: error instanceof Error ? error.message : String(error) };
-  }
+  const serialized = serializeOracleError(error);
   return {
     isError: true,
     content: [{ type: "text" as const, text: JSON.stringify(serialized) }],
@@ -103,59 +96,23 @@ export function registerOracleTools({
     "oracle_agent",
     {
       title: "Run Oracle Agent",
-      description:
-        "Autonomously carry out a coding task in the workspace: Oracle reads/writes/edits files, searches the codebase, and runs shell commands (build, tests, git) in a tool-use loop until the task is done. Use for 'implement X', 'fix the failing test', 'refactor Y'. Set readOnly to investigate without changing anything. Requires an agent-capable provider (anthropic or opencode).",
+      description: "Autonomously carry out a coding task in the workspace with a tool-use loop.",
       inputSchema: {
-        prompt: z
-          .string()
-          .min(1)
-          .max(50000)
-          .describe("The task to carry out, e.g. 'add a --verbose flag to the CLI and update the README'"),
-        readOnly: z
-          .boolean()
-          .optional()
-          .describe("Investigate only — disables write_file/edit_file/bash (default false)"),
-        maxSteps: z
-          .number()
-          .int()
-          .min(1)
-          .max(50)
-          .optional()
-          .describe("Max agent turns before stopping (default 20)")
+        prompt: z.string().min(1).max(50000),
+        readOnly: z.boolean().optional(),
+        maxSteps: z.number().int().min(1).max(50).optional()
       }
     },
-    async ({ prompt, readOnly, maxSteps }, extra) => {
+    async ({ prompt, readOnly, maxSteps }) => {
       try {
         if (!agent) {
           throw new OracleError(
             "ORACLE_AGENT_UNAVAILABLE",
             "The agent is not available with the configured provider.",
-            agentUnavailableReason ??
-              "Set provider to 'anthropic' or 'opencode' in .oracle/config.json."
+            agentUnavailableReason ?? "Set provider to 'anthropic' or 'opencode' in .oracle/config.json."
           );
         }
-        const progressToken = extra._meta?.progressToken;
-        const result = await agent.run({
-          prompt,
-          workspaceRoot,
-          model: config.model,
-          readOnly,
-          maxSteps,
-          onStep: async (step) => {
-            if (progressToken === undefined) return;
-            await extra.sendNotification({
-              method: "notifications/progress",
-              params: {
-                progressToken,
-                progress: step.turn,
-                message:
-                  step.toolsUsed.length > 0
-                    ? `Turn ${step.turn}: ${step.toolsUsed.join(", ")}`
-                    : `Turn ${step.turn}: finalizing`
-              }
-            });
-          }
-        });
+        const result = await agent.run({ prompt, workspaceRoot, model: config.model, readOnly, maxSteps });
         return success(result.finalText, {
           finalText: result.finalText,
           steps: result.steps,
@@ -177,14 +134,7 @@ export function registerOracleTools({
       description: "Ask Oracle anything — a question, or 'look at these files and tell me X'. One entry point: pass `files` when the answer needs actual code, omit it for a plain conversation. Pass `conversationId` across calls in the same exchange so Oracle remembers what it already told you.",
       inputSchema: {
         question: z.string().min(1).describe("Your question or what you're stuck on"),
-        oracle: z
-          .string()
-          .optional()
-          .describe("Oracle profile name (e.g. 'coding', 'security'). Auto-scopes memory and uses profile's soul"),
-        soul: z
-          .string()
-          .optional()
-          .describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
+        soul: z.string().optional().describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
         context: z.string().optional().describe("Additional context: code snippets, error messages, what you've tried"),
         files: z.array(z.string()).optional().describe("File paths or glob patterns to read and include, when the question needs real code (e.g. ['src/**/*.ts'])"),
         conversationId: z.string().optional().describe("Stable id for this exchange — pass the same value across multiple oracle_ask calls so Oracle recalls what it already said"),
@@ -192,11 +142,22 @@ export function registerOracleTools({
         doc_search: z.string().optional().describe("Specific doc query (defaults to using the question itself)")
       }
     },
-    async ({ question, oracle, soul, context, files, conversationId, include_docs, doc_search }) => {
+    async ({ question, soul, context, files, conversationId, include_docs, doc_search }) => {
       try {
-        let agentScope = oracle;
-        const soulName = soul ?? (oracle ? oracle : "default");
-        const soulPrompt = await loadSoul(soulName, soulsDir);
+        if (soul !== undefined) {
+          soul = soul.trim();
+          if (soul === "") soul = undefined;
+        }
+        // Build system prompt — use specific soul if given, otherwise auto-detect mood
+        let soulName: string;
+        let soulPrompt: string | undefined;
+        if (soul) {
+          soulName = soul;
+          soulPrompt = await loadSoul(soulName, soulsDir);
+        } else {
+          soulName = "auto";
+        }
+        const systemPrompt = buildOracleSystemPrompt(soulPrompt);
         let ctxBlock = context ? `\n\n## Context from the asking agent\n${context}` : "";
 
         if (conversationId) {
@@ -215,23 +176,7 @@ export function registerOracleTools({
           }
         }
 
-        // Inject memory context if oracle profile has memory enabled
-        let memoryCtx = "";
-        if (agentScope) {
-          const oracleProfile = await oracles.getOracle(agentScope);
-          if (oracleProfile?.memory) {
-            const memoryEntries = await memory.recall({ agent: agentScope, limit: 5 });
-            if (memoryEntries.length > 0) {
-              const memoryBlock = memoryEntries
-                .map((e) => `[${e.type.toUpperCase()}] ${e.content.slice(0, 200)}`)
-                .join("\n\n");
-              memoryCtx = `\n\n## Memory Context (agent: ${agentScope})\n${memoryBlock}`;
-            }
-          }
-        }
-
-        const prompt = `${ctxBlock}${memoryCtx}\n\n## Question\n${question}`;
-        const systemPrompt = buildOracleSystemPrompt(soulPrompt);
+        const prompt = `${ctxBlock}\n\n## Question\n${question}`;
         const hasFiles = files !== undefined && files.length > 0;
         const result = await service.consult({
           prompt,
@@ -250,22 +195,10 @@ export function registerOracleTools({
           await recordSelfLog(memory, conversationId, { question, answerSummary: result.output.slice(0, 400) });
         }
 
-        // Auto-save insight to memory if oracle profile has memory enabled
-        if (agentScope) {
-          const oracleProfile = await oracles.getOracle(agentScope);
-          if (oracleProfile?.memory && result.status === "completed") {
-            await memory.remember(agentScope, "insight", result.output.slice(0, 500), {
-              tags: ["ask", "qa"],
-              importance: 0.5
-            });
-          }
-        }
-
         return success(result.output, {
           soul: soulName,
           sessionId: result.sessionId,
-          filesIncluded: result.files.length,
-          agentScope
+          filesIncluded: result.files.length
         });
       } catch (error) {
         return failure(error);
@@ -396,24 +329,8 @@ export function registerOracleTools({
     "oracle_memory_list",
     {
       title: "List Memory",
-      description: "Show memory entries from the .oracle-memory store, filtered by agent, type, and recency.",
-      inputSchema: {
-        agent: z
-          .string()
-          .optional()
-          .describe("Agent name to filter by (your name or oracle profile name)"),
-        type: z
-          .enum(["fact", "insight", "chunk", "working"])
-          .optional()
-          .describe("Memory type: fact (durable), insight (analysis), chunk (code), working (session temp)"),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .default(10)
-          .describe("Max entries to return")
-      }
+      description: "Show memory entries from the .oracle-memory store.",
+      inputSchema: { agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(100).default(10) }
     },
     async ({ agent, type, limit }) => {
       try {
@@ -427,29 +344,8 @@ export function registerOracleTools({
     "oracle_memory_search",
     {
       title: "Search Memory",
-      description: "Full-text search over memory contents by keyword, returning ranked results.",
-      inputSchema: {
-        query: z
-          .string()
-          .min(1)
-          .max(500)
-          .describe("Search keyword or phrase"),
-        agent: z
-          .string()
-          .optional()
-          .describe("Filter to a specific agent's memory"),
-        type: z
-          .enum(["fact", "insight", "chunk", "working"])
-          .optional()
-          .describe("Filter by memory type"),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(200)
-          .default(20)
-          .describe("Max results to return")
-      }
+      description: "Search memory contents by keyword.",
+      inputSchema: { query: z.string().min(1), agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(200).default(20) }
     },
     async ({ query, agent, type, limit }) => {
       try {
@@ -501,6 +397,181 @@ export function registerOracleTools({
       try {
         const count = await memory.clearWorking(agent ?? undefined);
         return success(`Cleared ${count} working memory entries.`, { cleared: count });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_scored_search",
+    {
+      title: "Scored Memory Search",
+      description: "Semantic search with recency-weighted scoring — combines vector similarity, importance, access frequency, and recency boost.",
+      inputSchema: {
+        query: z.string().min(1),
+        agent: z.string().optional(),
+        type: z.enum(["fact", "insight", "chunk", "working"]).optional(),
+        limit: z.number().int().min(1).max(200).default(20)
+      }
+    },
+    async ({ query, agent, type, limit }) => {
+      try {
+        const entries = await memory.scoredSearchMemories(query, { agent: agent ?? undefined, type: type as any, limit });
+        return success(JSON.stringify(entries, null, 2), { count: entries.length, entries });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_graph_query",
+    {
+      title: "Entity Graph Search",
+      description: "Entity-aware memory search — expands query with related entities from the knowledge graph for richer results.",
+      inputSchema: {
+        query: z.string().min(1),
+        agent: z.string().optional(),
+        limit: z.number().int().min(1).max(200).default(20)
+      }
+    },
+    async ({ query, agent, limit }) => {
+      try {
+        const entries = await memory.graphQuery?.(query, { agent: agent ?? undefined, limit }) ?? [];
+        return success(JSON.stringify(entries, null, 2), { count: entries.length, entries });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_graph_path",
+    {
+      title: "Entity Relationship Path",
+      description: "Find the shortest relationship path between two entities in the knowledge graph.",
+      inputSchema: {
+        from: z.string().min(1),
+        to: z.string().min(1)
+      }
+    },
+    async ({ from, to }) => {
+      try {
+        const path = await memory.graphFindPath?.(from, to) ?? [];
+        return success(JSON.stringify(path, null, 2), { hops: path.length, path });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_graph_stats",
+    {
+      title: "Entity Graph Stats",
+      description: "Entity count and edge count statistics for the memory knowledge graph.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const stats = await memory.getGraphStats?.() ?? { entityCount: 0, edgeCount: 0 };
+        return success(JSON.stringify(stats, null, 2), { stats });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_graph_prune",
+    {
+      title: "Prune Entity Graph",
+      description: "Remove stale isolated entities and orphaned edges from the knowledge graph to control growth.",
+      inputSchema: {
+        max_age_days: z.number().int().min(1).optional().describe("Max age in days for isolated nodes (default 90)")
+      }
+    },
+    async ({ max_age_days }) => {
+      try {
+        const result = await memory.graphPrune?.(max_age_days) ?? { removedEntities: 0, removedEdges: 0 };
+        return success(`Pruned ${result.removedEntities} entities and ${result.removedEdges} edges.`, { ...result });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_consolidate",
+    {
+      title: "Consolidate Memories",
+      description: "Merge near-duplicate memories that share tag sets — reduces clutter without losing information.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const result = await memory.consolidate?.() ?? { consolidated: 0, created: null, archived: [] };
+        return success(JSON.stringify(result, null, 2), { ...result });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_prune",
+    {
+      title: "Prune Stale Memories",
+      description: "Soft-archive durable memories untouched for N days with low importance. Recoverable via recall with includeArchived.",
+      inputSchema: {
+        min_importance: z.number().min(0).max(1).optional().describe("Decayed-importance floor (default 0.2)"),
+        min_stale_days: z.number().int().min(1).optional().describe("Untouched days threshold (default 30)")
+      }
+    },
+    async ({ min_importance, min_stale_days }) => {
+      try {
+        const pruned = await memory.pruneStale?.({ minImportance: min_importance, minStaleDays: min_stale_days }) ?? [];
+        return success(`Pruned ${pruned.length} memories.`, { count: pruned.length, ids: pruned });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_promote",
+    {
+      title: "Promote Working Memories",
+      description: "Promote working memories retrieved 3+ times into durable 'insight' memories for long-term retention.",
+      inputSchema: {
+        min_access_count: z.number().int().min(1).max(100).optional().describe("Min retrievals to promote (default 3)")
+      }
+    },
+    async ({ min_access_count }) => {
+      try {
+        const promoted = await memory.promoteWorking?.({ minAccessCount: min_access_count }) ?? [];
+        return success(`Promoted ${promoted.length} working memories to insight.`, { count: promoted.length, ids: promoted });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_maintenance",
+    {
+      title: "Run Memory Maintenance",
+      description: "Run both prune (stale low-value) and promote (frequently-accessed working → insight) in one call.",
+      inputSchema: {
+        min_importance: z.number().min(0).max(1).optional(),
+        min_stale_days: z.number().int().min(1).optional(),
+        min_access_count: z.number().int().min(1).max(100).optional()
+      }
+    },
+    async ({ min_importance, min_stale_days, min_access_count }) => {
+      try {
+        const result = await memory.runMaintenance?.({ minImportance: min_importance, minStaleDays: min_stale_days, minAccessCount: min_access_count }) ?? { pruned: [], promoted: [] };
+        return success(`Pruned ${result.pruned.length}, promoted ${result.promoted.length}.`, { ...result });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_memory_reflect",
+    {
+      title: "Memory Reflection",
+      description: "LLM insight synthesis: cluster related memories and distill NEW higher-level insights, saved as 'insight' memories. Requires ANTHROPIC_API_KEY.",
+      inputSchema: {
+        agent: z.string().optional().describe("Agent name for the reflection")
+      }
+    },
+    async ({ agent }) => {
+      try {
+        const insights = await memory.reflect?.({ agent: agent ?? undefined }) ?? [];
+        return success(JSON.stringify(insights, null, 2), { count: insights.length, insights });
       } catch (error) { return failure(error); }
     }
   );
@@ -788,4 +859,261 @@ export function registerOracleTools({
       }
     }
   );
+
+  // ── GitHub tools ────────────────────────────────────────────────
+
+  server.registerTool(
+    "oracle_github_pr_get",
+    {
+      title: "Get PR Details",
+      description: "Get details of a GitHub pull request.",
+      inputSchema: {
+        number: z.number().int().positive(),
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
+      }
+    },
+    async ({ number, repo }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        const pr = gh.getPR(number, r);
+        return success(JSON.stringify(pr, null, 2), pr as unknown as Record<string, unknown>);
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_pr_list",
+    {
+      title: "List PRs",
+      description: "List GitHub pull requests with filters.",
+      inputSchema: {
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote"),
+        state: z.enum(["open", "closed", "merged", "all"]).default("open"),
+        limit: z.number().int().min(1).max(100).default(30),
+        base: z.string().optional(),
+        head: z.string().optional(),
+        author: z.string().optional(),
+        labels: z.string().optional().describe("comma-separated")
+      }
+    },
+    async ({ repo, state, limit, base, head, author, labels }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        const prs = gh.listPRs({ repo: r, state, limit, base, head, author, labels: labels?.split(",") });
+        return success(JSON.stringify(prs, null, 2), { count: prs.length, prs: prs as unknown as Record<string, unknown>[] });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_pr_diff",
+    {
+      title: "Get PR Diff",
+      description: "Get the full diff for a pull request.",
+      inputSchema: {
+        number: z.number().int().positive(),
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
+      }
+    },
+    async ({ number, repo }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        const diff = gh.getPRDiff(number, r);
+        return success(diff, { number, diffLength: diff.length });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_pr_files",
+    {
+      title: "Get PR Files",
+      description: "Get the list of changed files in a pull request.",
+      inputSchema: {
+        number: z.number().int().positive(),
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
+      }
+    },
+    async ({ number, repo }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        const files = gh.getPRFiles(number, r);
+        return success(JSON.stringify(files, null, 2), { count: files.length, files: files as unknown as Record<string, unknown>[] });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_pr_review",
+    {
+      title: "Review PR",
+      description: "Review a pull request using Oracle's consult engine. Returns AI analysis. Does NOT post the review to GitHub — use oracle_github_pr_review_submit to post.",
+      inputSchema: {
+        number: z.number().int().positive(),
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
+      }
+    },
+    async ({ number, repo }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        const pr = gh.getPR(number, r);
+        const diff = gh.getPRDiff(number, r);
+        const files = gh.getPRFiles(number, r);
+        const fileList = files.map((f: PRFile) => `  ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`).join("\n");
+        const reviewPrompt = [
+          `## PR Review: #${number} — ${pr.title}`,
+          `**Author:** ${pr.author}  **Repo:** ${r}`,
+          `**Base:** ${pr.baseRef} ← **Head:** ${pr.headRef}`,
+          "",
+          pr.body ? `### Description\n${pr.body}\n` : "",
+          `### Changed Files (${files.length})`,
+          fileList,
+          "",
+          "### Diff",
+          "```diff",
+          diff.slice(0, 50000),
+          "```",
+          "",
+          "Review this PR for correctness, edge cases, security, and maintainability.",
+          "Be specific — cite line numbers from the diff. Categorize findings by severity (critical/major/minor/nit).",
+        ].filter(Boolean).join("\n");
+
+        const result = await service.consult({
+          prompt: reviewPrompt,
+          preset: "review",
+          provider: providerId,
+          model: config.model,
+          cwd: workspaceRoot,
+          systemPrompt: "You are a senior code reviewer. Analyze the PR diff and files. Be specific, cite line numbers, and categorize findings by severity (critical/major/minor/nit). End with a verdict: approve, request changes, or comment."
+        });
+
+        return success(result.output, {
+          sessionId: result.sessionId,
+          prNumber: number,
+          repo: r,
+          files: files.length,
+          diffBytes: diff.length
+        });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_pr_review_submit",
+    {
+      title: "Submit PR Review",
+      description: "Submit a review on a pull request (APPROVE, REQUEST_CHANGES, or COMMENT).",
+      inputSchema: {
+        number: z.number().int().positive(),
+        body: z.string().describe("Review body text"),
+        event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]).default("COMMENT"),
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
+      }
+    },
+    async ({ number, body, event, repo }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        gh.submitPRReview(number, body, event, r);
+        return success(`Review submitted on PR #${number}`, { number, event, repo: r });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_issue_get",
+    {
+      title: "Get Issue",
+      description: "Get details of a GitHub issue.",
+      inputSchema: {
+        number: z.number().int().positive(),
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
+      }
+    },
+    async ({ number, repo }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        const issue = gh.getIssue(number, r);
+        return success(JSON.stringify(issue, null, 2), issue as unknown as Record<string, unknown>);
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_issue_list",
+    {
+      title: "List Issues",
+      description: "List GitHub issues with filters.",
+      inputSchema: {
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote"),
+        state: z.enum(["open", "closed", "all"]).default("open"),
+        limit: z.number().int().min(1).max(100).default(30),
+        author: z.string().optional(),
+        labels: z.string().optional().describe("comma-separated")
+      }
+    },
+    async ({ repo, state, limit, author, labels }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        const issues = gh.listIssues({ repo: r, state, limit, author, labels: labels?.split(",") });
+        return success(JSON.stringify(issues, null, 2), { count: issues.length, issues: issues as unknown as Record<string, unknown>[] });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_comment",
+    {
+      title: "Create GitHub Comment",
+      description: "Create a comment on a GitHub issue or pull request.",
+      inputSchema: {
+        number: z.number().int().positive(),
+        body: z.string().min(1),
+        repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
+      }
+    },
+    async ({ number, body, repo }) => {
+      try {
+        const r = repo ?? gh.inferRepo(workspaceRoot);
+        gh.createComment(number, body, r);
+        return success(`Comment posted on #${number}`, { number, repo: r });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_search",
+    {
+      title: "Search GitHub Code",
+      description: "Search code across GitHub repositories.",
+      inputSchema: {
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(50).default(10)
+      }
+    },
+    async ({ query, limit }) => {
+      try {
+        const results = gh.searchCode(query, limit);
+        return success(JSON.stringify(results, null, 2), { count: results.length, results: results as unknown as Record<string, unknown>[] });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_github_api",
+    {
+      title: "GitHub API",
+      description: "Raw GitHub API GET request via gh CLI.",
+      inputSchema: {
+        endpoint: z.string().min(1).describe("e.g. /repos/owner/repo/pulls")
+      }
+    },
+    async ({ endpoint }) => {
+      try {
+        const data = gh.apiRequest(endpoint);
+        return success(JSON.stringify(data, null, 2), { endpoint });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  // ── /GitHub tools ───────────────────────────────────────────────
 }

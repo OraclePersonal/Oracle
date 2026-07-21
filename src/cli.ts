@@ -28,6 +28,8 @@ import { OracleRegistry } from "./oracles/registry.js";
 import { OrchestratorFactory } from "./orchestrator/factory.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import { ProfileStore } from "./identity/profile.js";
+import * as gh from "./github/gh.js";
+import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
 import { webSearchWithTrace } from "./web/search.js";
 import { fetchUrl } from "./web/fetchUrl.js";
@@ -35,7 +37,6 @@ import { agentqlExtract } from "./web/providers/agentql.js";
 import { loadSoul } from "./core/souls.js";
 import { buildOracleSystemPrompt } from "./core/systemPrompt.js";
 import { getConversationContext, recordSelfLog } from "./core/selfMemory.js";
-import { createDebouncer, reviewWorkingTreeDiff } from "./core/watch.js";
 import { buildWiki, getWikiPage, listWikiTopics } from "./wiki/compile.js";
 
 const homeDir = (): string =>
@@ -46,132 +47,12 @@ const program = new Command()
   .description("Oracle — MCP-powered AI coding consultant")
   .version(VERSION);
 
-// ── consult ──────────────────────────────────────────────────────
-program
-  .command("consult")
-  .description("Consult an oracle with a prompt and project context")
-  .requiredOption("-p, --prompt <text>", "Consultation prompt")
-  .option("--oracle <name>", "Oracle profile to use")
-  .option("--skill <name>", "Skill to apply (default: review)")
-  .option("-f, --file <pattern...>", "File paths or glob patterns", [])
-  .option("--diff [target]", "Include git diff (against branch, default: HEAD~1)")
-  .option("-m, --model <model>", "Model override")
-  .option("--provider <provider>", "Provider override")
-  .option("--cwd <path>", "Working directory", process.cwd())
-  .option("--json", "Print JSON result")
-  .action(async (options) => {
-    const cwd = path.resolve(options.cwd);
-    const skillReg = new SkillRegistry(homeDir(), cwd);
-    await skillReg.load();
-    const oracleReg = new OracleRegistry(homeDir(), cwd);
-
-    let skillName = options.skill ?? "review";
-    let model = options.model;
-    let providerName = options.provider;
-
-    // Load oracle profile if specified
-    if (options.oracle) {
-      const profile = await oracleReg.getOracle(options.oracle);
-      if (!profile) throw new Error(`Oracle not found: ${options.oracle}`);
-      skillName = profile.skill;
-      model = model ?? profile.model;
-      providerName = providerName ?? profile.provider;
-      if (profile.systemPrompt) {
-        // prepend custom system prompt
-      }
-    }
-
-    const skill = skillReg.get(skillName);
-    if (!skill) throw new Error(`Unknown skill: ${skillName}. Available: ${skillReg.names().join(", ")}`);
-
-    const finalProvider = providerName ?? "codex";
-    const parsedProvider = parseProviderName(finalProvider);
-    const checks = await checkProvider(parsedProvider);
-    const failedCheck = checks.find((chk) => !chk.ok);
-    if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
-
-    const service = new ConsultService(createProvider(parsedProvider));
-    const systemPrompt = skillReg.compose(skillName, DEFAULT_SYSTEM_PROMPT);
-    const profile = new ProfileStore(homeDir());
-    const personalCtx = await profile.buildPersonalContext();
-    const personalizedPrompt = personalCtx ? `${personalCtx}\n\n${systemPrompt}` : systemPrompt;
-
-    // Create memory adapter via orchestrator (MCP-backed or file fallback)
-    const orchestrator = new OrchestratorFactory(cwd, homeDir());
-    const memory = await orchestrator.createMemoryAdapter();
-
-    // Build memory context if oracle has memory enabled
-    let finalSystemPrompt = personalizedPrompt;
-    if (options.oracle) {
-      const profile = await oracleReg.getOracle(options.oracle);
-      if (profile?.memory) {
-        const entries = await memory.recall({ agent: options.oracle });
-        if (entries.length > 0) {
-          const ctx = entries.map((e) => `[${e.type}] ${e.content.slice(0, 200)}`).join("\n\n");
-          finalSystemPrompt = `${systemPrompt}\n\n[PREVIOUS CONTEXT]\n${ctx}`;
-        }
-      }
-    }
-
-    // Include git diff if --diff is passed
-    if (options.diff !== undefined) {
-      const target = options.diff || "HEAD~1";
-      try {
-        const { execFileSync } = await import("node:child_process");
-        const diff = execFileSync("git", ["diff", target], { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 });
-        if (diff.trim()) {
-          options.prompt = `${options.prompt}\n\n[GIT DIFF: ${target}]\n\`\`\`\n${diff.trim()}\n\`\`\``;
-        }
-      } catch (e: any) {
-        console.error(`Warning: git diff failed: ${e.message}`);
-      }
-    }
-
-    const result = await service.consult({
-      prompt: options.prompt,
-      preset: skillName,
-      provider: finalProvider,
-      files: options.file,
-      model: model ?? skill.model ?? "gpt-5.4",
-      cwd,
-      systemPrompt: finalSystemPrompt
-    });
-
-    // Save memory if oracle has memory enabled
-    if (options.oracle) {
-      const profile = await oracleReg.getOracle(options.oracle);
-      if (profile?.memory && result.status === "completed") {
-        await memory.remember(options.oracle, "insight", result.output.slice(0, 500), {
-          tags: [skillName, "consult"],
-          meta: { sessionId: result.sessionId, prompt: options.prompt }
-        });
-      }
-    }
-
-    if (options.json) console.log(JSON.stringify(result, null, 2));
-    else {
-      console.log(`Session: ${result.sessionId}`);
-      console.log(`Status: ${result.status}`);
-      const tokens = result.estimatedInputTokens
-        ? `~${result.estimatedInputTokens.toLocaleString()} in`
-        : "";
-      if (result.usage?.totalTokens) {
-        console.log(`Tokens: ${tokens} | ${result.usage.totalTokens.toLocaleString()} total`);
-      } else if (result.estimatedInputTokens) {
-        console.log(`Tokens: ${tokens}`);
-      }
-      if (result.error) console.error(`Error: ${result.error}`);
-      if (result.output) console.log(`\n${result.output}`);
-    }
-    process.exitCode = result.status === "completed" ? 0 : 1;
-  });
-
 // ── ask ──────────────────────────────────────────────────────────
 program
   .command("ask")
   .description("Ask Oracle anything, one entry point — pass -f to also look at code")
   .argument("<question>", "Your question")
-  .option("--soul <name>", "Soul prompt name (~/.oracle/souls/<name>.md)", "default")
+  .option("--soul <name>", "Soul prompt name (~/.oracle/souls/<name>.md)")
   .option("-f, --file <pattern...>", "File paths or glob patterns to include")
   .option("--conversation <id>", "Stable id so Oracle recalls what it already told you across calls")
   .option("--include-docs", "Search .oracle/docs/ for relevant documentation")
@@ -188,7 +69,9 @@ program
 
     const service = new ConsultService(createProvider(parsedProvider));
     const soulsDir = path.join(homeDir(), "souls");
-    const soulPrompt = await loadSoul(options.soul, soulsDir);
+
+    // Build system prompt — use specific soul if --soul given, otherwise auto-detect mood
+    const soulPrompt = options.soul ? await loadSoul(options.soul, soulsDir) : undefined;
     const systemPrompt = buildOracleSystemPrompt(soulPrompt);
 
     const orchestrator = new OrchestratorFactory(cwd, homeDir());
@@ -226,14 +109,14 @@ program
     process.exitCode = result.status === "completed" ? 0 : 1;
   });
 
-// ── agent (autonomous coding loop) ────────────────────────────────
+// ── oracle ───────────────────────────────────────────────────────
 program
   .command("agent")
-  .description("Autonomously carry out a coding task — reads/writes/edits files and runs commands in a tool-use loop")
-  .argument("<task>", "The task to carry out, e.g. 'add a --verbose flag and update the README'")
+  .description("Autonomously carry out a coding task with a tool-use loop")
+  .argument("<task>", "The task to carry out")
   .option("--provider <provider>", "Provider override (agent needs anthropic or opencode)")
   .option("-m, --model <model>", "Model override", "auto")
-  .option("--read-only", "Investigate only — disables write_file/edit_file/bash")
+  .option("--read-only", "Investigate only")
   .option("--max-steps <n>", "Max agent turns before stopping", "20")
   .option("--cwd <path>", "Working directory", process.cwd())
   .action(async (task, options) => {
@@ -242,7 +125,6 @@ program
     const checks = await checkProvider(parsedProvider);
     const failedCheck = checks.find((chk) => !chk.ok);
     if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
-
     const agent = new AgentService(createAgentProvider(parsedProvider));
     const result = await agent.run({
       prompt: task,
@@ -250,90 +132,12 @@ program
       model: options.model,
       readOnly: Boolean(options.readOnly),
       maxSteps: Number(options.maxSteps),
-      onStep: (step) => {
-        const tools = step.toolsUsed.length ? ` → ${step.toolsUsed.join(", ")}` : " → done";
-        console.error(`[turn ${step.turn}]${tools}`);
-      }
+      onStep: (step) => console.error(`[turn ${step.turn}] ${step.toolsUsed.join(", ") || "done"}`)
     });
-
     console.log(result.finalText);
-    if (result.stoppedOnLimit) {
-      console.error(`\n(stopped after hitting the ${options.maxSteps}-turn limit)`);
-    }
-    process.exitCode = 0;
+    if (result.stoppedOnLimit) console.error(`Stopped after ${options.maxSteps} turns.`);
   });
 
-// ── watch (autonomy layer) ────────────────────────────────────────
-program
-  .command("watch")
-  .description("Watch the working tree and auto-review uncommitted changes — Oracle reacts on its own instead of waiting to be asked")
-  .option("--skill <name>", "Skill to apply", "review")
-  .option("--debounce <ms>", "Quiet period after the last change before reviewing", "3000")
-  .option("-m, --model <model>", "Model override")
-  .option("--provider <provider>", "Provider override")
-  .option("--cwd <path>", "Working directory", process.cwd())
-  .action(async (options) => {
-    const { watch } = await import("chokidar");
-    const cwd = path.resolve(options.cwd);
-    const skillReg = new SkillRegistry(homeDir(), cwd);
-    await skillReg.load();
-    const skillName = options.skill;
-    const skill = skillReg.get(skillName);
-    if (!skill) throw new Error(`Unknown skill: ${skillName}. Available: ${skillReg.names().join(", ")}`);
-
-    const finalProvider = options.provider ?? "codex";
-    const parsedProvider = parseProviderName(finalProvider);
-    const checks = await checkProvider(parsedProvider);
-    const failedCheck = checks.find((chk) => !chk.ok);
-    if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
-
-    const service = new ConsultService(createProvider(parsedProvider));
-    const systemPrompt = skillReg.compose(skillName, DEFAULT_SYSTEM_PROMPT);
-    const model = options.model ?? skill.model ?? "gpt-5.4";
-
-    let reviewing = false;
-    async function runReview() {
-      if (reviewing) return; // a review is already in flight; the next fs change will trigger another round after it finishes
-      reviewing = true;
-      try {
-        const result = await reviewWorkingTreeDiff(service, { cwd, provider: finalProvider, model, skillName, systemPrompt });
-        if (!result) {
-          console.log("[watch] no uncommitted changes to review");
-          return;
-        }
-        console.log(`\n[watch] ${new Date().toISOString()} — reviewed ${result.diff.length} chars of diff\n${result.output}\n`);
-      } catch (e) {
-        console.error(`[watch] review failed: ${e instanceof Error ? e.message : String(e)}`);
-      } finally {
-        reviewing = false;
-      }
-    }
-
-    const debouncer = createDebouncer(runReview, Number(options.debounce));
-    const watcher = watch(cwd, {
-      ignored: [/node_modules/, /(^|[/\\])\.git($|[/\\])/, /dist/, /\.oracle-memory/, /\.oracle\/sessions/],
-      ignoreInitial: true,
-      persistent: true
-    });
-    watcher.on("all", () => debouncer.trigger());
-
-    console.log(`[watch] watching ${cwd} — reviewing ${debouncer ? `${options.debounce}ms` : ""} after the last change. Ctrl+C to stop.`);
-
-    let shuttingDown = false;
-    const shutdown = async () => {
-      if (shuttingDown) return;
-      shuttingDown = true;
-      debouncer.cancel();
-      await watcher.close();
-      process.exit(0);
-    };
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
-
-    await new Promise(() => {}); // keep the process alive until SIGINT/SIGTERM
-  });
-
-// ── oracle ───────────────────────────────────────────────────────
 const oracleCmd = program.command("oracle").description("Manage oracle profiles");
 
 oracleCmd
@@ -731,6 +535,244 @@ identityCmd
     const store = new ProfileStore(homeDir());
     await store.saveIdentity({ name: "" });
     console.log("Identity cleared.");
+  });
+
+// ── github ────────────────────────────────────────────────────
+const githubCmd = program.command("github").description("GitHub integration via gh CLI");
+
+githubCmd
+  .command("check")
+  .description("Check gh CLI installation and authentication")
+  .action(() => {
+    const inst = gh.checkGh();
+    if (!inst.ok) {
+      console.error("gh CLI not found. Install from https://cli.github.com/");
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`gh: ${inst.version}`);
+    const auth = gh.checkGhAuth();
+    if (auth.ok) {
+      console.log(`Authenticated as: ${auth.user}`);
+    } else {
+      console.error(`Not authenticated: ${auth.error}`);
+      console.error("Run: gh auth login");
+      process.exitCode = 1;
+    }
+  });
+
+githubCmd
+  .command("pr")
+  .description("Pull request operations")
+  .argument("<action>", "list | view | diff | files | review | comment | approve | request-changes")
+  .argument("[number]", "PR number (required for view/diff/files/review/comment/approve/request-changes)")
+  .option("-R, --repo <repo>", "Repository (owner/repo)")
+  .option("-s, --state <state>", "PR state filter: open | closed | merged | all (default: open)")
+  .option("-b, --body <text>", "Comment/review body")
+  .option("--base <branch>", "Filter by base branch")
+  .option("--head <branch>", "Filter by head branch")
+  .option("-n, --limit <number>", "Max results", "30")
+  .option("--author <author>", "Filter by author")
+  .option("--label <labels>", "Filter by labels (comma-separated)")
+  .action(async (action: string, number: string, options) => {
+    const repo = options.repo ?? gh.inferRepo(options.cwd ?? process.cwd());
+    const num = number ? Number(number) : undefined;
+    switch (action) {
+      case "list": {
+        const prs = gh.listPRs({
+          repo,
+          state: options.state as any,
+          limit: Number(options.limit),
+          base: options.base,
+          head: options.head,
+          author: options.author,
+          labels: options.label?.split(","),
+        });
+        if (!prs.length) { console.log("No PRs found."); return; }
+        for (const pr of prs) {
+          const s = pr.state === "open" ? "\x1b[32mopen\x1b[0m" : pr.state === "merged" ? "\x1b[35mmerged\x1b[0m" : "\x1b[31mclosed\x1b[0m";
+          console.log(`#${String(pr.number).padEnd(4)} ${s}  ${pr.title}`);
+        }
+        break;
+      }
+      case "view":
+        if (!num) throw new Error("PR number required");
+        {
+          const pr = gh.getPR(num, repo);
+          console.log(`#${pr.number} ${pr.title}`);
+          console.log(`State: ${pr.state}  Author: ${pr.author}`);
+          console.log(`Base: ${pr.baseRef} ← Head: ${pr.headRef}`);
+          console.log(`Created: ${pr.createdAt.slice(0, 10)}`);
+          if (pr.body) console.log(`\n${pr.body.slice(0, 2000)}`);
+        }
+        break;
+      case "diff":
+        if (!num) throw new Error("PR number required");
+        console.log(gh.getPRDiff(num, repo));
+        break;
+      case "files":
+        if (!num) throw new Error("PR number required");
+        {
+          const files = gh.getPRFiles(num, repo);
+          let add = 0, del = 0;
+          for (const f of files) { add += f.additions; del += f.deletions; }
+          console.log(`${files.length} file(s), +${add} -${del}\n`);
+          for (const f of files) {
+            const icon = f.status === "added" ? "\x1b[32m+\x1b[0m" : f.status === "removed" ? "\x1b[31m-\x1b[0m" : f.status === "renamed" ? "\x1b[33m→\x1b[0m" : "\x1b[34m~\x1b[0m";
+            console.log(` ${icon} ${f.path}  (+${f.additions}, -${f.deletions})`);
+          }
+        }
+        break;
+      case "review":
+        if (!num) throw new Error("PR number required");
+        {
+          const pr = gh.getPR(num, repo);
+          const diff = gh.getPRDiff(num, repo);
+          const files = gh.getPRFiles(num, repo);
+          console.log(`\nReviewing PR #${num}: ${pr.title}`);
+          console.log(`Repository: ${repo ?? "unknown"}`);
+          console.log(`Files: ${files.length}, Diff: ${(diff.length / 1024).toFixed(1)}KB\n`);
+
+          const fileList = files.map((f: PRFile) => `  ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`).join("\n");
+          const reviewPrompt = [
+            `## PR Review: #${num} — ${pr.title}`,
+            `**Author:** ${pr.author}  **Repo:** ${repo}`,
+            `**Base:** ${pr.baseRef} ← **Head:** ${pr.headRef}`,
+            "",
+            pr.body ? `### Description\n${pr.body}\n` : "",
+            `### Changed Files (${files.length})`,
+            fileList,
+            "",
+            "### Diff",
+            "```diff",
+            diff.slice(0, 50000),
+            "```",
+            "",
+            "Review this PR for correctness, edge cases, security, and maintainability.",
+            "Be specific — cite line numbers from the diff.",
+          ].filter(Boolean).join("\n");
+
+          const { ConsultService } = await import("./core/consult.js");
+          const { createProvider, parseProviderName } = await import("./providers/factory.js");
+          const providerName = options.provider ?? "codex";
+          const parsedProvider = parseProviderName(providerName);
+          const checks = await (await import("./providers/factory.js")).checkProvider(parsedProvider);
+          const failedCheck = checks.find((chk: any) => !chk.ok);
+          if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
+
+          const service = new ConsultService(createProvider(parsedProvider));
+          const result = await service.consult({
+            prompt: reviewPrompt,
+            preset: "review",
+            provider: providerName,
+            model: options.model ?? "gpt-5.4",
+            cwd: options.cwd ?? process.cwd(),
+            systemPrompt: "You are a senior code reviewer. Analyze the PR diff and files. Be specific, cite line numbers, and categorize findings by severity (critical/major/minor/nit). End with a verdict: approve, request changes, or comment.",
+            allowEmptyFiles: true,
+          });
+
+          console.log(`\n${result.output}`);
+          if (options.body) {
+            gh.submitPRReview(num, options.body, "COMMENT", repo);
+            console.log("\nReview posted as comment.");
+          }
+        }
+        break;
+      case "comment":
+        if (!num) throw new Error("PR number required");
+        if (!options.body) throw new Error("Comment body required (-b)");
+        gh.createComment(num, options.body, repo);
+        console.log("Comment posted.");
+        break;
+      case "approve":
+        if (!num) throw new Error("PR number required");
+        gh.submitPRReview(num, options.body ?? "LGTM.", "APPROVE", repo);
+        console.log("PR approved.");
+        break;
+      case "request-changes":
+        if (!num) throw new Error("PR number required");
+        if (!options.body) throw new Error("Review body required (-b) for request-changes");
+        gh.submitPRReview(num, options.body, "REQUEST_CHANGES", repo);
+        console.log("Changes requested.");
+        break;
+      default:
+        throw new Error(`Unknown action: ${action}. Use: list, view, diff, files, review, comment, approve, request-changes`);
+    }
+  });
+
+githubCmd
+  .command("issue")
+  .description("Issue operations")
+  .argument("<action>", "list | view | comment")
+  .argument("[number]", "Issue number (required for view/comment)")
+  .option("-R, --repo <repo>", "Repository (owner/repo)")
+  .option("-s, --state <state>", "Issue state filter: open | closed | all (default: open)")
+  .option("-b, --body <text>", "Comment body")
+  .option("-n, --limit <number>", "Max results", "30")
+  .option("--author <author>", "Filter by author")
+  .option("--label <labels>", "Filter by labels (comma-separated)")
+  .action(async (action: string, number: string, options) => {
+    const repo = options.repo ?? gh.inferRepo(options.cwd ?? process.cwd());
+    const num = number ? Number(number) : undefined;
+    switch (action) {
+      case "list": {
+        const issues = gh.listIssues({
+          repo,
+          state: options.state as any,
+          limit: Number(options.limit),
+          author: options.author,
+          labels: options.label?.split(","),
+        });
+        if (!issues.length) { console.log("No issues found."); return; }
+        for (const i of issues) {
+          const s = i.state === "open" ? "\x1b[32mopen\x1b[0m" : "\x1b[31mclosed\x1b[0m";
+          console.log(`#${String(i.number).padEnd(4)} ${s}  ${i.title}`);
+        }
+        break;
+      }
+      case "view":
+        if (!num) throw new Error("Issue number required");
+        {
+          const i = gh.getIssue(num, repo);
+          console.log(`#${i.number} ${i.title}`);
+          console.log(`State: ${i.state}  Author: ${i.author}`);
+          console.log(`Created: ${i.createdAt.slice(0, 10)}`);
+          if (i.body) console.log(`\n${i.body.slice(0, 2000)}`);
+        }
+        break;
+      case "comment":
+        if (!num) throw new Error("Issue number required");
+        if (!options.body) throw new Error("Comment body required (-b)");
+        gh.createComment(num, options.body, repo);
+        console.log("Comment posted.");
+        break;
+      default:
+        throw new Error(`Unknown action: ${action}. Use: list, view, comment`);
+    }
+  });
+
+githubCmd
+  .command("search")
+  .description("Search GitHub code")
+  .argument("<query>", "Search query")
+  .option("-n, --limit <number>", "Max results", "10")
+  .action(async (query: string, options) => {
+    const results = gh.searchCode(query, Number(options.limit));
+    for (const r of results) {
+      console.log(`${r.repo}:${r.path}`);
+      for (const m of r.matches) {
+        console.log(`  ${m.slice(0, 200)}`);
+      }
+    }
+  });
+
+githubCmd
+  .command("get")
+  .description("Raw GitHub API GET request")
+  .argument("<endpoint>", "API endpoint (e.g. /repos/owner/repo)")
+  .action(async (endpoint: string) => {
+    const result = gh.apiRequest(endpoint);
+    console.log(JSON.stringify(result, null, 2));
   });
 
 try {
