@@ -6,6 +6,7 @@ import type {
   ToolResult,
   ContentBlock,
 } from "./types.js";
+import { logAgent, logTool } from "../observability/log.js";
 
 export interface AgentStep {
   /** 1-based index of this assistant turn. */
@@ -54,6 +55,8 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
   const maxSteps = params.maxSteps ?? 20;
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
 
+  logAgent("start", { model, toolCount: tools.length, maxSteps });
+
   const userContent = typeof prompt === "string" ? [{ type: "text" as const, text: prompt }] : prompt;
   const transcript: AgentMessage[] = [{ role: "user", content: userContent }];
   const steps: AgentStep[] = [];
@@ -63,7 +66,9 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
   let stoppedOnLimit = true;
 
   for (let turn = 1; turn <= maxSteps; turn++) {
+    const turnStart = Date.now();
     const result = await provider.runAgentTurn({ model, system, messages: transcript, tools });
+    const turnMs = Date.now() - turnStart;
     transcript.push(result.message);
     inputTokens += result.usage?.inputTokens ?? 0;
     outputTokens += result.usage?.outputTokens ?? 0;
@@ -83,26 +88,41 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
     for (const call of toolCalls) {
       const tool = toolsByName.get(call.name);
       if (!tool) {
+        logTool("error", { toolName: call.name, error: "unknown tool" });
         results.push({ id: call.id, content: [{ type: "text", text: `Unknown tool: ${call.name}` }], isError: true });
         continue;
       }
       try {
+        logTool("call", { toolName: call.name, turn });
+        const callStart = Date.now();
         const output = await tool.execute(call.input, context);
+        const callMs = Date.now() - callStart;
         const content: ContentBlock[] = typeof output === "string" ? [{ type: "text", text: output }] : output;
+        logTool("result", { toolName: call.name, turn, durationMs: callMs, outputSize: JSON.stringify(output).length });
         results.push({ id: call.id, content });
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        logTool("error", { toolName: call.name, turn, error: errorMsg });
         results.push({
           id: call.id,
-          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+          content: [{ type: "text", text: errorMsg }],
           isError: true,
         });
       }
     }
+    logAgent("turn", { turn, toolsUsed: toolCalls.length, durationMs: turnMs });
     transcript.push({ role: "tool", results });
 
     // Keep the last text seen so a limit-truncated run still returns something.
     if (text) finalText = text;
   }
+
+  logAgent("stop", {
+    turns: steps.length,
+    stoppedOnLimit,
+    totalInputTokens: inputTokens,
+    totalOutputTokens: outputTokens,
+  });
 
   return {
     finalText,

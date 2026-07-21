@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentContext, AgentTool, ContentBlock } from "./types.js";
+import { logSandbox } from "../observability/log.js";
 
 /** Cap on how much text any single tool returns to the model. */
 const MAX_OUTPUT_CHARS = 30_000;
@@ -16,6 +17,7 @@ function resolveInWorkspace(ctx: AgentContext, rel: string): string {
   const abs = path.resolve(ctx.workspaceRoot, rel);
   const root = path.resolve(ctx.workspaceRoot);
   if (abs !== root && !abs.startsWith(root + path.sep)) {
+    logSandbox("path-escape", { requestedPath: rel, resolvedPath: abs, workspaceRoot: root });
     throw new ToolError(`Path escapes the workspace: ${rel}`);
   }
   return abs;

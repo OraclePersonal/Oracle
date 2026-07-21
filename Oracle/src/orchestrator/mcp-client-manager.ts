@@ -3,6 +3,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { AgentTool, AgentContext } from "../agent/types.js";
 import type { McpServerConfig } from "../config/project.js";
+import { logMcp, logSandbox } from "../observability/log.js";
 
 type ToolResult = { content: Array<{ type: string; text?: string }>; [key: string]: unknown };
 
@@ -30,7 +31,8 @@ export class McpClientManager {
       try {
         return await this.connectServer(server);
       } catch (err) {
-        console.warn(`[mcp] failed to connect to "${server.name}": ${err instanceof Error ? err.message : String(err)}`);
+        const error = err instanceof Error ? err.message : String(err);
+        logMcp("error", { serverName: server.name, error, event: "connect" });
         return [];
       }
     });
@@ -65,29 +67,41 @@ export class McpClientManager {
       throw new Error(`Server "${server.name}" needs either "url" or "command"`);
     }
 
+    logMcp("connect", { serverName: server.name, type: server.url ? "http" : "stdio" });
     await client.connect(transport);
     this.clients.push({ client, transport });
 
     // List tools from this server
     const response = await client.listTools({});
     const prefix = server.name.replace(/[^a-z0-9_]/gi, "_");
+    const toolCount = response.tools?.length ?? 0;
+    logMcp("discover", { serverName: server.name, toolCount, trustedForMutation: server.trustedForMutation ?? false });
 
     return (response.tools ?? []).map((tool) => ({
       name: `mcp_${prefix}_${tool.name}`,
       description: `[${server.name}] ${tool.description ?? tool.name}`,
       mutating: server.trustedForMutation ?? false,
       inputSchema: (tool.inputSchema as AgentTool["inputSchema"]) ?? { type: "object", properties: {} },
-      async execute(input: Record<string, unknown>, _ctx: AgentContext): Promise<string> {
+      async execute(input: Record<string, unknown>, ctx: AgentContext): Promise<string> {
+        // Log if a mutating tool is called in read-only mode
+        if (this.mutating && ctx.readOnly) {
+          logSandbox("mutation-denied", { serverName: server.name, toolName: tool.name });
+        }
         try {
+          logMcp("call", { serverName: server.name, toolName: tool.name });
+          const callStart = Date.now();
           const result = (await client.callTool({
             name: tool.name,
             arguments: input,
           })) as ToolResult;
+          const callMs = Date.now() - callStart;
+          logMcp("result", { serverName: server.name, toolName: tool.name, durationMs: callMs });
           const text = result.content.find((c) => c.type === "text");
           if (text?.text) return text.text;
           return JSON.stringify(result.content);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          logMcp("error", { serverName: server.name, toolName: tool.name, error: msg });
           return JSON.stringify({ ok: false, error: msg });
         }
       },
