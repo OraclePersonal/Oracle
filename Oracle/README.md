@@ -165,9 +165,12 @@ tools, processes results, and iterates toward a goal. Supports multimodal input
 **Features:**
 - **File access:** read/write/edit files, list directories, search with glob/grep — every path is
   resolved against the workspace root and refused if it escapes it; there is no shell tool
+- **Audit trail:** all file mutations tracked with content hashes — query `result.audit.getSummary()`
+  to see what the agent changed
+- **Resource limits:** external MCP tools run with 30s timeout and 100KB output cap to prevent runaway
 - **Multimodal input:** agents can read and analyze images/videos from the workspace
 - **Skills:** apply engineering best practices (review, debug, security, architecture, tests)
-- **MCP integration:** agent discovers and uses tools from external MCP servers
+- **MCP integration:** agent discovers and uses tools from external MCP servers with opt-in mutation flag
 
 **Usage:**
 ```bash
@@ -202,6 +205,32 @@ ORACLE_LOG=1 oracle agent "refactor this" 2>&1 | grep oracle
 ```
 
 Disable with `ORACLE_LOG=0` if you need to suppress logging overhead in production.
+
+## Audit Trail & Safety
+
+Every agent run includes an audit trail tracking file mutations with timestamps and content hashes:
+
+```js
+const result = await agent.run({ prompt: "refactor this file" });
+const summary = result.audit.getSummary();
+console.log(summary);
+// {
+//   totalChanges: 5,
+//   mutations: 2,                    // write, edit only (not reads)
+//   byType: { read: 3, write: 1, edit: 1 },
+//   filesChanged: [ "src/main.ts", "src/utils.ts" ]
+// }
+
+// Access full trail with content hashes for verification
+result.audit.getChanges().forEach(c => {
+  console.log(`${c.type}: ${c.path} (hash: ${c.contentHash})`);
+});
+```
+
+**Resource limits for external MCP tools** (safety guardrails):
+- 30-second timeout per tool call
+- 100KB output cap per call (truncated if exceeded)
+- Logged in `[oracle:mcp]` result events as `outputTruncated` flag
 
 ## Configuration
 
