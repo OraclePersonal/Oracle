@@ -1,6 +1,6 @@
 ---
 name: oracle-messaging
-description: Use when coordinating with other agents through Oracle's inter-agent message bus — sending/receiving messages between Claude Code sessions, opencode, or any oracle-mcp client on this machine. Covers oracle_msg_* MCP tools, the oracle msg CLI, real-time watch, and the Stop-hook wake-up flow.
+description: Relays messages between agents over Oracle's file-backed inter-agent bus (shared ~/.oracle/messages), with broadcasts, threading, per-agent read state, and real-time or on-idle wake-up. Use when coordinating multiple agents — sending, receiving, or waiting on messages between Claude Code sessions, opencode, or any oracle-mcp client on the same machine, via the oracle_msg_* MCP tools or the `oracle msg` CLI.
 ---
 
 # Oracle Inter-Agent Messaging
