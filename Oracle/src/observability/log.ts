@@ -32,7 +32,7 @@ export function logEvent(tag: string, event: LogEvent): void {
 }
 
 /** Agent loop lifecycle and execution. */
-export function logAgent(event: "start" | "stop" | "turn" | "error", details: Record<string, unknown>): void {
+export function logAgent(event: "start" | "stop" | "turn" | "error" | "audit-summary", details: Record<string, unknown>): void {
   logEvent("agent", { event, ...details });
 }
 

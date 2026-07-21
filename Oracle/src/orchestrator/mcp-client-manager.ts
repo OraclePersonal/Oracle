@@ -4,6 +4,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { AgentTool, AgentContext } from "../agent/types.js";
 import type { McpServerConfig } from "../config/project.js";
 import { logMcp, logSandbox } from "../observability/log.js";
+import { withTimeout, truncateOutput, EXTERNAL_MCP_RESOURCE_LIMITS } from "../agent/resourcelimits.js";
 
 type ToolResult = { content: Array<{ type: string; text?: string }>; [key: string]: unknown };
 
@@ -90,15 +91,24 @@ export class McpClientManager {
         try {
           logMcp("call", { serverName: server.name, toolName: tool.name });
           const callStart = Date.now();
-          const result = (await client.callTool({
-            name: tool.name,
-            arguments: input,
-          })) as ToolResult;
+          const result = (await withTimeout(
+            client.callTool({
+              name: tool.name,
+              arguments: input,
+            }),
+            EXTERNAL_MCP_RESOURCE_LIMITS.timeoutMs
+          )) as ToolResult;
           const callMs = Date.now() - callStart;
-          logMcp("result", { serverName: server.name, toolName: tool.name, durationMs: callMs });
           const text = result.content.find((c) => c.type === "text");
-          if (text?.text) return text.text;
-          return JSON.stringify(result.content);
+          let output = text?.text ?? JSON.stringify(result.content);
+          const [truncated, wasTruncated] = truncateOutput(output, EXTERNAL_MCP_RESOURCE_LIMITS.maxOutputBytes);
+          logMcp("result", {
+            serverName: server.name,
+            toolName: tool.name,
+            durationMs: callMs,
+            outputTruncated: wasTruncated,
+          });
+          return truncated;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           logMcp("error", { serverName: server.name, toolName: tool.name, error: msg });

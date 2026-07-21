@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { AgentContext, AgentTool, ContentBlock } from "./types.js";
 import { logSandbox } from "../observability/log.js";
+import type { AuditTrail } from "./audit.js";
 
 /** Cap on how much text any single tool returns to the model. */
 const MAX_OUTPUT_CHARS = 30_000;
@@ -104,11 +106,16 @@ export function defaultAgentTools(): AgentTool[] {
       },
       async execute(input, ctx) {
         assertWritable(ctx, "write_file");
-        const abs = resolveInWorkspace(ctx, str(input, "path"));
+        const rel = str(input, "path");
+        const abs = resolveInWorkspace(ctx, rel);
         await fs.mkdir(path.dirname(abs), { recursive: true });
         const content = str(input, "content");
         await fs.writeFile(abs, content, "utf8");
-        return `Wrote ${content.length} chars to ${str(input, "path")}`;
+        if (ctx.audit) {
+          const hash = createHash("sha256").update(content).digest("hex").slice(0, 8);
+          ctx.audit.record("write", rel, { sizeBytes: content.length, contentHash: hash });
+        }
+        return `Wrote ${content.length} chars to ${rel}`;
       },
     },
     {
@@ -134,7 +141,12 @@ export function defaultAgentTools(): AgentTool[] {
         const occurrences = content.split(oldStr).length - 1;
         if (occurrences === 0) throw new ToolError(`old_string not found in ${rel}`);
         if (occurrences > 1) throw new ToolError(`old_string appears ${occurrences} times in ${rel}; make it unique.`);
-        await fs.writeFile(abs, content.replace(oldStr, newStr), "utf8");
+        const newContent = content.replace(oldStr, newStr);
+        await fs.writeFile(abs, newContent, "utf8");
+        if (ctx.audit) {
+          const hash = createHash("sha256").update(newContent).digest("hex").slice(0, 8);
+          ctx.audit.record("edit", rel, { sizeBytes: newContent.length, contentHash: hash });
+        }
         return `Edited ${rel}`;
       },
     },

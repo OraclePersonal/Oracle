@@ -49,6 +49,8 @@ export interface AgentContext {
   workspaceRoot: string;
   /** When true, write/edit tools refuse to run (analysis-only mode). */
   readOnly: boolean;
+  /** Optional audit trail to record file mutations. */
+  audit?: any; // AuditTrail type, avoid circular import
 }
 
 /** A tool the agent can call: its schema (for the model) + executor. */

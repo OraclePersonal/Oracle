@@ -6,6 +6,7 @@ import type {
   ToolResult,
   ContentBlock,
 } from "./types.js";
+import { AuditTrail } from "./audit.js";
 import { logAgent, logTool } from "../observability/log.js";
 
 export interface AgentStep {
@@ -27,6 +28,8 @@ export interface AgentRunResult {
   /** True if the loop hit maxSteps before the model stopped calling tools. */
   stoppedOnLimit: boolean;
   usage: { inputTokens: number; outputTokens: number };
+  /** Audit trail of file operations performed by the agent. */
+  audit: { getChanges(): any[]; getSummary(): any };
 }
 
 export interface RunAgentLoopParams {
@@ -54,6 +57,7 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
   const { provider, model, system, prompt, tools, context } = params;
   const maxSteps = params.maxSteps ?? 20;
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
+  const audit = new AuditTrail();
 
   logAgent("start", { model, toolCount: tools.length, maxSteps });
 
@@ -65,10 +69,15 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
   let finalText = "";
   let stoppedOnLimit = true;
 
+  // Inject audit trail into context for tools to record
+  const contextWithAudit = { ...context, audit };
+
   for (let turn = 1; turn <= maxSteps; turn++) {
     const turnStart = Date.now();
     const result = await provider.runAgentTurn({ model, system, messages: transcript, tools });
     const turnMs = Date.now() - turnStart;
+    const auditSummary = audit.getSummary();
+    logAgent("audit-summary", { turn, mutations: auditSummary.mutations, filesChanged: auditSummary.filesChanged });
     transcript.push(result.message);
     inputTokens += result.usage?.inputTokens ?? 0;
     outputTokens += result.usage?.outputTokens ?? 0;
@@ -95,7 +104,7 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
       try {
         logTool("call", { toolName: call.name, turn });
         const callStart = Date.now();
-        const output = await tool.execute(call.input, context);
+        const output = await tool.execute(call.input, contextWithAudit);
         const callMs = Date.now() - callStart;
         const content: ContentBlock[] = typeof output === "string" ? [{ type: "text", text: output }] : output;
         logTool("result", { toolName: call.name, turn, durationMs: callMs, outputSize: JSON.stringify(output).length });
@@ -117,11 +126,14 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
     if (text) finalText = text;
   }
 
+  const auditSummary = audit.getSummary();
   logAgent("stop", {
     turns: steps.length,
     stoppedOnLimit,
     totalInputTokens: inputTokens,
     totalOutputTokens: outputTokens,
+    mutations: auditSummary.mutations,
+    filesChanged: auditSummary.filesChanged,
   });
 
   return {
@@ -130,5 +142,6 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
     steps,
     stoppedOnLimit,
     usage: { inputTokens, outputTokens },
+    audit,
   };
 }
