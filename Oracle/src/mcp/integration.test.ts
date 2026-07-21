@@ -13,6 +13,7 @@ import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
+import { MessageStore } from "../messaging/store.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -45,6 +46,7 @@ beforeAll(async () => {
     oracles,
     memory: new MemoryAdapter(root),
     profile: new ProfileStore(root),
+    messages: new MessageStore(root),
     providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
@@ -71,6 +73,54 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_identity_show");
     expect(tools).toContain("oracle_identity_setup");
     expect(tools).toContain("oracle_persona_set");
+    expect(tools).toContain("oracle_msg_send");
+    expect(tools).toContain("oracle_msg_inbox");
+    expect(tools).toContain("oracle_msg_ack");
+    expect(tools).toContain("oracle_msg_thread");
+  });
+
+  test("agents exchange messages through the shared bus", async () => {
+    const sent = await client.callTool({
+      name: "oracle_msg_send",
+      arguments: { from: "claude", to: "codex", body: "please review src/sample.ts", subject: "review" }
+    });
+    expect(sent.isError).not.toBe(true);
+    const msgId = (sent.structuredContent as { id: string }).id;
+
+    // Recipient sees it, sender does not.
+    const codexInbox = await client.callTool({
+      name: "oracle_msg_inbox",
+      arguments: { agent: "codex" }
+    });
+    expect((codexInbox.structuredContent as { count: number }).count).toBe(1);
+    const claudeInbox = await client.callTool({
+      name: "oracle_msg_inbox",
+      arguments: { agent: "claude" }
+    });
+    expect((claudeInbox.structuredContent as { count: number }).count).toBe(0);
+
+    // Reply threads back to the original.
+    const reply = await client.callTool({
+      name: "oracle_msg_send",
+      arguments: { from: "codex", to: "claude", body: "looks good", replyTo: msgId }
+    });
+    const thread = await client.callTool({
+      name: "oracle_msg_thread",
+      arguments: { id: (reply.structuredContent as { id: string }).id }
+    });
+    expect((thread.structuredContent as { count: number }).count).toBe(2);
+
+    // Ack clears the unread inbox.
+    const acked = await client.callTool({
+      name: "oracle_msg_ack",
+      arguments: { agent: "codex", ids: [msgId] }
+    });
+    expect((acked.structuredContent as { acked: string[] }).acked).toEqual([msgId]);
+    const after = await client.callTool({
+      name: "oracle_msg_inbox",
+      arguments: { agent: "codex" }
+    });
+    expect((after.structuredContent as { count: number }).count).toBe(0);
   });
 
   test("consults, lists, retrieves, and diagnoses", async () => {

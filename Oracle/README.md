@@ -110,7 +110,7 @@ Oracle's memory system uses ML-inspired algorithms to surface the **most relevan
 
 Memory data lives in `.oracle-memory/` — compatible with the standalone `oracle-memory` MCP server.
 
-## MCP tools (37)
+## MCP tools (41)
 
 **Agent**
 `oracle_agent` (supports `skill` parameter: review, debug, security, architecture, tests)
@@ -147,6 +147,12 @@ Memory data lives in `.oracle-memory/` — compatible with the standalone `oracl
 
 **Identity / persona**
 `oracle_identity_show`, `oracle_identity_setup`, `oracle_persona_set`
+
+**Inter-agent messaging** (Oracle as relay between agents)
+`oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`
+— all oracle-mcp processes on a machine share `~/.oracle/messages/`, so agents
+in different sessions (Claude Code, opencode, etc.) can exchange messages and
+broadcasts (`to: "*"`), with per-agent read tracking and threading via `replyTo`.
 
 **Sessions / skills / health**
 `oracle_sessions`, `oracle_session_get`, `oracle_skills`, `oracle_doctor`

@@ -8,6 +8,7 @@ import { AgentService } from "../agent/service.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { OracleRegistry } from "../oracles/registry.js";
 import { ProfileStore } from "../identity/profile.js";
+import { MessageStore } from "../messaging/store.js";
 import { OrchestratorFactory } from "../orchestrator/factory.js";
 import { VERSION } from "../version.js";
 import { registerOracleTools } from "./server.js";
@@ -52,6 +53,7 @@ export async function createOracleMcpServer(
     oracles,
     memory,
     profile: new ProfileStore(homeDir),
+    messages: new MessageStore(homeDir),
     agent,
     agentUnavailableReason
   });
