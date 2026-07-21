@@ -1,8 +1,6 @@
 node_modules/
 dist/
-.oracle-*
-.oracle-memory/
-.oracle-messages/
-.oracle-mcp-test*
-.oracle-memory-test*
-test-features.mjs
+.env
+.oracle/
+graphify-out/
+.clew/

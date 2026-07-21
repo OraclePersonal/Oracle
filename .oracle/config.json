@@ -1,8 +1,0 @@
-{
-  "provider": "codex",
-  "model": "gpt-5.4-mini",
-  "include": ["src/**/*", "README.md", "package.json"],
-  "exclude": ["**/*.test.ts", "**/node_modules/**", "**/dist/**", "**/build/**"],
-  "maxFileSizeBytes": 1000000,
-  "maxInputBytes": 5000000
-}
