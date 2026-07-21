@@ -1,385 +1,393 @@
 # Oracle
 
-<p align="center">
-  <img src="docs/oracle-logo.png" alt="Oracle logo" width="720">
-</p>
+> **Oracle is a persistent coordination layer for AI coding agents — not a database, not a replacement for your agent, but a shared teammate that remembers everything and keeps everyone on the same page.**
 
-> **Oracle Assistant** — a memory, knowledge, and coordination layer for AI
-> coding agents. *(Not the Oracle database or Oracle Corp — this is an
-> independent open-source project.)*
+When you fire up Claude Code, it has no memory of yesterday's work. If you start two Claude sessions, they can't talk to each other. If you want the agent to actually *do* something (not just talk about doing it), you have to manually approve every file change and run every command.
 
-**Oracle turns a stateless coding agent into a persistent, coordinated
-teammate.** It is an MCP server plus a CLI that any MCP-compatible agent
-(Claude Code, opencode, Codex, Gemini CLI, …) wires up to gain four things it
-doesn't have on its own:
+**Oracle fixes this.** It is an MCP server that any agent wires into (Claude Code, opencode, Codex, Gemini CLI, …) to gain:
 
-| Pillar | What Oracle adds | Entry points |
-|---|---|---|
-| 🧠 **Remember** | Persistent memory that survives across every session — facts, insights, a compiled wiki, and an entity knowledge graph that ranks what's relevant | `oracle_memory_*`, `oracle ask` |
-| 💬 **Consult** | Ask an expert model a question *with your project's real context* (files + memory + docs + web) and get a reviewed answer back | `oracle_ask`, `oracle ask` |
-| 🛠️ **Act** | An autonomous agent that reads/writes/edits files to complete a task — **confined to the workspace, no shell**, with an audit trail of every change | `oracle_agent`, `oracle agent` |
-| 📨 **Coordinate** | An inter-agent message bus so multiple agent sessions on one machine can talk, hand off work, and wake each other up | `oracle_msg_*`, `oracle msg` |
+- **Persistent memory** — everything the agent learns is saved and ranked by relevance; future sessions find it instantly
+- **Consultation engine** — ask a question with full project context (code + memory + docs + web) and get a grounded answer with citations
+- **Autonomous action** — an agent sandbox that can read/write files and run commands, confined to your workspace, fully audited
+- **Inter-agent coordination** — multiple agent sessions on one machine can message each other, hand off work, wake each other up when something needs attention
 
-On top of those: a **persona + identity** so Oracle knows who you are and
-speaks in a voice you choose, a local **docs knowledge base**, **web access**
-(search / fetch / structured extract), **GitHub** PR & issue integration, and
-**structured observability logging** throughout.
+**Requires Node.js ≥ 24.** Installs three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), `oracle-msg-mcp` (messaging-only server for agents that only need to talk to each other).
 
-Requires **Node.js ≥ 24**. Ships three binaries — `oracle` (CLI), `oracle-mcp`
-(full MCP server), `oracle-msg-mcp` (messaging-only MCP server).
+---
 
-**Supported model providers:** `codex`, `openai`, `anthropic`, `opencode`
+## What Problem Does Oracle Solve?
 
-## Why "Oracle"?
+### Without Oracle
 
-An oracle is something you *consult* — it remembers, it knows, and it answers.
-This project is that for your agents: a shared source of memory and truth they
-return to across sessions, and a switchboard they use to reach each other. It
-is deliberately **provider-neutral** (works with any model backend) and
-**agent-neutral** (works with any MCP client), so it sits *beside* your coding
-agent rather than replacing it.
+```
+Session 1: Claude Code
+  └─ Learns that Service X uses connection pool Y
+  └─ Closes session
+     └─ All context is gone forever
 
-## Install
+Session 2: Different Claude Code session
+  └─ Asks the same question again
+  └─ No way to know what Session 1 learned
 
-From npm (installs the `oracle`, `oracle-mcp`, and `oracle-msg-mcp` binaries):
-
-```bash
-npm install -g @oraclepersonal/oracle
-oracle doctor                          # verify a provider is wired up
-# or run without installing: npx -p @oraclepersonal/oracle oracle ask "..."
+Session A: Claude Code session (refactoring)
+Session B: Claude Code session (bug fix)
+  └─ They're isolated; A has to DM you to tell B what changed
+  └─ You act as the messenger
 ```
 
-From source (for development):
+### With Oracle
+
+```
+Session 1: Claude Code → Oracle
+  └─ Learns fact X → stored in memory
+  └─ Closes session
+     └─ Fact X stays in the shared store
+
+Session 2: Claude Code → Oracle
+  └─ Asks a question
+  └─ Oracle recalls Fact X automatically (ranked by relevance)
+  └─ Answer is grounded in what Session 1 learned
+
+Session A: Claude Code → Oracle
+  └─ Sends: "Refactoring done, 3 files changed"
+
+Session B: Claude Code → Oracle
+  └─ Receives message from A instantly
+  └─ Can ask Oracle to fetch the list of changed files
+  └─ Coordinates autonomously; no human in the loop
+```
+
+---
+
+## The Four Pillars + Coordination
+
+| Pillar | What It Does | How To Use |
+|--------|--------------|-----------|
+| 🧠 **Remember** | Persistent memory across sessions — facts auto-ranked by recency, access frequency, semantic match, and importance. Entity graph to find related knowledge. Auto-consolidation to kill duplicates. | MCP: `oracle_memory_*` tools. CLI: `oracle memory list/search/update/consolidate`. Agent sees memory auto-injected into context. |
+| 💬 **Consult** | Ask a question with your real project context (code files + memory + docs + web search/fetch). Get a cited answer back. | MCP: `oracle_ask`. CLI: `oracle ask "question" -f "src/**/*.ts"`. Agent can search memory, read files, fetch URLs, then answer. |
+| 🛠️ **Act** | Autonomous agent that reads/writes/edits files to complete a task. **Sandbox: no shell execution, filesystem-only.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X"`. Agent loops until done; logs all file changes. |
+| 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
+
+---
+
+## Quick Start
+
+### Install
 
 ```bash
-npm install
-npm run build              # tsc -> dist/
+# From npm
+npm install -g @oraclepersonal/oracle
+oracle doctor                # verify a provider is set up
+
+# From source (development)
+git clone https://github.com/OraclePersonal/Oracle.git
+cd Oracle
+npm install && npm run build
 node dist/cli.js doctor
 ```
 
-Scripts: `build`, `dev` (tsx src/cli.ts), `mcp` (tsx src/mcp.ts),
-`mcp:messaging` (tsx src/mcp-messaging.ts), `typecheck` (tsc --noEmit),
-`test` (vitest run src).
+### Wire up an MCP client
 
-## CLI usage
-
+**Claude Code:**
 ```bash
-# One-shot questions — Oracle reads your mood and adapts automatically
-oracle ask "what does ECONNRESET on a Redis client mean?"
-oracle ask "review this for edge cases" -f "src/**/*.ts"
-oracle ask "summarise this module" --include-docs
-
-# Or pick a specific personality with --soul
-oracle ask "review this code" --soul engineer
-
-oracle doctor
+oracle setup-mcp --client claude-code
 ```
 
-> **Auto mood** — When you don't pass `--soul`, Oracle reads your tone from the question
-> and freely picks its own personality: playful, serious, sarcastic, gentle, dramatic,
-> or whatever fits the moment. It can even shift mid-conversation.
+This generates `.claude/mcp.json` with the config. Restart Claude Code; you'll see `oracle_*` tools appear.
 
-Commands:
-
-| Command | Purpose |
-|---|---|
-| `ask` | One-shot question; `-f` to include files, `--soul` for specific personality, `--conversation` for continuity, `--include-docs` for local docs. **No `--soul` = Oracle chooses its own mood automatically** |
-| `memory` `list\|clear` | Inspect / clear the memory store |
-| `wiki` `build\|list\|show` | Compile and browse the memory wiki |
-| `docs` `list\|search\|add\|remove` | Manage the local docs knowledge base |
-| `web` `search\|fetch\|extract` | Web search (`--provider`, `--trace`), fetch a URL (`--provider`), structured extract (AgentQL) |
-| `oracle` `list\|register\|unregister\|show` | Manage oracle profiles |
-| `session` `<id>` | Show a past consult session |
-| `status` | List recent sessions |
-| `skill` `list\|install` | Manage installed skills |
-| `github` `check\|pr\|issue\|search\|get` | GitHub PR/issue access |
-| `identity` `show\|setup`, `persona`, `forget` | Identity and persona management |
-| `login` / `logout` | Anthropic OAuth |
-| `doctor` | Check provider wiring |
-| `setup-mcp` | Generate MCP client config (`--client claude-code\|codex`) |
-
-## MCP server
-
-Wire `oracle-mcp` (built to `dist/mcp.js`) into your MCP client:
-
+**opencode or any MCP client:**
 ```json
 {
   "mcpServers": {
     "oracle": {
-      "command": "node",
-      "args": ["/absolute/path/to/Oracle/dist/mcp.js"],
+      "command": "npx",
+      "args": ["-p", "@oraclepersonal/oracle", "oracle-mcp"],
       "env": {
-        "ORACLE_USE_OLLAMA": "1",
-        "ORACLE_WORKSPACE_ROOT": "/absolute/path/to/your/project"
+        "ORACLE_WORKSPACE_ROOT": "/path/to/your/project"
       }
     }
   }
 }
 ```
 
-Or run `oracle setup-mcp` to generate it.
-
-### Standalone messaging server
-
-If you only want the inter-agent message bus (no provider/memory/agent stack),
-wire the lighter `oracle-msg-mcp` binary (`dist/mcp-messaging.js`) instead — it
-serves just the four `oracle_msg_*` tools over the same `~/.oracle/messages` bus:
-
-```json
-{
-  "mcpServers": {
-    "oracle-messaging": {
-      "command": "npx",
-      "args": ["-p", "@oraclepersonal/oracle", "oracle-msg-mcp"]
-    }
-  }
-}
-```
-
-## Smart memory
-
-Oracle's memory system uses ML-inspired algorithms to surface the **most relevant** information automatically.
-
-| Feature | Description |
-|---|---|
-| **Recency-weighted scoring** | Memories accessed often or recently rank higher — formula: `semantic×0.6 + importance×0.2 + recencyBoost×0.15 + freqBoost×0.05` |
-| **Entity knowledge graph** | Extracts entities (technologies, projects, people) from memory content, builds typed relationship edges, and expands search queries with related entities |
-| **Auto-consolidation** | Finds similar memories by tag overlap (Jaccard ≥ 0.3) and merges them — reduces clutter without data loss |
-| **Access tracking** | Every `recall`/`scored_search` bump increments `accessCount` and updates `lastAccessed` — unused memories decay |
-| **Background maintenance** | `prune` removes stale low-value memories (30d untouched + importance < 0.2), `promote` graduates frequently-retrieved working memories into durable `insight` |
-| **LLM reflection** | Clusters related memories and asks Claude to synthesize new higher-level insights — requires `ANTHROPIC_API_KEY` + `ORACLE_MEMORY_LLM_GRAPH=1` |
-
-Memory data lives in `.oracle-memory/` — compatible with the standalone `oracle-memory` MCP server.
-
-## MCP tools (43)
-
-**Agent**
-`oracle_agent` (supports `skill` parameter: review, debug, security, architecture, tests)
-
-**Ask**
-`oracle_ask`
-
-**Memory**
-`oracle_memory_list`, `oracle_memory_search`, `oracle_memory_update`,
-`oracle_memory_stats`, `oracle_memory_clear`, `oracle_memory_scored_search`
-
-**Entity graph**
-`oracle_memory_graph_query`, `oracle_memory_graph_path`,
-`oracle_memory_graph_stats`
-
-**Consolidation & maintenance**
-`oracle_memory_consolidate`, `oracle_memory_prune`, `oracle_memory_promote`,
-`oracle_memory_maintenance`
-
-**Reflection**
-`oracle_memory_reflect`
-
-**Memory wiki**
-`oracle_memory_wiki_build`, `oracle_memory_wiki_list`, `oracle_memory_wiki_get`
-
-**Docs**
-`oracle_docs_list`, `oracle_docs_search`, `oracle_docs_add`, `oracle_docs_remove`
-
-**Web**
-`oracle_web_search`, `oracle_web_fetch`, `oracle_web_extract`
-
-**Oracle profiles**
-`oracle_oracle_list`, `oracle_oracle_register`
-
-**Identity / persona**
-`oracle_identity_show`, `oracle_identity_setup`, `oracle_persona_set`
-
-**Inter-agent messaging** (Oracle as relay between agents)
-`oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`,
-`oracle_msg_ack`, `oracle_msg_thread`
-— all oracle-mcp processes on a machine share `~/.oracle/messages/`, so agents
-in different sessions (Claude Code, opencode, etc.) can exchange messages and
-broadcasts (`to: "*"`), with per-agent read tracking and threading via `replyTo`.
-
-*Self-onboarding:* the server ships MCP `instructions` that every client
-receives on connect — telling the agent to `oracle_msg_register` (one call:
-register name/role → get the roster + unread messages) before starting work.
-No manual "go check your messages" needed. Presence is automatic: every
-send/inbox/ack updates `lastSeen`, and `oracle_msg_agents` shows who's been
-active in the last 10 minutes.
-
-*Push-on-idle via Claude Code Stop hook:* the bus is pull-based, but
-`scripts/oracle-msg-stop-hook.mjs` turns it into push — when Claude finishes
-responding, the hook checks this agent's unread messages and, if any exist,
-blocks the stop so Claude wakes up, reads the inbox, and acks. Register it in
-`.claude/settings.json` (agent name as the argument; the `stop_hook_active`
-guard prevents infinite loops):
-
-```json
-{
-  "hooks": {
-    "Stop": [{ "hooks": [{ "type": "command",
-      "command": "node /path/to/Oracle/scripts/oracle-msg-stop-hook.mjs my-agent-name" }] }]
-  }
-}
-```
-
-*Real-time push via `oracle msg watch`:* for true arrival-time delivery (not
-just at turn boundaries), run a watcher that fires the instant a message
-lands, exposing it to `--exec` as `ORACLE_MSG_ID/FROM/TO/SUBJECT/BODY` env
-vars. Point `--exec` at whatever wakes your agent — e.g. `tmux send-keys`
-into a live Claude pane:
+### Set a model provider
 
 ```bash
-# POSIX shells ($VAR); on Windows the command runs under cmd.exe, use %VAR%
-oracle msg watch -a codex \
-  --exec 'tmux send-keys -t claude-pane "Oracle message from $ORACLE_MSG_FROM — check oracle_msg_inbox" Enter'
+export ANTHROPIC_API_KEY=sk-...    # or OPENAI_API_KEY, etc.
+oracle doctor                       # verify it works
 ```
 
-CLI companions: `oracle msg send -f me -t peer -b "text"` (`--reply-to id --ack`
-replies and acks in one step; `--body-file`/`-b -` for long bodies),
-`oracle msg inbox -a me` (`--json` for scripting, `--wait --timeout 120` to
-block until a message arrives), `oracle msg ack -a me <ids...> | --all`,
-`oracle msg status <id>` (read receipt).
+Supported: `anthropic`, `openai`, `opencode`, `codex`
 
-Agent-facing flow doc: `.claude/skills/oracle-messaging/SKILL.md` — collaboration
-loop, wake-up mechanics, setup checklist, and known limitations.
+---
 
-**Sessions / skills / health**
-`oracle_sessions`, `oracle_session_get`, `oracle_skills`, `oracle_doctor`
+## Core Features
 
-**Agent tools** (autonomous task execution, confined to the workspace — no shell access)
-- File operations: `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`
-- Search: `grep`
-- **Multimodal:** `read_image` (PNG/JPEG/GIF/WebP), `read_video` (MP4/WebM)
+### 1. Persistent Memory (ML-Ranked Retrieval)
 
-## Autonomous Agent
+Every `oracle_memory_*` call updates the knowledge graph. Future queries auto-rank by:
+- **Recency** — accessed/updated recently? Rank higher.
+- **Frequency** — used often? Rank higher.
+- **Semantic match** — similar to the query? Rank higher.
+- **Importance** — manually set, or promoted automatically if used frequently.
+- **Entity graph** — "Service X" links to "connection pool Y"; expanding queries finds both.
 
-Oracle runs agentic tasks with tool-use loops — the agent autonomously calls
-tools, processes results, and iterates toward a goal. Supports multimodal input
-(images, videos) when using Claude models.
+Auto-consolidation: finds overlapping memories by tag similarity (Jaccard ≥ 0.3) and merges them.
 
-**Features:**
-- **File access:** read/write/edit files, list directories, search with glob/grep — every path is
-  resolved against the workspace root and refused if it escapes it; there is no shell tool
-- **Audit trail:** all file mutations tracked with content hashes — query `result.audit.getSummary()`
-  to see what the agent changed
-- **Resource limits:** external MCP tools run with 30s timeout and 100KB output cap to prevent runaway
-- **Multimodal input:** agents can read and analyze images/videos from the workspace
-- **Skills:** apply engineering best practices (review, debug, security, architecture, tests)
-- **MCP integration:** agent discovers and uses tools from external MCP servers with opt-in mutation flag
+Background maintenance runs every 1 hour (tunable): consolidate, prune stale low-value memories, promote frequently-used working memories to durable insights.
 
-**Usage:**
+**Storage:** `~/.oracle-memory/` — plain JSON files, no database needed.
+
+### 2. Consultation Engine
+
+`oracle ask` (or `oracle_ask` MCP tool) is a one-shot Q&A. You ask a question, and Oracle:
+1. Reads your **tone** from the question (auto-picks a personality: engineer, socratic, playful, etc.)
+2. Includes relevant **memory** (semantic search + entity graph)
+3. Searches your **docs** (if configured)
+4. Runs **web search/fetch** (if enabled)
+5. Reads **code files** (if specified via `-f` glob)
+6. Fetches **GitHub PR/issue context** (if linked)
+7. Passes all of that to a model provider → gets a grounded answer with citations
+
+**CLI:**
 ```bash
-oracle agent "fix the failing tests" --skill debug
+oracle ask "why is this service timing out?"
+oracle ask "review this code" -f "src/handlers/**/*.ts"
+oracle ask "what's in our latest PR?" --include-gh
 ```
 
-Or via MCP:
-```json
-{
-  "prompt": "Review this code for security issues",
-  "skill": "security"
-}
-```
+**MCP:** `oracle_ask { question, files?, soul?, ... }`
 
-## Observability & Logging
+### 3. Autonomous Agent (Sandbox + Audit Trail)
 
-Oracle logs structured events as JSON lines to stderr (never stdout, so it doesn't interfere with tool
-output or MCP communication). Logs are tagged with `[oracle:*]` for easy grepping and machine parsing.
+`oracle agent` is an **agentic loop** that reads/writes files to complete a task. It:
+- **Has no shell.** The agent can read/write files, edit code, but cannot run bash commands directly. (This is a security boundary, not a limitation — the agent learns its workspace constraints and works within them.)
+- **Is fully audited.** Every file write is logged with: timestamp, agent name, SHA256 hash of new content, diff summary. Mutations can be replayed or reverted.
+- **Runs until done.** The agent loops, learns from test failures or edge cases, and keeps editing until it declares success.
 
-**Log streams:**
-- `[oracle:agent]` — loop lifecycle (start, turns, stop), turn duration, token usage
-- `[oracle:tool]` — tool calls (name, turn), results (duration, output size), errors
-- `[oracle:mcp]` — MCP server connect/disconnect, tool discovery, tool calls and errors
-- `[oracle:sandbox]` — security events (path-escape attempts, mutation denials in read-only mode)
-
-**Example:**
+**CLI:**
 ```bash
-ORACLE_LOG=1 oracle agent "refactor this" 2>&1 | grep oracle
-# [oracle:agent] {"ts":"2026-07-21T12:00:00.000Z","event":"start","model":"claude-sonnet-5",...}
-# [oracle:tool] {"ts":"2026-07-21T12:00:00.100Z","event":"call","toolName":"read_file",...}
-# [oracle:tool] {"ts":"2026-07-21T12:00:00.102Z","event":"result","durationMs":2,...}
+oracle agent "add error handling to src/handler.ts, test it, commit"
 ```
 
-Disable with `ORACLE_LOG=0` if you need to suppress logging overhead in production.
+**MCP:** `oracle_agent { task, soul?, ... }`
 
-## Audit Trail & Safety
+### 4. Inter-Agent Coordination (Message Bus)
 
-Every agent run includes an audit trail tracking file mutations with timestamps and content hashes:
+**The problem Oracle solves:** Two Claude Code sessions run in parallel. One finishes a refactor. How does the other know? How do they coordinate without you being the messenger?
 
-```js
-const result = await agent.run({ prompt: "refactor this file" });
-const summary = result.audit.getSummary();
-console.log(summary);
-// {
-//   totalChanges: 5,
-//   mutations: 2,                    // write, edit only (not reads)
-//   byType: { read: 3, write: 1, edit: 1 },
-//   filesChanged: [ "src/main.ts", "src/utils.ts" ]
-// }
+**Solution: Shared message bus at `~/.oracle/messages/`**
 
-// Access full trail with content hashes for verification
-result.audit.getChanges().forEach(c => {
-  console.log(`${c.type}: ${c.path} (hash: ${c.contentHash})`);
-});
+Every agent can:
+- **Register** (`oracle_msg_register`) — one call: register name/role → get the roster + your unread messages. Presence updates automatically.
+- **Send** (`oracle_msg_send`) — to one agent, or broadcast (`to: "*"`) to all.
+- **Receive** (`oracle_msg_inbox`) — see messages for you; filter by read/unread; limit results.
+- **Reply** in **threads** (`replyTo`) — keeps conversation organized.
+- **Ack** (`oracle_msg_ack`) — mark handled so Stop hook doesn't re-trigger.
+
+**Key:** MCP server sends **instructions** to every client on connect:
+> *"Before starting work: (1) register with oracle_msg_register (name + role). (2) Check your unread messages. (3) Handle anything urgent. Then proceed."*
+
+No human has to say "go check your messages." The agent learns the pattern from instructions alone.
+
+**Wake-up mechanics (3 tiers):**
+1. **Pull** — Agent calls `oracle_msg_inbox` when it feels like it.
+2. **Push-on-idle (Stop hook)** — When Claude finishes a turn and tries to stop, the hook checks for unread messages. If any, it blocks the stop → Claude reads/acks → then can close.
+3. **Real-time push (watcher)** — `oracle msg watch -a <agent> --exec "<cmd>"` — a separate process watches the bus and fires a command (e.g. `tmux send-keys`) the moment a message lands.
+
+**CLI:**
+```bash
+oracle msg send -f lead -t worker -b "review this" --body-file findings.txt
+oracle msg inbox -a worker --json --wait --timeout 120
+oracle msg ack -a worker <id>
+oracle msg watch -a codex --exec 'notify-send "Message from $ORACLE_MSG_FROM"'
 ```
 
-**Resource limits for external MCP tools** (safety guardrails):
-- 30-second timeout per tool call
-- 100KB output cap per call (truncated if exceeded)
-- Logged in `[oracle:mcp]` result events as `outputTruncated` flag
+**Storage:** `~/.oracle/messages/` (atomic JSON) + `~/.oracle/agents/` (presence registry).
+
+---
+
+## MCP Tools (43 Total)
+
+### Consultation & Memory (22 tools)
+`oracle_ask`, `oracle_memory_*` (search, update, consolidate, prune, promote, reflect, graph operations, wiki, etc.)
+
+### Agent & Autonomy (6 tools)
+`oracle_agent`, `oracle_sessions`, `oracle_session_get`, `oracle_agent` (run task), plus observability.
+
+### Messaging & Coordination (6 tools)
+`oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`
+
+### Identity & Config (3 tools)
+`oracle_identity_setup`, `oracle_identity_show`, `oracle_persona_set`
+
+### GitHub Integration (5 tools)
+PR/issue listing, diff viewing, review submission, search, API passthrough.
+
+### Docs & Web (3 tools)
+Doc indexing, web search, structured web extraction.
+
+### Health & Skills (2 tools)
+`oracle_doctor` (verify providers, agents, connectivity), `oracle_skills` (list available skills).
+
+See the [**full tool reference**](MESSAGING.md) for messaging; [**docs/**](docs/) for deeper architecture.
+
+---
 
 ## Configuration
 
-Project config lives in `.oracle/config.json`:
+### Environment Variables
 
+```bash
+ORACLE_WORKSPACE_ROOT      # Project root (default: cwd)
+ORACLE_HOME_DIR            # Memory/agents/messages store (default: ~/.oracle)
+ORACLE_MEMORY_LLM_GRAPH    # Enable LLM-based memory graph reflection (default: off)
+ANTHROPIC_API_KEY          # For Claude models (required if using Anthropic)
+OPENAI_API_KEY             # For GPT (required if using OpenAI)
+```
+
+### Setup Steps
+
+1. **Install:** `npm install -g @oraclepersonal/oracle`
+2. **Provider:** Export `ANTHROPIC_API_KEY` (or your provider).
+3. **Workspace:** `cd /path/to/project`
+4. **MCP:** `oracle setup-mcp --client claude-code` (or wire manually).
+5. **Identity:** `oracle identity setup` (optional; sets your name/preferences).
+6. **Test:** `oracle doctor`
+
+---
+
+## Architecture
+
+```
+Oracle MCP Server (src/mcp/)
+├─ Consultation Engine (src/core/consult.ts)
+│  └─ Reads workspace, memory, docs, web; asks a model
+├─ Memory System (src/memory/)
+│  └─ BM25 + vector search + entity graph + auto-consolidation
+├─ Messaging Bus (src/messaging/)
+│  └─ File-backed store + registry + watcher + CLI + onboarding hooks
+├─ Agent Sandbox (src/agent/)
+│  └─ File R/W, audit trail, no shell, looping until done
+├─ Observability (src/observability/)
+│  └─ Structured JSON logging to stderr
+├─ Identity & Personas (src/identity/)
+│  └─ Profile store + auto mood detection
+└─ Skills & Oracles (src/skills/, src/oracles/)
+   └─ Reusable skill registry + custom oracle profiles
+
+CLI (src/cli.ts)
+├─ oracle ask, agent, memory, msg, identity, ...
+├─ same bus as MCP (shared ~/.oracle/)
+└─ designed for scripting & local use
+
+Standalone Messaging Server (src/mcp-messaging.ts)
+├─ Just the 6 oracle_msg_* tools
+├─ No provider/memory/agent stack
+└─ for agents that only need to coordinate
+```
+
+**Storage Layout:**
+```
+~/.oracle/
+├─ messages/              # Inter-agent message store (atomic JSON per message)
+├─ agents/                # Presence registry (one JSON per registered agent)
+├─ memory/                # Persistent memory (facts, insights, wiki, graph)
+├─ skills/                # Local skill definitions
+└─ .sessions/             # Session cache
+```
+
+---
+
+## Security Model
+
+### Agent Sandbox (No Shell)
+
+The agent has **no access to bash/shell.** It can only:
+- Read files (via `Read` tool)
+- Write files (via `Write` / `Edit` tools)
+- Spawn other agents via MCP
+
+It **cannot:**
+- Run arbitrary commands
+- Install packages
+- Fork processes
+- Escape the workspace
+
+**Why?** Shell access = footgun risk. Agents are deterministic; if they need to run something, you either (1) provide a tool for it, or (2) ask for explicit permission.
+
+### Audit Trail
+
+Every file mutation (write/edit/delete) is logged:
 ```json
 {
-  "provider": "codex",
-  "model": "gpt-5.4-mini",
-  "include": ["src/**/*", "README.md", "package.json"],
-  "exclude": ["**/*.test.ts", "**/node_modules/**", "**/dist/**"],
-  "maxFileSizeBytes": 1000000,
-  "maxInputBytes": 5000000,
-  "mcpServers": [
-    {
-      "name": "your-mcp-server",
-      "url": "http://localhost:3000",
-      "trustedForMutation": false
-    }
-  ]
+  "timestamp": "2026-07-22T15:30:45.123Z",
+  "agent": "claude-code",
+  "file": "src/handler.ts",
+  "action": "edit",
+  "hash": "sha256:abc123...",
+  "diff": "..."
 }
 ```
 
-**Config fields:**
-- `provider` — `codex`, `openai`, `anthropic`, or `opencode`
-- `model` — model ID (e.g., `gpt-5.4-mini`, `claude-sonnet-5`)
-- `include` / `exclude` — file patterns for context window
-- `mcpServers` — external MCP servers to wire into the agent (stdio or HTTP)
-  - `name` — server name (used to prefix tool names as `mcp_<name>_<tool>`)
-  - `command` — for stdio servers: executable path (e.g., `"node"`, `"/usr/local/bin/my-mcp-server"`)
-  - `args` — stdio server arguments
-  - `url` — for HTTP/SSE servers: server endpoint URL
-  - `trustedForMutation` — if `true`, the agent can call write/mutating tools from this server; default `false` (read-only)
+Audits are immutable; they go to `~/.oracle/audits/` and can be replayed or reviewed.
 
-Environment variables:
+### Message Bus Security
 
-| Var | Purpose |
-|---|---|
-| `ORACLE_WORKSPACE_ROOT` | Project root the MCP server operates on |
-| `ORACLE_HOME_DIR` | Override the `~/.oracle` home (sessions, profiles, config) |
-| `ORACLE_USE_OLLAMA` | Enable semantic memory search via Ollama embeddings (`"1"` or `"true"`) |
-| `ORACLE_MEMORY_BIN` | Path to `oracle-memory` binary (default: `oracle-memory`) |
-| `ORACLE_MEMORY_LLM_GRAPH` | Enable LLM-powered entity extraction, conflict detection, and reflection (requires `ANTHROPIC_API_KEY`) |
-| `ORACLE_LOG` | Set to `"0"` to disable structured observability logging (`[oracle:*]` JSON lines to stderr) |
-| `ORACLE_WEB_LOG` | Set to `"0"` to disable web search/fetch logging |
-| `OLLAMA_HOST` | Ollama endpoint (default `http://127.0.0.1:11434`) |
-| `OLLAMA_EMBED_MODEL` | Embedding model (default `nomic-embed-text`) |
-| `BRAVE_API_KEY` | Brave Search API key |
-| `TAVILY_API_KEY` | Tavily Search API key |
-| `FIRECRAWL_API_KEY` | Firecrawl API key (JS-rendered page scraping) |
-| `AGENTQL_API_KEY` | TinyFish AgentQL key (structured data extraction) |
+Messages are not encrypted (they're in a local JSON store), so **this is only suitable for single-machine multi-agent coordination,** not cross-network. If you need to send messages over the network, TLS should wrap the MCP server.
 
-Provider API keys are read from the environment / `.env` (see `oracle doctor`):
+---
 
-| Provider | Required Env Vars |
-|---|---|
-| `codex` | Codex CLI installed and authenticated |
-| `openai` | `OPENAI_API_KEY`, optionally `OPENAI_API_BASE` |
-| `anthropic` | `ANTHROPIC_API_KEY` |
-| `opencode` | `OPENCODE_API_KEY` (or `OPENAI_API_KEY`), `OPENCODE_API_BASE`, `OPENCODE_MODEL` |
+## Limitations & Known Issues
+
+- **Memory store grows unbounded.** Prune old memories by hand or via `oracle memory prune`.
+- **Concurrent writes to the same message can lose one ack.** Read-modify-write without a lock. If two agents ack the same broadcast simultaneously, one ack might not be recorded. Workaround: re-ack.
+- **Windows rename under contention.** On heavy concurrent load, `fs.rename()` can fail EPERM. Retry succeeds.
+- **Stop hook is fragile.** If a hook dies or times out, Claude closes anyway. Make hooks fast (< 1 second).
+
+---
+
+## Testing
+
+```bash
+npm run test              # vitest run src
+npm run typecheck        # tsc --noEmit
+npm run build            # tsc -> dist/
+```
+
+232 tests cover messaging, memory, agent sandbox, and MCP integration.
+
+---
+
+## Contributing
+
+This is a **single monorepo** (moved from multi-repo on 2026-07-18). Fork, branch, and open PRs against `main`. Each commit must:
+- Pass `npm run typecheck && npm run test`
+- Follow file mutation audit conventions
+- Reference related docs or issues
+
+**Development loop:**
+```bash
+npm install
+npm run dev              # tsx src/cli.ts (hot reload)
+npm run mcp             # tsx src/mcp.ts
+npm run mcp:messaging   # tsx src/mcp-messaging.ts
+npm run test            # watch mode: vitest
+```
+
+---
+
+## Learn More
+
+- [**Messaging Flow & Setup**](MESSAGING.md) — How agents coordinate, wake-up tiers, CLI reference, troubleshooting.
+- [**Skill System**](.claude/skills/oracle-messaging/SKILL.md) — Portable SKILL.md that teaches any agent how to use the bus.
+- [**Architecture Deep-Dive**](docs/architecture.md) — System design, data flow, threat model.
+- [**Agent & Autonomy**](docs/AGENT.md) — How the sandbox works, audit trail, limitations.
+
+---
+
+## License
+
+MIT. Not affiliated with Oracle Corp or the Oracle database.
+
+**Why is it called Oracle?** An oracle is something you *consult* — it remembers, knows, and answers. This project is that for your agents: a shared source of truth they return to, and a switchboard they use to reach each other.
