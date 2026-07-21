@@ -28,6 +28,7 @@ import { OracleRegistry } from "./oracles/registry.js";
 import { OrchestratorFactory } from "./orchestrator/factory.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import { ProfileStore } from "./identity/profile.js";
+import { MessageStore } from "./messaging/store.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
@@ -470,6 +471,94 @@ program
     } else {
       throw new Error(`Unknown action: ${action}. Use list or install.`);
     }
+  });
+
+// ── inter-agent messaging ───────────────────────────────────────
+const msgCmd = program.command("msg").description("Inter-agent message bus (shared ~/.oracle/messages)");
+
+msgCmd
+  .command("send")
+  .description("Send a message to another agent ('*' broadcasts)")
+  .requiredOption("-f, --from <agent>", "Your agent name")
+  .requiredOption("-t, --to <agent>", "Recipient agent name, or '*'")
+  .requiredOption("-b, --body <text>", "Message body")
+  .option("-s, --subject <text>", "Subject line")
+  .option("--reply-to <id>", "Message id this replies to")
+  .action(async (options) => {
+    const store = new MessageStore(homeDir());
+    const msg = await store.send({
+      from: options.from,
+      to: options.to,
+      body: options.body,
+      subject: options.subject,
+      replyTo: options.replyTo
+    });
+    console.log(`Sent ${msg.id} to ${msg.to}`);
+  });
+
+msgCmd
+  .command("inbox")
+  .description("Show messages addressed to you (unread by default)")
+  .requiredOption("-a, --agent <name>", "Your agent name")
+  .option("--all", "Include already-read messages", false)
+  .option("--limit <n>", "Max messages", "50")
+  .action(async (options) => {
+    const store = new MessageStore(homeDir());
+    const inbox = await store.inbox(options.agent, {
+      unreadOnly: !options.all,
+      limit: Number(options.limit)
+    });
+    if (!inbox.length) { console.log("Inbox empty."); return; }
+    for (const m of inbox) {
+      console.log(`${m.id} | ${m.ts} | from ${m.from}${m.subject ? ` | ${m.subject}` : ""}`);
+      console.log(`  ${m.body.split("\n").join("\n  ")}`);
+    }
+  });
+
+msgCmd
+  .command("ack")
+  .description("Mark messages as read")
+  .requiredOption("-a, --agent <name>", "Your agent name")
+  .argument("<ids...>", "Message ids to acknowledge")
+  .action(async (ids, options) => {
+    const store = new MessageStore(homeDir());
+    const acked = await store.ack(options.agent, ids);
+    console.log(`Acked ${acked.length}/${ids.length}.`);
+  });
+
+msgCmd
+  .command("watch")
+  .description("Watch for incoming messages in real time; optionally run a command per message")
+  .requiredOption("-a, --agent <name>", "Your agent name")
+  .option(
+    "--exec <command>",
+    "Shell command to run per message (message fields exposed as ORACLE_MSG_ID/FROM/TO/SUBJECT/BODY env vars)"
+  )
+  .action(async (options) => {
+    const { watchInbox } = await import("./messaging/watch.js");
+    const { spawn } = await import("node:child_process");
+    await watchInbox(homeDir(), options.agent, (msg) => {
+      console.log(`[${msg.ts}] ${msg.id} | from ${msg.from}${msg.subject ? ` | ${msg.subject}` : ""}`);
+      console.log(`  ${msg.body.split("\n").join("\n  ")}`);
+      if (options.exec) {
+        const child = spawn(options.exec, {
+          shell: true,
+          stdio: "inherit",
+          env: {
+            ...process.env,
+            ORACLE_MSG_ID: msg.id,
+            ORACLE_MSG_FROM: msg.from,
+            ORACLE_MSG_TO: msg.to,
+            ORACLE_MSG_SUBJECT: msg.subject ?? "",
+            ORACLE_MSG_BODY: msg.body
+          }
+        });
+        child.on("error", (err) => console.error(`exec failed: ${err.message}`));
+      }
+    });
+    console.log(`Watching messages for "${options.agent}" — Ctrl+C to stop.`);
+    // keep the process alive until interrupted
+    await new Promise(() => {});
   });
 
 // ── identity ────────────────────────────────────────────────────

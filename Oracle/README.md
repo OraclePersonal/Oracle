@@ -170,6 +170,21 @@ guard prevents infinite loops):
 }
 ```
 
+*Real-time push via `oracle msg watch`:* for true arrival-time delivery (not
+just at turn boundaries), run a watcher that fires the instant a message
+lands, exposing it to `--exec` as `ORACLE_MSG_ID/FROM/TO/SUBJECT/BODY` env
+vars. Point `--exec` at whatever wakes your agent — e.g. `tmux send-keys`
+into a live Claude pane:
+
+```bash
+# POSIX shells ($VAR); on Windows the command runs under cmd.exe, use %VAR%
+oracle msg watch -a codex \
+  --exec 'tmux send-keys -t claude-pane "Oracle message from $ORACLE_MSG_FROM — check oracle_msg_inbox" Enter'
+```
+
+CLI companions: `oracle msg send -f me -t peer -b "text"`, `oracle msg inbox -a me`,
+`oracle msg ack -a me <ids...>`.
+
 **Sessions / skills / health**
 `oracle_sessions`, `oracle_session_get`, `oracle_skills`, `oracle_doctor`
 
