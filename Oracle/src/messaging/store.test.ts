@@ -85,4 +85,48 @@ describe("MessageStore", () => {
   test("rejects a path-escaping id", async () => {
     await expect(store.ack("b", ["../evil"])).rejects.toThrow(/Invalid message id/);
   });
+
+  test("ackAll clears every unread message", async () => {
+    await store.send({ from: "a", to: "b", body: "one" });
+    await store.send({ from: "a", to: "*", body: "two" });
+    const acked = await store.ackAll("b");
+    expect(acked).toHaveLength(2);
+    expect(await store.inbox("b")).toHaveLength(0);
+  });
+
+  test("thread survives a replyTo cycle", async () => {
+    // Crafted cycle: two messages replying to each other must not hang.
+    const dir = path.join(home, "messages");
+    await fs.mkdir(dir, { recursive: true });
+    const mk = (id: string, replyTo: string) =>
+      fs.writeFile(
+        path.join(dir, `${id}.json`),
+        JSON.stringify({ id, ts: "2026-07-22T00:00:00Z", from: "a", to: "b", body: id, replyTo, readBy: [] }),
+        "utf8"
+      );
+    await mk("cycle-aaaa", "cycle-bbbb");
+    await mk("cycle-bbbb", "cycle-aaaa");
+
+    const thread = await store.thread("cycle-aaaa");
+    expect(thread.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a message file missing readBy does not poison the inbox", async () => {
+    // Found via live two-agent test: hand-written/older-schema files without
+    // readBy made the default unread inbox throw and lose ALL messages.
+    const good = await store.send({ from: "a", to: "b", body: "good" });
+    const badPath = path.join(home, "messages", "20260722000000000-deadbeef.json");
+    await fs.writeFile(
+      badPath,
+      JSON.stringify({ id: "20260722000000000-deadbeef", ts: "2026-07-22T00:00:00Z", from: "a", to: "b", body: "no readBy" }),
+      "utf8"
+    );
+
+    const inbox = await store.inbox("b");
+    expect(inbox.map((m) => m.id).sort()).toEqual(["20260722000000000-deadbeef", good.id].sort());
+
+    // And the normalized message can be acked normally.
+    const acked = await store.ack("b", ["20260722000000000-deadbeef"]);
+    expect(acked).toEqual(["20260722000000000-deadbeef"]);
+  });
 });

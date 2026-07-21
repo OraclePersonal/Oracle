@@ -182,8 +182,14 @@ oracle msg watch -a codex \
   --exec 'tmux send-keys -t claude-pane "Oracle message from $ORACLE_MSG_FROM — check oracle_msg_inbox" Enter'
 ```
 
-CLI companions: `oracle msg send -f me -t peer -b "text"`, `oracle msg inbox -a me`,
-`oracle msg ack -a me <ids...>`.
+CLI companions: `oracle msg send -f me -t peer -b "text"` (`--reply-to id --ack`
+replies and acks in one step; `--body-file`/`-b -` for long bodies),
+`oracle msg inbox -a me` (`--json` for scripting, `--wait --timeout 120` to
+block until a message arrives), `oracle msg ack -a me <ids...> | --all`,
+`oracle msg status <id>` (read receipt).
+
+Agent-facing flow doc: `.claude/skills/oracle-messaging/SKILL.md` — collaboration
+loop, wake-up mechanics, setup checklist, and known limitations.
 
 **Sessions / skills / health**
 `oracle_sessions`, `oracle_session_get`, `oracle_skills`, `oracle_doctor`

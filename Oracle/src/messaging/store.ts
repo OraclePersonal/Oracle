@@ -79,7 +79,12 @@ export class MessageStore {
   async get(id: string): Promise<AgentMessage | null> {
     const filePath = this.filePath(id); // validates id before any fs access
     try {
-      return JSON.parse(await fs.readFile(filePath, "utf8")) as AgentMessage;
+      const msg = JSON.parse(await fs.readFile(filePath, "utf8")) as AgentMessage;
+      // Normalize shape: a hand-written or older-schema file missing readBy
+      // must not poison every inbox call that touches it (verified live —
+      // inbox() threw on m.readBy.includes and lost the whole inbox).
+      if (!Array.isArray(msg.readBy)) msg.readBy = [];
+      return msg;
     } catch {
       return null;
     }
@@ -129,13 +134,24 @@ export class MessageStore {
     return acked;
   }
 
+  /** Ack every currently-unread message for `agent`. Returns the acked ids. */
+  async ackAll(agent: string): Promise<string[]> {
+    const unread = await this.inbox(agent, { unreadOnly: true, limit: 1000 });
+    return this.ack(agent, unread.map((m) => m.id));
+  }
+
   /** Full thread for a message: walk up to the root, then collect all replies below it. */
   async thread(id: string): Promise<AgentMessage[]> {
     const all = await this.readAll();
     const byId = new Map(all.map((m) => [m.id, m]));
     let root = byId.get(id);
     if (!root) return [];
-    while (root.replyTo && byId.get(root.replyTo)) root = byId.get(root.replyTo)!;
+    // Cycle guard: crafted replyTo cycles (a->b->a) must not hang the walk.
+    const visited = new Set<string>([root.id]);
+    while (root.replyTo && byId.get(root.replyTo) && !visited.has(root.replyTo)) {
+      root = byId.get(root.replyTo)!;
+      visited.add(root.id);
+    }
 
     const result: AgentMessage[] = [];
     const queue = [root.id];

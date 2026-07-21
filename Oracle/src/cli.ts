@@ -474,26 +474,56 @@ program
   });
 
 // ── inter-agent messaging ───────────────────────────────────────
-const msgCmd = program.command("msg").description("Inter-agent message bus (shared ~/.oracle/messages)");
+const msgCmd = program
+  .command("msg")
+  .description("Inter-agent message bus (shared ~/.oracle/messages)")
+  .addHelpText(
+    "after",
+    "\nFlow, wake-up hooks, and setup: .claude/skills/oracle-messaging/SKILL.md in the Oracle repo."
+  );
+
+function printMessage(m: import("./messaging/store.js").AgentMessage): void {
+  console.log(`${m.id} | ${m.ts} | from ${m.from} to ${m.to}${m.subject ? ` | ${m.subject}` : ""}`);
+  console.log(`  ${m.body.split("\n").join("\n  ")}`);
+}
 
 msgCmd
   .command("send")
   .description("Send a message to another agent ('*' broadcasts)")
   .requiredOption("-f, --from <agent>", "Your agent name")
   .requiredOption("-t, --to <agent>", "Recipient agent name, or '*'")
-  .requiredOption("-b, --body <text>", "Message body")
+  .option("-b, --body <text>", "Message body ('-' reads stdin)")
+  .option("--body-file <path>", "Read the body from a file (safer for long/multiline text)")
   .option("-s, --subject <text>", "Subject line")
   .option("--reply-to <id>", "Message id this replies to")
+  .option("--ack", "Also mark the replied-to message as read (requires --reply-to)", false)
   .action(async (options) => {
+    let body: string | undefined = options.body;
+    if (options.bodyFile) {
+      body = await fs.readFile(path.resolve(options.bodyFile), "utf8");
+    } else if (body === "-") {
+      body = await new Promise<string>((resolve) => {
+        let data = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", (c) => (data += c));
+        process.stdin.on("end", () => resolve(data));
+      });
+    }
+    if (!body?.trim()) throw new Error("Provide a body via -b, --body-file, or -b - (stdin).");
     const store = new MessageStore(homeDir());
     const msg = await store.send({
       from: options.from,
       to: options.to,
-      body: options.body,
+      body,
       subject: options.subject,
       replyTo: options.replyTo
     });
-    console.log(`Sent ${msg.id} to ${msg.to}`);
+    if (options.ack && options.replyTo) {
+      await store.ack(options.from, [options.replyTo]);
+      console.log(`Sent ${msg.id} to ${msg.to} (acked ${options.replyTo})`);
+    } else {
+      console.log(`Sent ${msg.id} to ${msg.to}`);
+    }
   });
 
 msgCmd
@@ -502,28 +532,66 @@ msgCmd
   .requiredOption("-a, --agent <name>", "Your agent name")
   .option("--all", "Include already-read messages", false)
   .option("--limit <n>", "Max messages", "50")
+  .option("--json", "Output a JSON array (empty array when inbox is empty)", false)
+  .option("--wait", "If empty, block until a message arrives or --timeout expires", false)
+  .option("--timeout <seconds>", "Max seconds to --wait", "120")
   .action(async (options) => {
     const store = new MessageStore(homeDir());
-    const inbox = await store.inbox(options.agent, {
+    let inbox = await store.inbox(options.agent, {
       unreadOnly: !options.all,
       limit: Number(options.limit)
     });
-    if (!inbox.length) { console.log("Inbox empty."); return; }
-    for (const m of inbox) {
-      console.log(`${m.id} | ${m.ts} | from ${m.from}${m.subject ? ` | ${m.subject}` : ""}`);
-      console.log(`  ${m.body.split("\n").join("\n  ")}`);
+
+    if (!inbox.length && options.wait) {
+      const { watchInbox } = await import("./messaging/watch.js");
+      const timeoutMs = Number(options.timeout) * 1000;
+      const arrived = await new Promise<boolean>((resolve) => {
+        let watcher: import("chokidar").FSWatcher | undefined;
+        const timer = setTimeout(() => { void watcher?.close(); resolve(false); }, timeoutMs);
+        void watchInbox(homeDir(), options.agent, () => {
+          clearTimeout(timer);
+          void watcher?.close();
+          resolve(true);
+        }).then((w) => { watcher = w; });
+      });
+      if (arrived) {
+        inbox = await store.inbox(options.agent, { unreadOnly: !options.all, limit: Number(options.limit) });
+      }
     }
+
+    if (options.json) { console.log(JSON.stringify(inbox, null, 2)); return; }
+    if (!inbox.length) { console.log("Inbox empty."); return; }
+    for (const m of inbox) printMessage(m);
   });
 
 msgCmd
   .command("ack")
   .description("Mark messages as read")
   .requiredOption("-a, --agent <name>", "Your agent name")
-  .argument("<ids...>", "Message ids to acknowledge")
+  .option("--all", "Ack every unread message", false)
+  .argument("[ids...]", "Message ids to acknowledge")
   .action(async (ids, options) => {
     const store = new MessageStore(homeDir());
+    if (options.all) {
+      const acked = await store.ackAll(options.agent);
+      console.log(`Acked ${acked.length} message(s).`);
+      return;
+    }
+    if (!ids.length) throw new Error("Provide message ids or --all.");
     const acked = await store.ack(options.agent, ids);
     console.log(`Acked ${acked.length}/${ids.length}.`);
+  });
+
+msgCmd
+  .command("status")
+  .description("Show one message including who has read it")
+  .argument("<id>", "Message id")
+  .action(async (id) => {
+    const store = new MessageStore(homeDir());
+    const msg = await store.get(id);
+    if (!msg) { console.log(`Not found: ${id}`); process.exitCode = 1; return; }
+    printMessage(msg);
+    console.log(`  readBy: ${msg.readBy.length ? msg.readBy.join(", ") : "(no one yet)"}`);
   });
 
 msgCmd
