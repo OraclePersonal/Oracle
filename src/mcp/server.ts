@@ -15,6 +15,7 @@ import type { MemoryPort } from "../orchestrator/ports.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "../docs/reader.js";
 import { getConversationContext, recordSelfLog } from "../core/selfMemory.js";
 import { loadSoul } from "../core/souls.js";
+import { buildOracleSystemPrompt } from "../core/systemPrompt.js";
 import { buildWiki, getWikiPage, listWikiTopics } from "../wiki/compile.js";
 import { webSearchWithTrace } from "../web/search.js";
 import { fetchUrl } from "../web/fetchUrl.js";
@@ -230,7 +231,7 @@ export function registerOracleTools({
         }
 
         const prompt = `${ctxBlock}${memoryCtx}\n\n## Question\n${question}`;
-        const systemPrompt = `${soulPrompt}\n\nAnswer concisely and directly. If you don't know, say so.`;
+        const systemPrompt = buildOracleSystemPrompt(soulPrompt);
         const hasFiles = files !== undefined && files.length > 0;
         const result = await service.consult({
           prompt,

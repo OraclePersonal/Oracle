@@ -33,6 +33,7 @@ import { webSearchWithTrace } from "./web/search.js";
 import { fetchUrl } from "./web/fetchUrl.js";
 import { agentqlExtract } from "./web/providers/agentql.js";
 import { loadSoul } from "./core/souls.js";
+import { buildOracleSystemPrompt } from "./core/systemPrompt.js";
 import { getConversationContext, recordSelfLog } from "./core/selfMemory.js";
 import { createDebouncer, reviewWorkingTreeDiff } from "./core/watch.js";
 import { buildWiki, getWikiPage, listWikiTopics } from "./wiki/compile.js";
@@ -188,6 +189,7 @@ program
     const service = new ConsultService(createProvider(parsedProvider));
     const soulsDir = path.join(homeDir(), "souls");
     const soulPrompt = await loadSoul(options.soul, soulsDir);
+    const systemPrompt = buildOracleSystemPrompt(soulPrompt);
 
     const orchestrator = new OrchestratorFactory(cwd, homeDir());
     const memory = await orchestrator.createMemoryAdapter();
@@ -212,7 +214,7 @@ program
       files: hasFiles ? options.file : [],
       model: options.model ?? "gpt-5.4",
       cwd,
-      systemPrompt: `${soulPrompt}\n\nAnswer concisely and directly. If you don't know, say so.`,
+      systemPrompt,
       allowEmptyFiles: !hasFiles
     });
 
