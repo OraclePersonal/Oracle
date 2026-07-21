@@ -1,0 +1,3 @@
+[submodule "Oracle"]
+	path = Oracle
+	url = https://github.com/OraclePersonal/Oracle.git
