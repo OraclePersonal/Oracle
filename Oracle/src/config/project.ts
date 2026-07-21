@@ -4,6 +4,15 @@ import { z } from "zod";
 import { OracleError } from "../errors.js";
 import type { ProviderName } from "../providers/factory.js";
 
+export interface McpServerConfig {
+  name: string;
+  /** stdio server: command + args */
+  command?: string;
+  args?: string[];
+  /** HTTP/SSE server: endpoint URL */
+  url?: string;
+}
+
 export interface ProjectConfig {
   provider: ProviderName;
   model: string;
@@ -11,6 +20,7 @@ export interface ProjectConfig {
   exclude: string[];
   maxFileSizeBytes: number;
   maxInputBytes: number;
+  mcpServers?: McpServerConfig[];
 }
 
 const schema = z
@@ -20,7 +30,17 @@ const schema = z
     include: z.array(z.string().trim().min(1)).min(1).optional(),
     exclude: z.array(z.string().trim().min(1)).optional(),
     maxFileSizeBytes: z.number().int().positive().optional(),
-    maxInputBytes: z.number().int().positive().optional()
+    maxInputBytes: z.number().int().positive().optional(),
+    mcpServers: z
+      .array(
+        z.object({
+          name: z.string().trim().min(1),
+          command: z.string().trim().optional(),
+          args: z.array(z.string()).optional(),
+          url: z.string().trim().optional(),
+        })
+      )
+      .optional(),
   })
   .strict();
 

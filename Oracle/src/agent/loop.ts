@@ -4,6 +4,7 @@ import type {
   AgentProvider,
   AgentTool,
   ToolResult,
+  ContentBlock,
 } from "./types.js";
 
 export interface AgentStep {
@@ -53,7 +54,8 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
   const maxSteps = params.maxSteps ?? 20;
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
 
-  const transcript: AgentMessage[] = [{ role: "user", content: prompt }];
+  const userContent = typeof prompt === "string" ? [{ type: "text" as const, text: prompt }] : prompt;
+  const transcript: AgentMessage[] = [{ role: "user", content: userContent }];
   const steps: AgentStep[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
@@ -81,16 +83,17 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
     for (const call of toolCalls) {
       const tool = toolsByName.get(call.name);
       if (!tool) {
-        results.push({ id: call.id, content: `Unknown tool: ${call.name}`, isError: true });
+        results.push({ id: call.id, content: [{ type: "text", text: `Unknown tool: ${call.name}` }], isError: true });
         continue;
       }
       try {
-        const content = await tool.execute(call.input, context);
+        const output = await tool.execute(call.input, context);
+        const content: ContentBlock[] = typeof output === "string" ? [{ type: "text", text: output }] : output;
         results.push({ id: call.id, content });
       } catch (error) {
         results.push({
           id: call.id,
-          content: error instanceof Error ? error.message : String(error),
+          content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
           isError: true,
         });
       }

@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { Provider, ProviderRequest } from "./provider.js";
 import type { ProviderResponse } from "../types.js";
 import { AnthropicOAuthClient, type PlanTier } from "../auth/anthropic-oauth.js";
-import type { AgentMessage, AgentProvider, AgentTool, AgentTurn, ToolCall } from "../agent/types.js";
+import type { AgentMessage, AgentProvider, AgentTool, AgentTurn, ToolCall, ContentBlock } from "../agent/types.js";
 
 const OAUTH_BETA_HEADER = "oauth-2025-04-20";
 
@@ -20,11 +20,44 @@ const TIER_MAX_RETRIES: Record<PlanTier, number> = {
   max: 5
 };
 
+/** Convert neutral ContentBlock[] to Anthropic format. */
+function toAnthropicContentBlocks(blocks: ContentBlock[]): Anthropic.ContentBlockParam[] {
+  return blocks.flatMap((block): Anthropic.ContentBlockParam[] => {
+    if (block.type === "text") {
+      return [{ type: "text", text: block.text }];
+    }
+    if (block.type === "image") {
+      return [{
+        type: "image",
+        source: {
+          type: "base64" as const,
+          media_type: block.mimeType as "image/png" | "image/jpeg" | "image/gif" | "image/webp",
+          data: block.data
+        }
+      }];
+    }
+    if (block.type === "video") {
+      return [{
+        type: "video" as any,
+        source: {
+          type: "base64" as const,
+          media_type: block.mimeType as any,
+          data: block.data
+        }
+      }];
+    }
+    return [];
+  });
+}
+
 /** Translate the neutral transcript into Anthropic message params. */
 function toAnthropicMessages(messages: AgentMessage[]): Anthropic.MessageParam[] {
   return messages.map((m): Anthropic.MessageParam => {
     if (m.role === "user") {
-      return { role: "user", content: m.content };
+      const content = typeof m.content === "string"
+        ? [{ type: "text" as const, text: m.content }]
+        : toAnthropicContentBlocks(m.content);
+      return { role: "user", content };
     }
     if (m.role === "assistant") {
       const blocks: Anthropic.ContentBlockParam[] = [];
@@ -37,12 +70,17 @@ function toAnthropicMessages(messages: AgentMessage[]): Anthropic.MessageParam[]
     // tool results are sent back as a user message of tool_result blocks
     return {
       role: "user",
-      content: m.results.map((r) => ({
-        type: "tool_result" as const,
-        tool_use_id: r.id,
-        content: r.content,
-        is_error: r.isError,
-      })),
+      content: m.results.map((r) => {
+        const contentBlocks = toAnthropicContentBlocks(r.content);
+        return {
+          type: "tool_result" as const,
+          tool_use_id: r.id,
+          content: contentBlocks.length === 1 && contentBlocks[0]?.type === "text"
+            ? (contentBlocks[0] as Anthropic.TextBlockParam).text
+            : (contentBlocks as any),
+          is_error: r.isError,
+        };
+      }),
     };
   });
 }

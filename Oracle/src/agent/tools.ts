@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import type { AgentContext, AgentTool } from "./types.js";
+import type { AgentContext, AgentTool, ContentBlock } from "./types.js";
 
 /** Cap on how much text any single tool returns to the model. */
 const MAX_OUTPUT_CHARS = 30_000;
@@ -237,6 +237,66 @@ export function defaultAgentTools(): AgentTool[] {
           }
         }
         return truncate(hits.join("\n") || "(no matches)");
+      },
+    },
+    {
+      name: "read_image",
+      description: "Read an image file and return it as base64 for the model to see. Supports PNG, JPEG, GIF, WebP.",
+      mutating: false,
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Image file path (relative to workspace)" },
+        },
+        required: ["path"],
+      },
+      async execute(input, ctx) {
+        const filePath = resolveInWorkspace(ctx, str(input, "path"));
+        const data = await fs.readFile(filePath);
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeType = {
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".gif": "image/gif",
+          ".webp": "image/webp",
+        }[ext];
+        if (!mimeType) throw new ToolError(`Unsupported image format: ${ext}`);
+        const contentBlock: ContentBlock = {
+          type: "image",
+          mimeType,
+          data: data.toString("base64"),
+        };
+        return [contentBlock];
+      },
+    },
+    {
+      name: "read_video",
+      description: "Read a video file and return it as base64 for the model to see. Supports MP4, WebM.",
+      mutating: false,
+      inputSchema: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Video file path (relative to workspace)" },
+        },
+        required: ["path"],
+      },
+      async execute(input, ctx) {
+        const filePath = resolveInWorkspace(ctx, str(input, "path"));
+        const data = await fs.readFile(filePath);
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeType = {
+          ".mp4": "video/mp4",
+          ".webm": "video/webm",
+          ".mkv": "video/x-matroska",
+        }[ext];
+        if (!mimeType) throw new ToolError(`Unsupported video format: ${ext}`);
+        const contentBlock: ContentBlock = {
+          type: "video",
+          mimeType,
+          data: data.toString("base64"),
+        };
+        return [contentBlock];
       },
     },
     {

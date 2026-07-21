@@ -140,7 +140,11 @@ describe("runAgentLoop", () => {
 
     const toolMsg = result.transcript.find((m) => m.role === "tool");
     if (toolMsg?.role === "tool") {
-      expect(toolMsg.results[0].content).toContain("Unknown tool");
+      const contentText = toolMsg.results[0].content
+        .filter((c) => c.type === "text")
+        .map((c) => (c as any).text)
+        .join("");
+      expect(contentText).toContain("Unknown tool");
       expect(toolMsg.results[0].isError).toBe(true);
     }
   });

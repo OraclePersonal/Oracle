@@ -1,7 +1,33 @@
 import OpenAI from "openai";
 import type { Provider, ProviderRequest } from "./provider.js";
 import type { ProviderResponse } from "../types.js";
-import type { AgentMessage, AgentProvider, AgentTool, AgentTurn, ToolCall } from "../agent/types.js";
+import type { AgentMessage, AgentProvider, AgentTool, AgentTurn, ToolCall, ContentBlock } from "../agent/types.js";
+
+/** Convert neutral ContentBlock[] to OpenAI format. */
+function toOpenAIContentBlocks(blocks: ContentBlock[]): OpenAI.Chat.ChatCompletionContentPartText[] | OpenAI.Chat.ChatCompletionContentPart[] {
+  return blocks.flatMap((block): any[] => {
+    if (block.type === "text") {
+      return [{ type: "text", text: block.text }];
+    }
+    if (block.type === "image") {
+      return [{
+        type: "image_url",
+        image_url: {
+          url: `data:${block.mimeType};base64,${block.data}`
+        }
+      }];
+    }
+    if (block.type === "video") {
+      return [{
+        type: "video_url",
+        video_url: {
+          url: `data:${block.mimeType};base64,${block.data}`
+        }
+      }];
+    }
+    return [];
+  });
+}
 
 /** Translate the neutral transcript into OpenAI chat-completion messages. */
 function toOpenAIMessages(
@@ -11,7 +37,10 @@ function toOpenAIMessages(
   const out: OpenAI.Chat.ChatCompletionMessageParam[] = [{ role: "system", content: system }];
   for (const m of messages) {
     if (m.role === "user") {
-      out.push({ role: "user", content: m.content });
+      const content = typeof m.content === "string"
+        ? m.content
+        : toOpenAIContentBlocks(m.content);
+      out.push({ role: "user", content });
     } else if (m.role === "assistant") {
       out.push({
         role: "assistant",
@@ -26,7 +55,12 @@ function toOpenAIMessages(
       });
     } else {
       for (const r of m.results) {
-        out.push({ role: "tool", tool_call_id: r.id, content: r.content });
+        const content = typeof r.content === "string"
+          ? r.content
+          : r.content.map((b): OpenAI.Chat.ChatCompletionContentPartText =>
+              b.type === "text" ? { type: "text", text: b.text } : { type: "text", text: JSON.stringify(b) }
+            );
+        out.push({ role: "tool", tool_call_id: r.id, content });
       }
     }
   }

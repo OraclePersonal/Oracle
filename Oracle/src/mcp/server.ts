@@ -4,7 +4,6 @@ import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ProjectConfig } from "../config/project.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../context/bundle.js";
 import type { ConsultService } from "../core/consult.js";
 import { OracleError, serializeOracleError } from "../errors.js";
 import { checkProvider } from "../providers/factory.js";
@@ -100,10 +99,11 @@ export function registerOracleTools({
       inputSchema: {
         prompt: z.string().min(1).max(50000),
         readOnly: z.boolean().optional(),
+        skill: z.string().optional().describe("Skill to apply (review, debug, security, architecture, tests)"),
         maxSteps: z.number().int().min(1).max(50).optional()
       }
     },
-    async ({ prompt, readOnly, maxSteps }) => {
+    async ({ prompt, readOnly, skill, maxSteps }) => {
       try {
         if (!agent) {
           throw new OracleError(
@@ -112,14 +112,15 @@ export function registerOracleTools({
             agentUnavailableReason ?? "Set provider to 'anthropic' or 'opencode' in .oracle/config.json."
           );
         }
-        const result = await agent.run({ prompt, workspaceRoot, model: config.model, readOnly, maxSteps });
+        const result = await agent.run({ prompt, workspaceRoot, model: config.model, readOnly, skill, maxSteps });
         return success(result.finalText, {
           finalText: result.finalText,
           steps: result.steps,
           stoppedOnLimit: result.stoppedOnLimit,
           turns: result.steps.length,
           usage: result.usage,
-          readOnly: readOnly ?? false
+          readOnly: readOnly ?? false,
+          skill: skill ?? undefined
         });
       } catch (error) {
         return failure(error);

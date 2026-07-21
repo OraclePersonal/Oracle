@@ -17,16 +17,22 @@ export interface ToolCall {
   input: Record<string, unknown>;
 }
 
+/** Multimodal content block. */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; mimeType: string; data: string }
+  | { type: "video"; mimeType: string; data: string };
+
 /** The result of executing one ToolCall, fed back to the model. */
 export interface ToolResult {
   id: string;
-  content: string;
+  content: ContentBlock[];
   isError?: boolean;
 }
 
 /** Neutral conversation message. */
 export type AgentMessage =
-  | { role: "user"; content: string }
+  | { role: "user"; content: ContentBlock[] | string }
   | { role: "assistant"; text: string; toolCalls: ToolCall[] }
   | { role: "tool"; results: ToolResult[] };
 
@@ -52,7 +58,7 @@ export interface AgentTool {
   inputSchema: JsonSchema;
   /** Mutates the workspace or runs commands; gated by AgentContext.readOnly. */
   mutating: boolean;
-  execute(input: Record<string, unknown>, ctx: AgentContext): Promise<string>;
+  execute(input: Record<string, unknown>, ctx: AgentContext): Promise<string | ContentBlock[]>;
 }
 
 /** Provider capability for running one agentic turn with tools available. */
