@@ -75,7 +75,7 @@ export class McpClientManager {
     return (response.tools ?? []).map((tool) => ({
       name: `mcp_${prefix}_${tool.name}`,
       description: `[${server.name}] ${tool.description ?? tool.name}`,
-      mutating: true, // conservative: assume external tools may have side effects
+      mutating: server.trustedForMutation ?? false,
       inputSchema: (tool.inputSchema as AgentTool["inputSchema"]) ?? { type: "object", properties: {} },
       async execute(input: Record<string, unknown>, _ctx: AgentContext): Promise<string> {
         try {

@@ -9,9 +9,9 @@ import path from "node:path";
 
 const DEFAULT_AGENT_SYSTEM = [
   "You are Oracle, an autonomous coding agent operating directly inside the user's project.",
-  "You can read and write files, search the codebase, and run shell commands via the provided tools.",
-  "Work in small, verifiable steps: inspect before you change, make focused edits, and run the",
-  "project's build/tests to confirm your work. Prefer editing existing files over rewriting them.",
+  "You can read and write files and search the codebase via the provided tools — there is no shell",
+  "execution; every tool is confined to files inside the workspace. Work in small, verifiable steps:",
+  "inspect before you change, make focused edits. Prefer editing existing files over rewriting them.",
   "When the task is complete, stop calling tools and give a concise summary of what you changed and why.",
   "Never touch paths outside the workspace. Do not print secrets.",
 ].join(" ");
@@ -20,7 +20,7 @@ export interface AgentRequest {
   prompt: string;
   workspaceRoot: string;
   model: string;
-  /** Analysis-only: disables write_file/edit_file/bash. */
+  /** Analysis-only: disables write_file/edit_file. */
   readOnly?: boolean;
   /** Extra guidance prepended to the default agent system prompt. */
   systemPrefix?: string;
@@ -33,8 +33,9 @@ export interface AgentRequest {
 }
 
 /**
- * AgentService drives Oracle's agentic loop: it wires the default filesystem +
- * shell toolset to a tool-capable provider and runs the loop to completion.
+ * AgentService drives Oracle's agentic loop: it wires the default,
+ * workspace-confined filesystem toolset to a tool-capable provider and runs
+ * the loop to completion.
  */
 export class AgentService {
   constructor(private readonly provider: AgentProvider) {}

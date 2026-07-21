@@ -1,12 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import type { AgentContext, AgentTool, ContentBlock } from "./types.js";
 
 /** Cap on how much text any single tool returns to the model. */
 const MAX_OUTPUT_CHARS = 30_000;
-/** Default bash timeout (ms). */
-const BASH_TIMEOUT_MS = 120_000;
 
 class ToolError extends Error {}
 
@@ -48,34 +45,6 @@ function optStr(input: Record<string, unknown>, key: string): string | undefined
   return v;
 }
 
-async function runBash(command: string, cwd: string, timeoutMs: number): Promise<string> {
-  return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    let killed = false;
-    const timer = setTimeout(() => {
-      killed = true;
-      child.kill("SIGKILL");
-    }, timeoutMs);
-    child.stdout.setEncoding("utf8").on("data", (c) => (stdout += c));
-    child.stderr.setEncoding("utf8").on("data", (c) => (stderr += c));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve(`Failed to start command: ${err.message}`);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      const parts = [
-        stdout && `[stdout]\n${stdout}`,
-        stderr && `[stderr]\n${stderr}`,
-        killed ? `[killed after ${timeoutMs}ms timeout]` : `[exit ${code ?? 0}]`,
-      ].filter(Boolean);
-      resolve(parts.join("\n\n") || `[exit ${code ?? 0}]`);
-    });
-  });
-}
-
 /** Recursively walk a directory, returning workspace-relative file paths. */
 async function walk(dir: string, root: string, acc: string[], limit: number): Promise<void> {
   if (acc.length >= limit) return;
@@ -98,8 +67,9 @@ async function walk(dir: string, root: string, acc: string[], limit: number): Pr
 }
 
 /**
- * The default Claude-Code-style toolset: read, write, edit, list, glob,
- * grep, and bash. All filesystem access is confined to the workspace root.
+ * The default toolset: read, write, edit, list, glob, grep, and media reads.
+ * No shell execution — every tool resolves paths through resolveInWorkspace,
+ * so the agent can only ever touch files inside the workspace root.
  */
 export function defaultAgentTools(): AgentTool[] {
   return [
@@ -297,26 +267,6 @@ export function defaultAgentTools(): AgentTool[] {
           data: data.toString("base64"),
         };
         return [contentBlock];
-      },
-    },
-    {
-      name: "bash",
-      description: "Run a shell command in the workspace root and return its combined output. Use for builds, tests, git, etc.",
-      mutating: true,
-      inputSchema: {
-        type: "object",
-        properties: {
-          command: { type: "string", description: "Shell command to execute" },
-          timeout_ms: { type: "number", description: `Timeout in ms (default ${BASH_TIMEOUT_MS})` },
-        },
-        required: ["command"],
-      },
-      async execute(input, ctx) {
-        assertWritable(ctx, "bash");
-        const command = str(input, "command");
-        const timeout = typeof input.timeout_ms === "number" ? input.timeout_ms : BASH_TIMEOUT_MS;
-        const out = await runBash(command, ctx.workspaceRoot, timeout);
-        return truncate(out);
       },
     },
   ];

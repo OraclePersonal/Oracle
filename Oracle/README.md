@@ -151,10 +151,9 @@ Memory data lives in `.oracle-memory/` — compatible with the standalone `oracl
 **Sessions / skills / health**
 `oracle_sessions`, `oracle_session_get`, `oracle_skills`, `oracle_doctor`
 
-**Agent tools** (autonomous task execution)
+**Agent tools** (autonomous task execution, confined to the workspace — no shell access)
 - File operations: `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`
 - Search: `grep`
-- Shell: `bash`
 - **Multimodal:** `read_image` (PNG/JPEG/GIF/WebP), `read_video` (MP4/WebM)
 
 ## Autonomous Agent
@@ -164,8 +163,8 @@ tools, processes results, and iterates toward a goal. Supports multimodal input
 (images, videos) when using Claude models.
 
 **Features:**
-- **File access:** read/write/edit files, list directories, search with glob/grep
-- **Shell execution:** bash commands (builds, tests, git, etc.)
+- **File access:** read/write/edit files, list directories, search with glob/grep — every path is
+  resolved against the workspace root and refused if it escapes it; there is no shell tool
 - **Multimodal input:** agents can read and analyze images/videos from the workspace
 - **Skills:** apply engineering best practices (review, debug, security, architecture, tests)
 - **MCP integration:** agent discovers and uses tools from external MCP servers
@@ -198,7 +197,8 @@ Project config lives in `.oracle/config.json`:
   "mcpServers": [
     {
       "name": "your-mcp-server",
-      "url": "http://localhost:3000"
+      "url": "http://localhost:3000",
+      "trustedForMutation": false
     }
   ]
 }
@@ -209,6 +209,11 @@ Project config lives in `.oracle/config.json`:
 - `model` — model ID (e.g., `gpt-5.4-mini`, `claude-sonnet-5`)
 - `include` / `exclude` — file patterns for context window
 - `mcpServers` — external MCP servers to wire into the agent (stdio or HTTP)
+  - `name` — server name (used to prefix tool names as `mcp_<name>_<tool>`)
+  - `command` — for stdio servers: executable path (e.g., `"node"`, `"/usr/local/bin/my-mcp-server"`)
+  - `args` — stdio server arguments
+  - `url` — for HTTP/SSE servers: server endpoint URL
+  - `trustedForMutation` — if `true`, the agent can call write/mutating tools from this server; default `false` (read-only)
 
 Environment variables:
 

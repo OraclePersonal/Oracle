@@ -90,14 +90,12 @@ describe("agent tools", () => {
     expect(out).toContain("src/");
   });
 
-  test("bash runs a command and returns output", async () => {
-    const out = await tool("bash").execute({ command: "echo oracle-agent-ok" }, ctx);
-    expect(out).toContain("oracle-agent-ok");
+  test("no shell-execution tool is exposed", () => {
+    expect(tools.has("bash")).toBe(false);
   });
 
   test("read-only mode disables mutating tools", async () => {
     const ro: AgentContext = { workspaceRoot: root, readOnly: true };
     await expect(tool("write_file").execute({ path: "x.txt", content: "y" }, ro)).rejects.toThrow(/read-only/);
-    await expect(tool("bash").execute({ command: "echo hi" }, ro)).rejects.toThrow(/read-only/);
   });
 });

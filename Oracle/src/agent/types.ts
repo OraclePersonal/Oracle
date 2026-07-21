@@ -47,7 +47,7 @@ export interface AgentTurn {
 export interface AgentContext {
   /** Absolute workspace root; tools must not touch anything outside it. */
   workspaceRoot: string;
-  /** When true, write/edit/bash tools refuse to run (analysis-only mode). */
+  /** When true, write/edit tools refuse to run (analysis-only mode). */
   readOnly: boolean;
 }
 

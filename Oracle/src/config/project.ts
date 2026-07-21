@@ -11,6 +11,8 @@ export interface McpServerConfig {
   args?: string[];
   /** HTTP/SSE server: endpoint URL */
   url?: string;
+  /** If true, tools from this server may mutate the workspace; otherwise read-only. Default: false. */
+  trustedForMutation?: boolean;
 }
 
 export interface ProjectConfig {
@@ -38,6 +40,7 @@ const schema = z
           command: z.string().trim().optional(),
           args: z.array(z.string()).optional(),
           url: z.string().trim().optional(),
+          trustedForMutation: z.boolean().optional(),
         })
       )
       .optional(),
