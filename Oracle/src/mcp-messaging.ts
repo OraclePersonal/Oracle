@@ -5,7 +5,8 @@ import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { MessageStore } from "./messaging/store.js";
-import { registerMessagingTools } from "./mcp/messagingTools.js";
+import { AgentRegistry } from "./messaging/registry.js";
+import { registerMessagingTools, MESSAGING_INSTRUCTIONS } from "./mcp/messagingTools.js";
 import { VERSION } from "./version.js";
 
 /**
@@ -20,6 +21,9 @@ import { VERSION } from "./version.js";
  * the exact same bus as the full oracle-mcp server and the `oracle msg` CLI.
  */
 const homeDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
-const server = new McpServer({ name: "oracle-messaging", version: VERSION });
-registerMessagingTools(server, new MessageStore(homeDir));
+const server = new McpServer(
+  { name: "oracle-messaging", version: VERSION },
+  { instructions: MESSAGING_INSTRUCTIONS }
+);
+registerMessagingTools(server, new MessageStore(homeDir), new AgentRegistry(homeDir));
 await server.connect(new StdioServerTransport());

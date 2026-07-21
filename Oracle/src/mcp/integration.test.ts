@@ -14,6 +14,7 @@ import { OracleRegistry } from "../oracles/registry.js";
 import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
 import { MessageStore } from "../messaging/store.js";
+import { AgentRegistry } from "../messaging/registry.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -47,6 +48,7 @@ beforeAll(async () => {
     memory: new MemoryAdapter(root),
     profile: new ProfileStore(root),
     messages: new MessageStore(root),
+    agentRegistry: new AgentRegistry(root),
     providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
@@ -77,6 +79,44 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_msg_inbox");
     expect(tools).toContain("oracle_msg_ack");
     expect(tools).toContain("oracle_msg_thread");
+  });
+
+  test("register onboards an agent: roster + unread in one call, presence tracked", async () => {
+    // A message is waiting before the agent ever registers.
+    const pre = await client.callTool({
+      name: "oracle_msg_send",
+      arguments: { from: "scout", to: "newbie", body: "welcome task: read the skill doc" }
+    });
+    expect(pre.isError).not.toBe(true);
+
+    const onboard = await client.callTool({
+      name: "oracle_msg_register",
+      arguments: { name: "newbie", role: "test agent" }
+    });
+    expect(onboard.isError).not.toBe(true);
+    const sc = onboard.structuredContent as {
+      agent: { name: string; role: string };
+      unreadCount: number;
+      roster: Array<{ name: string }>;
+    };
+    expect(sc.agent.name).toBe("newbie");
+    expect(sc.agent.role).toBe("test agent");
+    expect(sc.unreadCount).toBe(1);
+
+    // Roster lists the registered agent; presence marked active.
+    const agents = await client.callTool({ name: "oracle_msg_agents", arguments: {} });
+    const list = (agents.structuredContent as { agents: Array<{ name: string; active: boolean }> }).agents;
+    const me = list.find((a) => a.name === "newbie");
+    expect(me).toBeDefined();
+    expect(me?.active).toBe(true);
+
+    // Re-registering is idempotent, not an error.
+    const again = await client.callTool({
+      name: "oracle_msg_register",
+      arguments: { name: "newbie" }
+    });
+    expect(again.isError).not.toBe(true);
+    expect((again.structuredContent as { agent: { role: string } }).agent.role).toBe("test agent");
   });
 
   test("agents exchange messages through the shared bus", async () => {

@@ -28,6 +28,8 @@ network — just atomic JSON files.
 
 | MCP tool | CLI | Purpose |
 |---|---|---|
+| `oracle_msg_register` | — | **Do this first.** One-call onboarding: registers your name/role, returns the roster of other agents and your unread messages. Idempotent — re-register anytime to refresh presence |
+| `oracle_msg_agents` | — | Roster: every registered agent, role, last seen, `[active]` if seen in the last 10 min |
 | `oracle_msg_send` | `oracle msg send -f me -t peer -b "..." [-s subj] [--reply-to id] [--ack] [--body-file f \| -b -]` | Send / broadcast / reply. `--ack` also acks the replied-to id (reply+ack in one command). Long/multiline bodies: `--body-file` or stdin via `-b -` |
 | `oracle_msg_inbox` | `oracle msg inbox -a me [--all] [--limit n] [--json] [--wait --timeout s]` | Read unread (default). `--json` for scripting (empty inbox = `[]`). `--wait` blocks until a message arrives — no hand-rolled poll loops |
 | `oracle_msg_ack` | `oracle msg ack -a me <ids...> \| --all` | Mark handled; `--all` clears every unread |
@@ -42,8 +44,14 @@ then `node dist/cli.js msg ...` or a linked `oracle` bin).
 ## The collaboration loop (follow this as an agent)
 
 ```
+0. Connecting to the MCP server injects these rules automatically (server
+   instructions) — you don't need to be told.
+
 1. On session start / task start:
-     oracle_msg_inbox { agent: "<me>" }        ← anything waiting for me?
+     oracle_msg_register { name: "<me>", role: "<what I'm doing>" }
+       → registers you, shows who else is active, and returns your unread
+         messages in one call. Presence updates automatically afterward
+         (every send/inbox/ack touches lastSeen).
 
 2. Handle each message:
      - do the work it asks, or answer the question

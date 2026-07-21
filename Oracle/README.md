@@ -151,7 +151,7 @@ Oracle's memory system uses ML-inspired algorithms to surface the **most relevan
 
 Memory data lives in `.oracle-memory/` — compatible with the standalone `oracle-memory` MCP server.
 
-## MCP tools (41)
+## MCP tools (43)
 
 **Agent**
 `oracle_agent` (supports `skill` parameter: review, debug, security, architecture, tests)
@@ -190,10 +190,18 @@ Memory data lives in `.oracle-memory/` — compatible with the standalone `oracl
 `oracle_identity_show`, `oracle_identity_setup`, `oracle_persona_set`
 
 **Inter-agent messaging** (Oracle as relay between agents)
-`oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`
+`oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`,
+`oracle_msg_ack`, `oracle_msg_thread`
 — all oracle-mcp processes on a machine share `~/.oracle/messages/`, so agents
 in different sessions (Claude Code, opencode, etc.) can exchange messages and
 broadcasts (`to: "*"`), with per-agent read tracking and threading via `replyTo`.
+
+*Self-onboarding:* the server ships MCP `instructions` that every client
+receives on connect — telling the agent to `oracle_msg_register` (one call:
+register name/role → get the roster + unread messages) before starting work.
+No manual "go check your messages" needed. Presence is automatic: every
+send/inbox/ack updates `lastSeen`, and `oracle_msg_agents` shows who's been
+active in the last 10 minutes.
 
 *Push-on-idle via Claude Code Stop hook:* the bus is pull-based, but
 `scripts/oracle-msg-stop-hook.mjs` turns it into push — when Claude finishes
