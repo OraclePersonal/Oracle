@@ -19,6 +19,11 @@ across conversations. It pulls context from four sources — persistent memory
 web, and your project files — then asks a configured provider/model. It can
 also read/review GitHub PRs and issues.
 
+**Autonomous agent mode** (`oracle_agent`): Run agentic tasks autonomously with
+file system access, shell execution, and **multimodal input** (images, videos).
+Apply engineering skills (review, debug, security, architecture, tests) to guide
+agent reasoning. Discover and invoke tools from external MCP servers.
+
 **Supported providers:** `codex`, `openai`, `anthropic`, `opencode`
 
 ## Install & build
@@ -105,7 +110,10 @@ Oracle's memory system uses ML-inspired algorithms to surface the **most relevan
 
 Memory data lives in `.oracle-memory/` — compatible with the standalone `oracle-memory` MCP server.
 
-## MCP tools (33)
+## MCP tools (37)
+
+**Agent**
+`oracle_agent` (supports `skill` parameter: review, debug, security, architecture, tests)
 
 **Ask**
 `oracle_ask`
@@ -143,6 +151,38 @@ Memory data lives in `.oracle-memory/` — compatible with the standalone `oracl
 **Sessions / skills / health**
 `oracle_sessions`, `oracle_session_get`, `oracle_skills`, `oracle_doctor`
 
+**Agent tools** (autonomous task execution)
+- File operations: `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`
+- Search: `grep`
+- Shell: `bash`
+- **Multimodal:** `read_image` (PNG/JPEG/GIF/WebP), `read_video` (MP4/WebM)
+
+## Autonomous Agent
+
+Oracle runs agentic tasks with tool-use loops — the agent autonomously calls
+tools, processes results, and iterates toward a goal. Supports multimodal input
+(images, videos) when using Claude models.
+
+**Features:**
+- **File access:** read/write/edit files, list directories, search with glob/grep
+- **Shell execution:** bash commands (builds, tests, git, etc.)
+- **Multimodal input:** agents can read and analyze images/videos from the workspace
+- **Skills:** apply engineering best practices (review, debug, security, architecture, tests)
+- **MCP integration:** agent discovers and uses tools from external MCP servers
+
+**Usage:**
+```bash
+oracle agent "fix the failing tests" --skill debug
+```
+
+Or via MCP:
+```json
+{
+  "prompt": "Review this code for security issues",
+  "skill": "security"
+}
+```
+
 ## Configuration
 
 Project config lives in `.oracle/config.json`:
@@ -154,9 +194,21 @@ Project config lives in `.oracle/config.json`:
   "include": ["src/**/*", "README.md", "package.json"],
   "exclude": ["**/*.test.ts", "**/node_modules/**", "**/dist/**"],
   "maxFileSizeBytes": 1000000,
-  "maxInputBytes": 5000000
+  "maxInputBytes": 5000000,
+  "mcpServers": [
+    {
+      "name": "your-mcp-server",
+      "url": "http://localhost:3000"
+    }
+  ]
 }
 ```
+
+**Config fields:**
+- `provider` — `codex`, `openai`, `anthropic`, or `opencode`
+- `model` — model ID (e.g., `gpt-5.4-mini`, `claude-sonnet-5`)
+- `include` / `exclude` — file patterns for context window
+- `mcpServers` — external MCP servers to wire into the agent (stdio or HTTP)
 
 Environment variables:
 
