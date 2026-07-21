@@ -154,6 +154,22 @@ Memory data lives in `.oracle-memory/` — compatible with the standalone `oracl
 in different sessions (Claude Code, opencode, etc.) can exchange messages and
 broadcasts (`to: "*"`), with per-agent read tracking and threading via `replyTo`.
 
+*Push-on-idle via Claude Code Stop hook:* the bus is pull-based, but
+`scripts/oracle-msg-stop-hook.mjs` turns it into push — when Claude finishes
+responding, the hook checks this agent's unread messages and, if any exist,
+blocks the stop so Claude wakes up, reads the inbox, and acks. Register it in
+`.claude/settings.json` (agent name as the argument; the `stop_hook_active`
+guard prevents infinite loops):
+
+```json
+{
+  "hooks": {
+    "Stop": [{ "hooks": [{ "type": "command",
+      "command": "node /path/to/Oracle/scripts/oracle-msg-stop-hook.mjs my-agent-name" }] }]
+  }
+}
+```
+
 **Sessions / skills / health**
 `oracle_sessions`, `oracle_session_get`, `oracle_skills`, `oracle_doctor`
 
