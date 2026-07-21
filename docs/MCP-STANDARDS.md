@@ -1,12 +1,22 @@
 # Oracle MCP Tool Standards
 
-This document defines the standardization layer for all Oracle MCP tools, ensuring consistency, quality, and maintainability across the 26-tool surface.
+This document defines the standardization layer for all Oracle MCP tools, ensuring consistency, quality, and maintainability across the current 60-tool surface.
+
+> **Current state:** `toolBuilder.ts` and `toolCache.ts` below are present in
+> the codebase but not currently wired into tool registration — every tool is
+> registered directly via `server.registerTool()`. Error handling in
+> practice uses the simpler `OracleError`/`serializeOracleError` pair from
+> `src/errors.ts` (see `src/mcp/messagingTools.ts` and `src/mcp/taskTools.ts`
+> for the pattern most new tools follow), not the `OracleToolError`/`ErrorCode`
+> pipeline in `oracleErrors.ts` described below, which only
+> `src/mcp/tools/consult.ts` currently uses. Treat the rest of this document
+> as the target design, not a guarantee of what every tool does today.
 
 ## Architecture
 
 ### Tool Registration (`src/mcp/toolBuilder.ts`)
 
-All tools are now registered through a standardized pipeline:
+All tools are meant to be registered through a standardized pipeline:
 
 ```typescript
 interface ToolDefinition {

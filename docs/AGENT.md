@@ -1,10 +1,12 @@
 # Oracle Agent — Autonomous Coding Loop
 
-Oracle can act as an autonomous coding agent, the same way Claude Code and
-opencode do: you give it a task, and it reads, writes, and edits files,
-searches the codebase, and runs shell commands in a **tool-use loop** until the
-task is complete. This document explains how it works, the toolset, safety
-boundaries, and how to use it from the CLI and MCP.
+Oracle can act as an autonomous coding agent: you give it a task, and it
+reads, writes, and edits files and searches the codebase in a **tool-use
+loop** until the task is complete. Unlike Claude Code or opencode, it has
+**no shell tool** — that's an architectural constraint, not a missing
+feature (see [Safety boundaries](#safety-boundaries)). This document
+explains how it works, the toolset, safety boundaries, and how to use it
+from the CLI and MCP.
 
 ## How it works
 
@@ -37,7 +39,8 @@ today; the agent requires `anthropic` or `opencode`.
 
 All tools live in `src/agent/tools.ts`. Filesystem access is confined to the
 workspace root — a single trust boundary (`resolveInWorkspace`) rejects any
-path that escapes it.
+path that escapes it. There is **no shell/bash tool** — the agent can only
+reach the filesystem through the tools below.
 
 | Tool | Mutating | Purpose |
 |---|---|---|
@@ -45,21 +48,27 @@ path that escapes it.
 | `list_dir` | no | List a directory's immediate entries |
 | `glob` | no | Find files whose path contains a substring |
 | `grep` | no | Search file contents; returns `path:line: text` |
-| `write_file` | yes | Create/overwrite a file (makes parent dirs) |
-| `edit_file` | yes | Replace an exact, unique string in a file |
-| `bash` | yes | Run a shell command in the workspace (timeout + output cap) |
+| `read_image` | no | Read an image file for a vision-capable model |
+| `read_video` | no | Read a video file for a vision-capable model |
+| `write_file` | yes | Create/overwrite a file (makes parent dirs); audited |
+| `edit_file` | yes | Replace an exact, unique string in a file; audited |
 
 ## Safety boundaries
 
+- **No shell** — the tool list above is exhaustive; there is no way for the
+  agent to run arbitrary commands. This is an architectural guarantee, not
+  input filtering that could be bypassed.
 - **Workspace confinement** — every path is resolved against the workspace root;
   traversal outside it (`../`) is rejected before any I/O happens.
-- **Read-only mode** — pass `readOnly` (MCP) or `--read-only` (CLI) to drop all
-  mutating tools (`write_file`, `edit_file`, `bash`) entirely, so the agent can
+- **Read-only mode** — pass `readOnly` (MCP) or `--read-only` (CLI) to drop
+  both mutating tools (`write_file`, `edit_file`) entirely, so the agent can
   investigate without changing anything.
 - **Step cap** — `maxSteps` (default 20) bounds the loop so it can't run forever.
-- **Output cap** — each tool truncates its output (30k chars) so a huge file or
-  command can't blow up the context.
-- **bash** runs with a timeout (default 120s) and is killed if it overruns.
+- **Output cap** — each tool truncates its output (30k chars) so a huge file
+  can't blow up the context.
+- **Audit trail** — every `write_file`/`edit_file` call is recorded (path,
+  size, SHA-256 content hash) so mutations can be reviewed or replayed after
+  the run; see `src/agent/audit.ts`.
 
 The agent operates on the user's own workspace intentionally; it does not redact
 file contents (the model needs real code to edit). Use `readOnly` when you only
@@ -135,7 +144,8 @@ Set the provider in `.oracle/config.json`:
 | File | Responsibility |
 |---|---|
 | `src/agent/types.ts` | Neutral types (`AgentMessage`, `ToolCall`, `AgentTool`, `AgentProvider`) |
-| `src/agent/tools.ts` | The 7 tool executors + workspace confinement |
+| `src/agent/tools.ts` | The 8 tool executors + workspace confinement |
+| `src/agent/audit.ts` | Audit trail: records every file mutation with a content hash |
 | `src/agent/loop.ts` | Provider-agnostic tool-use loop |
 | `src/agent/service.ts` | `AgentService` — wires tools + provider, runs the loop |
 | `src/providers/anthropic.ts` | `runAgentTurn` via native tool use |

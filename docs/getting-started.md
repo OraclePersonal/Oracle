@@ -7,11 +7,21 @@ title: Getting Started
 ## Prerequisites
 
 - Node.js >= 24
-- npm
-- Codex CLI, Anthropic API key, or OpenAI API key
+- Codex CLI login, or an Anthropic/OpenAI API key
 
 ## Install
 
+From npm (recommended):
+```bash
+npm install -g @oraclepersonal/oracle
+```
+
+Or run without installing:
+```bash
+npx -p @oraclepersonal/oracle oracle doctor
+```
+
+From source (for development):
 ```bash
 git clone https://github.com/OraclePersonal/Oracle.git
 cd Oracle
@@ -19,7 +29,7 @@ npm install
 npm run build
 ```
 
-## Configure
+## Configure a provider
 
 ```bash
 # Codex CLI (default)
@@ -35,37 +45,79 @@ export OPENAI_API_KEY=sk-...
 ## Verify
 
 ```bash
-node dist/cli.js doctor
+oracle doctor
 ```
 
-## Use
+## Ask questions
 
 ```bash
-# Ask a question
-node dist/cli.js ask "What does ECONNRESET mean?"
+oracle ask "What does ECONNRESET mean?"
 
 # Code review with files
-node dist/cli.js ask -f "src/**/*.ts" "Review this for edge cases"
+oracle ask -f "src/**/*.ts" "Review this for edge cases"
 
-# Multi-turn conversation
-node dist/cli.js ask "What causes Redis timeouts?" --conversation redis-1
-node dist/cli.js ask "Does that apply to clusters?" --conversation redis-1
+# Multi-turn: give Oracle a conversation id and it recalls prior turns
+oracle ask "What causes Redis timeouts?" --conversation redis-1
+oracle ask "Does that apply to clusters?" --conversation redis-1
 
-# Use a skill
-node dist/cli.js consult -p "Find security issues" --skill security
+# Pull in your project's .oracle/docs/ knowledge base
+oracle ask "how does auth work here?" --include-docs
 
-# Autonomous watch mode
-node dist/cli.js watch
-node dist/cli.js watch --to claude --skill review
+# Pick a personality
+oracle ask "review this code" --soul engineer
 ```
 
-## Run as MCP server
+## Run the autonomous agent
 
 ```bash
-node dist/mcp.js
+oracle agent "add error handling to src/handler.ts and add a test"
 ```
 
-Configure in any MCP client:
+The agent reads/writes/edits files to complete the task. It has **no shell
+access** — a security boundary, not a limitation — and every file mutation
+is logged to an audit trail.
+
+## Coordinate multiple agent sessions
+
+```bash
+oracle msg send -f me -t peer -b "review this when you get a chance"
+oracle msg inbox -a me --wait --timeout 120
+oracle task create --title "Add rate limiting" --created-by lead --assignee builder \
+  --checklist "implement limiter" "add tests"
+```
+
+See [MESSAGING.md](https://github.com/OraclePersonal/Oracle/blob/main/MESSAGING.md)
+for the full messaging + task-tracking flow, including wake-up hooks for idle
+agent sessions.
+
+## Wire up as an MCP server
+
+```bash
+oracle setup-mcp --client claude-code
+```
+
+Or configure any MCP client manually:
 ```json
-{"mcpServers":{"oracle":{"command":"node","args":["/path/to/Oracle/dist/mcp.js"]}}}
+{
+  "mcpServers": {
+    "oracle": {
+      "command": "npx",
+      "args": ["-p", "@oraclepersonal/oracle", "oracle-mcp"],
+      "env": { "ORACLE_WORKSPACE_ROOT": "/path/to/your/project" }
+    }
+  }
+}
+```
+
+If you only need agents to coordinate (no memory/provider/agent stack), wire
+the lighter `oracle-msg-mcp` binary instead:
+```json
+{
+  "mcpServers": {
+    "oracle-messaging": {
+      "command": "npx",
+      "args": ["-p", "@oraclepersonal/oracle", "oracle-msg-mcp"]
+    }
+  }
+}
 ```
