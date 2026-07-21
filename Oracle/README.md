@@ -95,6 +95,32 @@ Wire `oracle-mcp` (built to `dist/mcp.js`) into your MCP client:
 
 Or run `oracle setup-mcp` to generate it.
 
+### Standalone messaging server
+
+If you only want the inter-agent message bus (no provider/memory/agent stack),
+wire the lighter `oracle-msg-mcp` binary (`dist/mcp-messaging.js`) instead — it
+serves just the four `oracle_msg_*` tools over the same `~/.oracle/messages` bus:
+
+```json
+{
+  "mcpServers": {
+    "oracle-messaging": {
+      "command": "npx",
+      "args": ["-p", "@oraclepersonal/oracle", "oracle-msg-mcp"]
+    }
+  }
+}
+```
+
+## Install from npm
+
+```bash
+npm install -g @oraclepersonal/oracle   # or: npx -p @oraclepersonal/oracle oracle ...
+```
+
+Ships three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), and
+`oracle-msg-mcp` (messaging-only MCP server).
+
 ## Smart memory
 
 Oracle's memory system uses ML-inspired algorithms to surface the **most relevant** information automatically.
