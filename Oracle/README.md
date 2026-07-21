@@ -182,6 +182,27 @@ Or via MCP:
 }
 ```
 
+## Observability & Logging
+
+Oracle logs structured events as JSON lines to stderr (never stdout, so it doesn't interfere with tool
+output or MCP communication). Logs are tagged with `[oracle:*]` for easy grepping and machine parsing.
+
+**Log streams:**
+- `[oracle:agent]` — loop lifecycle (start, turns, stop), turn duration, token usage
+- `[oracle:tool]` — tool calls (name, turn), results (duration, output size), errors
+- `[oracle:mcp]` — MCP server connect/disconnect, tool discovery, tool calls and errors
+- `[oracle:sandbox]` — security events (path-escape attempts, mutation denials in read-only mode)
+
+**Example:**
+```bash
+ORACLE_LOG=1 oracle agent "refactor this" 2>&1 | grep oracle
+# [oracle:agent] {"ts":"2026-07-21T12:00:00.000Z","event":"start","model":"claude-sonnet-5",...}
+# [oracle:tool] {"ts":"2026-07-21T12:00:00.100Z","event":"call","toolName":"read_file",...}
+# [oracle:tool] {"ts":"2026-07-21T12:00:00.102Z","event":"result","durationMs":2,...}
+```
+
+Disable with `ORACLE_LOG=0` if you need to suppress logging overhead in production.
+
 ## Configuration
 
 Project config lives in `.oracle/config.json`:
@@ -224,6 +245,7 @@ Environment variables:
 | `ORACLE_USE_OLLAMA` | Enable semantic memory search via Ollama embeddings (`"1"` or `"true"`) |
 | `ORACLE_MEMORY_BIN` | Path to `oracle-memory` binary (default: `oracle-memory`) |
 | `ORACLE_MEMORY_LLM_GRAPH` | Enable LLM-powered entity extraction, conflict detection, and reflection (requires `ANTHROPIC_API_KEY`) |
+| `ORACLE_LOG` | Set to `"0"` to disable structured observability logging (`[oracle:*]` JSON lines to stderr) |
 | `ORACLE_WEB_LOG` | Set to `"0"` to disable web search/fetch logging |
 | `OLLAMA_HOST` | Ollama endpoint (default `http://127.0.0.1:11434`) |
 | `OLLAMA_EMBED_MODEL` | Embedding model (default `nomic-embed-text`) |
