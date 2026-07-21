@@ -1,6 +1,6 @@
 ---
 name: oracle-messaging
-description: Relays messages between agents over Oracle's file-backed inter-agent bus (shared ~/.oracle/messages), with broadcasts, threading, per-agent read state, and real-time or on-idle wake-up. Use when coordinating multiple agents — sending, receiving, or waiting on messages between Claude Code sessions, opencode, or any oracle-mcp client on the same machine, via the oracle_msg_* MCP tools or the `oracle msg` CLI.
+description: Relays messages and tracks tasks between agents over Oracle's file-backed inter-agent bus (shared ~/.oracle), with broadcasts, threading, per-agent read state, real-time or on-idle wake-up, and a plan/assign/verify/report task tracker built on top of messaging. Use when coordinating multiple agents — sending, receiving, or waiting on messages, or planning and tracking work with checklists and review gates — between Claude Code sessions, opencode, or any oracle-mcp client on the same machine, via the oracle_msg_*/oracle_task_* MCP tools or the `oracle msg`/`oracle task` CLI.
 ---
 
 # Oracle Inter-Agent Messaging
@@ -87,6 +87,53 @@ then `node dist/cli.js msg ...` or a linked `oracle` bin).
 - One topic per message; broadcasts only for things every agent cares about
   (build broke, lock released, shutting down).
 
+## Task planning & tracking (built on top of messaging)
+
+For real work — not just chat — use the task tracker instead of freeform
+messages. It gives you assignment, a progress audit trail, a verification
+gate, and automatic reporting, all riding on the same message bus.
+
+**Lifecycle:** `pending → in_progress → review → done` (or `blocked` /
+`cancelled` at any point). A rejected review bounces back to `in_progress`.
+
+| MCP tool | CLI | Purpose |
+|---|---|---|
+| `oracle_task_create` | `oracle task create --title T --created-by me --assignee peer [--checklist "step1" "step2"] [--parent id]` | Create + assign a task. Auto-messages the assignee — no separate "you've got work" ping needed |
+| `oracle_task_list` | `oracle task list [--assignee a] [--created-by a] [--status s] [--active]` | List/filter tasks; `--active` hides done/cancelled |
+| `oracle_task_get` | `oracle task get <id>` | Full detail: checklist state + complete note history |
+| `oracle_task_update` | `oracle task update <id> -a me [--note "..."] [--status s]` | Record progress — call this liberally while working, it's the audit trail |
+| `oracle_task_checklist` | `oracle task check <id> <index> [--undo]` | Check off (or uncheck) one verification item by its 0-based index |
+| `oracle_task_submit` | `oracle task submit <id> -a me --summary "..."` | **Verification gate.** Fails if any checklist item is unchecked. On success, auto-messages the task creator — you never have to separately say "I'm done" |
+| `oracle_task_close` | `oracle task close <id> -a me [--reject] [--note "..."]` | Reviewer's call: approve → `done`, or reject → bounces to `in_progress` with your note. Auto-messages the assignee either way |
+
+**Workflow, as a lead breaking down work:**
+```
+1. oracle_task_create { title, createdBy: "<me>", assignee: "<peer>",
+     checklist: ["concrete, checkable verification step", "..."] }
+   → only add a checklist when the task has a real definition of done;
+     don't force one on open-ended exploration work
+2. Wait for a "ready for review" message (or poll oracle_task_list
+   { createdBy: "<me>", status: "review" })
+3. oracle_task_get <id>  → read the checklist state and notes
+4. oracle_task_close <id> approved=true|false
+```
+
+**Workflow, as the assignee doing the work:**
+```
+1. oracle_task_update { status: "in_progress", note: "starting on X" }
+   → do this at the start, not just at the end
+2. As you actually finish each verification step (not preemptively):
+     oracle_task_checklist { index: N, done: true }
+3. oracle_task_submit { summary: "what you did" }
+   → BLOCKS with the list of unchecked items if you're not really done
+4. If closed with approved=false: read the note, fix it, submit again
+```
+
+**Why the checklist gate matters:** without it, "submit" is just another
+message and nothing stops an agent from reporting done prematurely. The
+gate makes "done" mean the declared verification steps were actually
+completed, not just claimed.
+
 ## Wake-up mechanics (how idle agents learn about messages)
 
 Three layers, weakest to strongest:
@@ -127,8 +174,9 @@ oracle setup-mcp --client claude-code   # register MCP server (per workspace)
 # optional: Stop hook (per agent) and/or msg watch (per live pane) as above
 ```
 
-Store location: `~/.oracle/messages/*.json` — safe to inspect or delete old
-messages by hand; each file is one message, writes are atomic (tmp+rename).
+Store location: `~/.oracle/messages/*.json` (messages) and `~/.oracle/tasks/*.json`
+(tasks) — safe to inspect or delete old entries by hand; each file is one
+record, writes are atomic (tmp+rename).
 
 ## Known limitations (from a live concurrency review — accepted for now)
 
@@ -160,3 +208,30 @@ oracle_msg_ack { agent: "worker", ids: ["M1"] }
 
 Session A: inbox → reads findings (id M2) → `oracle_msg_thread { id: M2 }`
 shows the whole exchange → ack M2 → done.
+
+## Worked example (task with a verification gate)
+
+Session A (`lead`):
+```
+oracle_task_create { title: "Add rate limiting", createdBy: "lead", assignee: "builder",
+  checklist: ["implement limiter", "add tests", "update docs"] }
+→ builder is auto-messaged; task id T1
+```
+
+Session B (`builder`):
+```
+oracle_task_update { id: "T1", agent: "builder", status: "in_progress", note: "starting" }
+...does the work...
+oracle_task_checklist { id: "T1", index: 0, done: true }
+oracle_task_checklist { id: "T1", index: 1, done: true }
+oracle_task_checklist { id: "T1", index: 2, done: true }
+oracle_task_submit { id: "T1", agent: "builder", summary: "limiter implemented, tested, documented" }
+→ lead is auto-messaged "ready for review"; status is now "review"
+```
+
+Session A:
+```
+oracle_task_get { id: "T1" }              → see the checked-off checklist + full note history
+oracle_task_close { id: "T1", agent: "lead", approved: true }
+→ builder is auto-messaged "approved"; status is now "done"
+```

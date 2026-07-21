@@ -6,24 +6,29 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { MessageStore } from "./messaging/store.js";
 import { AgentRegistry } from "./messaging/registry.js";
+import { TaskStore } from "./tasks/store.js";
 import { registerMessagingTools, MESSAGING_INSTRUCTIONS } from "./mcp/messagingTools.js";
+import { registerTaskTools, TASK_INSTRUCTIONS } from "./mcp/taskTools.js";
 import { VERSION } from "./version.js";
 
 /**
- * Standalone inter-agent messaging MCP server: exposes only the
- * `oracle_msg_*` tools over the shared ~/.oracle/messages bus, with none of
- * Oracle's provider/memory/agent stack. Wire this into any MCP client that
- * just needs agents to talk to each other.
+ * Standalone coordination MCP server: exposes the `oracle_msg_*` messaging
+ * tools and `oracle_task_*` planning/tracking tools over the shared
+ * ~/.oracle store, with none of Oracle's provider/memory/agent stack. Wire
+ * this into any MCP client that just needs agents to talk and coordinate.
  *
  *   npx -p @oraclepersonal/oracle oracle-msg-mcp
  *
  * Store location follows ORACLE_HOME_DIR (default ~/.oracle), so it shares
- * the exact same bus as the full oracle-mcp server and the `oracle msg` CLI.
+ * the exact same bus as the full oracle-mcp server and the `oracle msg`/
+ * `oracle task` CLI commands.
  */
 const homeDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
 const server = new McpServer(
   { name: "oracle-messaging", version: VERSION },
-  { instructions: MESSAGING_INSTRUCTIONS }
+  { instructions: `${MESSAGING_INSTRUCTIONS} ${TASK_INSTRUCTIONS}` }
 );
-registerMessagingTools(server, new MessageStore(homeDir), new AgentRegistry(homeDir));
+const messages = new MessageStore(homeDir);
+registerMessagingTools(server, messages, new AgentRegistry(homeDir));
+registerTaskTools(server, new TaskStore(homeDir), messages);
 await server.connect(new StdioServerTransport());

@@ -10,7 +10,9 @@ import { OracleRegistry } from "../oracles/registry.js";
 import { ProfileStore } from "../identity/profile.js";
 import { MessageStore } from "../messaging/store.js";
 import { AgentRegistry } from "../messaging/registry.js";
+import { TaskStore } from "../tasks/store.js";
 import { MESSAGING_INSTRUCTIONS } from "./messagingTools.js";
+import { TASK_INSTRUCTIONS } from "./taskTools.js";
 import { OrchestratorFactory } from "../orchestrator/factory.js";
 import { VERSION } from "../version.js";
 import { registerOracleTools } from "./server.js";
@@ -26,7 +28,7 @@ export async function createOracleMcpServer(
   const oracles = new OracleRegistry(homeDir, workspaceRoot);
   const server = new McpServer(
     { name: "oracle", version: VERSION },
-    { instructions: MESSAGING_INSTRUCTIONS }
+    { instructions: `${MESSAGING_INSTRUCTIONS} ${TASK_INSTRUCTIONS}` }
   );
 
   // Use OrchestratorFactory to create adapters with MCP support
@@ -60,6 +62,7 @@ export async function createOracleMcpServer(
     profile: new ProfileStore(homeDir),
     messages: new MessageStore(homeDir),
     agentRegistry: new AgentRegistry(homeDir),
+    tasks: new TaskStore(homeDir),
     agent,
     agentUnavailableReason
   });

@@ -15,6 +15,7 @@ import { MemoryAdapter } from "../memory/adapter.js";
 import { ProfileStore } from "../identity/profile.js";
 import { MessageStore } from "../messaging/store.js";
 import { AgentRegistry } from "../messaging/registry.js";
+import { TaskStore } from "../tasks/store.js";
 import { registerOracleTools } from "./server.js";
 
 const provider: Provider = {
@@ -49,6 +50,7 @@ beforeAll(async () => {
     profile: new ProfileStore(root),
     messages: new MessageStore(root),
     agentRegistry: new AgentRegistry(root),
+    tasks: new TaskStore(root),
     providerChecks: async () => [{ name: "provider", ok: true, detail: "test" }]
   });
   client = new Client({ name: "oracle-test-client", version: "1.0.0" });
@@ -79,6 +81,13 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_msg_inbox");
     expect(tools).toContain("oracle_msg_ack");
     expect(tools).toContain("oracle_msg_thread");
+    expect(tools).toContain("oracle_task_create");
+    expect(tools).toContain("oracle_task_list");
+    expect(tools).toContain("oracle_task_get");
+    expect(tools).toContain("oracle_task_update");
+    expect(tools).toContain("oracle_task_checklist");
+    expect(tools).toContain("oracle_task_submit");
+    expect(tools).toContain("oracle_task_close");
   });
 
   test("register onboards an agent: roster + unread in one call, presence tracked", async () => {
@@ -216,5 +225,67 @@ describe("Oracle MCP tools", () => {
       "ship feature X",
       "fix bug Y"
     ]);
+  });
+
+  test("full task lifecycle: create -> progress -> checklist gate -> submit -> review -> close", async () => {
+    const created = await client.callTool({
+      name: "oracle_task_create",
+      arguments: {
+        title: "Add rate limiting", createdBy: "lead", assignee: "builder",
+        checklist: ["implement limiter", "add tests"]
+      }
+    });
+    expect(created.isError).not.toBe(true);
+    const taskId = (created.structuredContent as { task: { id: string } }).task.id;
+
+    // Creating a task messages the assignee — they see it without being told separately.
+    const inbox = await client.callTool({ name: "oracle_msg_inbox", arguments: { agent: "builder" } });
+    expect((inbox.structuredContent as { count: number }).count).toBeGreaterThanOrEqual(1);
+
+    // Progress notes accumulate as an audit trail.
+    await client.callTool({
+      name: "oracle_task_update",
+      arguments: { id: taskId, agent: "builder", status: "in_progress", note: "starting on the limiter" }
+    });
+
+    // Submit is blocked while checklist items are unchecked.
+    const blocked = await client.callTool({
+      name: "oracle_task_submit",
+      arguments: { id: taskId, agent: "builder", summary: "done" }
+    });
+    expect(blocked.isError).toBe(true);
+
+    // Check off both items, then submit succeeds.
+    await client.callTool({ name: "oracle_task_checklist", arguments: { id: taskId, index: 0, done: true } });
+    await client.callTool({ name: "oracle_task_checklist", arguments: { id: taskId, index: 1, done: true } });
+    const submitted = await client.callTool({
+      name: "oracle_task_submit",
+      arguments: { id: taskId, agent: "builder", summary: "limiter implemented and tested" }
+    });
+    expect(submitted.isError).not.toBe(true);
+    expect((submitted.structuredContent as { task: { status: string } }).task.status).toBe("review");
+
+    // Submitting auto-notifies the creator — no separate "I'm done" message needed.
+    const leadInbox = await client.callTool({ name: "oracle_msg_inbox", arguments: { agent: "lead" } });
+    const leadMsgs = (leadInbox.structuredContent as { messages: Array<{ subject?: string }> }).messages;
+    expect(leadMsgs.some((m) => m.subject?.includes("ready for review"))).toBe(true);
+
+    // Reviewer rejects once, then approves.
+    const rejected = await client.callTool({
+      name: "oracle_task_close",
+      arguments: { id: taskId, agent: "lead", approved: false, note: "add a burst-limit test" }
+    });
+    expect((rejected.structuredContent as { task: { status: string } }).task.status).toBe("in_progress");
+
+    const approved = await client.callTool({
+      name: "oracle_task_close",
+      arguments: { id: taskId, agent: "lead", approved: true }
+    });
+    expect((approved.structuredContent as { task: { status: string } }).task.status).toBe("done");
+
+    // Full history is visible via get.
+    const detail = await client.callTool({ name: "oracle_task_get", arguments: { id: taskId } });
+    const notes = (detail.structuredContent as { task: { notes: unknown[] } }).task.notes;
+    expect(notes.length).toBeGreaterThanOrEqual(4);
   });
 });

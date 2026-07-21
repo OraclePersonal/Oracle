@@ -10,8 +10,9 @@ When you fire up Claude Code, it has no memory of yesterday's work. If you start
 - **Consultation engine** — ask a question with full project context (code + memory + docs + web) and get a grounded answer with citations
 - **Autonomous action** — an agent sandbox that can read/write files and run commands, confined to your workspace, fully audited
 - **Inter-agent coordination** — multiple agent sessions on one machine can message each other, hand off work, wake each other up when something needs attention
+- **Task planning & verification** — a lead breaks work into assigned tasks with checklists; agents can't report "done" until their declared verification steps are actually checked off, and the lead is auto-notified when work is ready to review
 
-**Requires Node.js ≥ 24.** Installs three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), `oracle-msg-mcp` (messaging-only server for agents that only need to talk to each other).
+**Requires Node.js ≥ 24.** Installs three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), `oracle-msg-mcp` (messaging + task-tracking server for agents that only need to coordinate, not consult or act).
 
 ---
 
@@ -59,7 +60,7 @@ Session B: Claude Code → Oracle
 
 ---
 
-## The Four Pillars + Coordination
+## The Five Pillars
 
 | Pillar | What It Does | How To Use |
 |--------|--------------|-----------|
@@ -67,6 +68,7 @@ Session B: Claude Code → Oracle
 | 💬 **Consult** | Ask a question with your real project context (code files + memory + docs + web search/fetch). Get a cited answer back. | MCP: `oracle_ask`. CLI: `oracle ask "question" -f "src/**/*.ts"`. Agent can search memory, read files, fetch URLs, then answer. |
 | 🛠️ **Act** | Autonomous agent that reads/writes/edits files to complete a task. **Sandbox: no shell execution, filesystem-only.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X"`. Agent loops until done; logs all file changes. |
 | 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
+| ✅ **Verify** | Task tracker on top of the message bus: create + assign work with a checklist, log progress notes, and submit for review — which **blocks** if any checklist item is unchecked and auto-reports to the task creator. Reviewer approves (done) or rejects with a note (bounces back). | MCP: `oracle_task_*`. CLI: `oracle task create/update/check/submit/close/list`. |
 
 ---
 
@@ -205,32 +207,80 @@ oracle msg watch -a codex --exec 'notify-send "Message from $ORACLE_MSG_FROM"'
 
 **Storage:** `~/.oracle/messages/` (atomic JSON) + `~/.oracle/agents/` (presence registry).
 
+### 5. Task Planning, Tracking & Verification (built on the message bus)
+
+**The problem:** messaging alone doesn't give you accountability. Nothing
+stops an agent from claiming "done" without actually finishing, and nothing
+tracks who's responsible for what or what happened along the way.
+
+**Solution: a task tracker layered on top of the bus**, with a lifecycle —
+`pending → in_progress → review → done` (or `blocked`/`cancelled`) — and a
+hard verification gate:
+
+- **Create & assign** (`oracle_task_create`) — a lead breaks work into tasks,
+  each with an assignee and an optional checklist of concrete verification
+  steps. Auto-messages the assignee.
+- **Track progress** (`oracle_task_update`) — the assignee logs status
+  changes and notes as they work; this is the audit trail, not just an
+  end-of-task summary.
+- **Verify before reporting** (`oracle_task_checklist` + `oracle_task_submit`)
+  — the assignee checks off each item as it's genuinely done. Submitting for
+  review **fails** if anything is still unchecked — an agent cannot report
+  done prematurely.
+- **Report to the lead automatically** — a successful submit messages the
+  task's creator with the summary; no separate "I'm done" message needed.
+- **Close it out** (`oracle_task_close`) — the reviewer approves (→ `done`,
+  assignee notified) or rejects with a note (→ back to `in_progress`,
+  assignee notified with what's missing).
+
+**CLI:**
+```bash
+oracle task create --title "Add rate limiting" --created-by lead --assignee builder \
+  --checklist "implement limiter" "add tests" "update docs"
+oracle task update <id> -a builder --status in_progress --note "starting"
+oracle task check <id> 0        # check off item 0 as done
+oracle task submit <id> -a builder --summary "limiter implemented, tested, documented"
+oracle task close <id> -a lead                        # approve
+oracle task close <id> -a lead --reject --note "..."  # send back
+oracle task list --assignee builder --active
+```
+
+**Storage:** `~/.oracle/tasks/` (atomic JSON, one file per task).
+
 ---
 
-## MCP Tools (43 Total)
+## MCP Tools (60 Total)
 
-### Consultation & Memory (22 tools)
-`oracle_ask`, `oracle_memory_*` (search, update, consolidate, prune, promote, reflect, graph operations, wiki, etc.)
+### Memory (18 tools)
+`oracle_memory_*` — search, scored_search, list, update, clear, consolidate,
+prune, promote, reflect, stats, maintenance, wiki_build/get/list, graph
+query/path/prune/stats.
 
-### Agent & Autonomy (6 tools)
-`oracle_agent`, `oracle_sessions`, `oracle_session_get`, `oracle_agent` (run task), plus observability.
+### Consultation & Agent (5 tools)
+`oracle_ask`, `oracle_agent`, `oracle_sessions`, `oracle_session_get`, `oracle_doctor`
 
 ### Messaging & Coordination (6 tools)
 `oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`
 
+### Task Planning & Tracking (7 tools)
+`oracle_task_create`, `oracle_task_list`, `oracle_task_get`, `oracle_task_update`,
+`oracle_task_checklist`, `oracle_task_submit`, `oracle_task_close`
+
 ### Identity & Config (3 tools)
 `oracle_identity_setup`, `oracle_identity_show`, `oracle_persona_set`
 
-### GitHub Integration (5 tools)
-PR/issue listing, diff viewing, review submission, search, API passthrough.
+### GitHub Integration (11 tools)
+PR/issue listing & get, diff viewing, file listing, review + review-submit,
+comments, search, API passthrough.
 
-### Docs & Web (3 tools)
-Doc indexing, web search, structured web extraction.
+### Docs & Web (7 tools)
+Doc indexing (add/list/remove/search), web search, web fetch, structured web extraction.
 
-### Health & Skills (2 tools)
-`oracle_doctor` (verify providers, agents, connectivity), `oracle_skills` (list available skills).
+### Oracle Profiles & Skills (3 tools)
+`oracle_oracle_list`, `oracle_oracle_register`, `oracle_skills`
 
-See the [**full tool reference**](MESSAGING.md) for messaging; [**docs/**](docs/) for deeper architecture.
+See [**MESSAGING.md**](MESSAGING.md) for the full messaging + task-tracking
+reference; [**docs/**](docs/) for deeper architecture.
 
 ---
 
@@ -267,6 +317,8 @@ Oracle MCP Server (src/mcp/)
 │  └─ BM25 + vector search + entity graph + auto-consolidation
 ├─ Messaging Bus (src/messaging/)
 │  └─ File-backed store + registry + watcher + CLI + onboarding hooks
+├─ Task Tracker (src/tasks/)
+│  └─ File-backed store: plan/assign/verify/report, layered on messaging
 ├─ Agent Sandbox (src/agent/)
 │  └─ File R/W, audit trail, no shell, looping until done
 ├─ Observability (src/observability/)
@@ -277,20 +329,21 @@ Oracle MCP Server (src/mcp/)
    └─ Reusable skill registry + custom oracle profiles
 
 CLI (src/cli.ts)
-├─ oracle ask, agent, memory, msg, identity, ...
+├─ oracle ask, agent, memory, msg, task, identity, ...
 ├─ same bus as MCP (shared ~/.oracle/)
 └─ designed for scripting & local use
 
-Standalone Messaging Server (src/mcp-messaging.ts)
-├─ Just the 6 oracle_msg_* tools
+Standalone Coordination Server (src/mcp-messaging.ts)
+├─ The 6 oracle_msg_* + 7 oracle_task_* tools
 ├─ No provider/memory/agent stack
-└─ for agents that only need to coordinate
+└─ for agents that only need to coordinate, not consult or act
 ```
 
 **Storage Layout:**
 ```
 ~/.oracle/
 ├─ messages/              # Inter-agent message store (atomic JSON per message)
+├─ tasks/                 # Task tracker (atomic JSON per task, one file each)
 ├─ agents/                # Presence registry (one JSON per registered agent)
 ├─ memory/                # Persistent memory (facts, insights, wiki, graph)
 ├─ skills/                # Local skill definitions

@@ -25,7 +25,9 @@ import { SEARCH_PROVIDERS, FETCH_PROVIDERS } from "../web/types.js";
 import type { AgentService } from "../agent/service.js";
 import type { MessageStore } from "../messaging/store.js";
 import type { AgentRegistry } from "../messaging/registry.js";
+import type { TaskStore } from "../tasks/store.js";
 import { registerMessagingTools } from "./messagingTools.js";
+import { registerTaskTools } from "./taskTools.js";
 
 interface OracleServerDependencies {
   server: McpServer;
@@ -39,6 +41,7 @@ interface OracleServerDependencies {
   profile: ProfileStore;
   messages: MessageStore;
   agentRegistry: AgentRegistry;
+  tasks: TaskStore;
   providerChecks?: typeof checkProvider;
   agent?: AgentService;
   agentUnavailableReason?: string;
@@ -93,6 +96,7 @@ export function registerOracleTools({
   profile,
   messages,
   agentRegistry,
+  tasks,
   providerChecks = checkProvider,
   agent,
   agentUnavailableReason,
@@ -874,6 +878,7 @@ export function registerOracleTools({
   // Registration lives in messagingTools.ts so the standalone messaging-only
   // server (src/mcp-messaging.ts) exposes the identical tool surface.
   registerMessagingTools(server, messages, agentRegistry);
+  registerTaskTools(server, tasks, messages);
 
   // ── GitHub tools ────────────────────────────────────────────────
 

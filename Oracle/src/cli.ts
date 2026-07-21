@@ -29,6 +29,7 @@ import { OrchestratorFactory } from "./orchestrator/factory.js";
 import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import { ProfileStore } from "./identity/profile.js";
 import { MessageStore } from "./messaging/store.js";
+import { TaskStore } from "./tasks/store.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
@@ -627,6 +628,156 @@ msgCmd
     console.log(`Watching messages for "${options.agent}" — Ctrl+C to stop.`);
     // keep the process alive until interrupted
     await new Promise(() => {});
+  });
+
+// ── task planning & tracking ────────────────────────────────────
+const taskCmd = program
+  .command("task")
+  .description("Plan, assign, track, and verify work between agents (builds on the msg bus)")
+  .addHelpText(
+    "after",
+    "\nFlow: create (assigns + messages assignee) -> update (progress notes) -> checklist (verify) -> submit (blocks on unchecked items, notifies creator) -> close (approve or bounce back)."
+  );
+
+function printTask(t: import("./tasks/store.js").TaskRecord): void {
+  const checklist = t.checklist.length
+    ? "\n  " + t.checklist.map((c, i) => `${i}: [${c.done ? "x" : " "}] ${c.text}`).join("\n  ")
+    : "";
+  console.log(`${t.id} | ${t.status} | ${t.title} | ${t.createdBy} -> ${t.assignee}${checklist}`);
+}
+
+taskCmd
+  .command("create")
+  .description("Create and assign a task; messages the assignee")
+  .requiredOption("--title <text>", "Task title")
+  .option("--description <text>", "Task description")
+  .requiredOption("--created-by <agent>", "Your agent name (reviews/closes this task)")
+  .requiredOption("--assignee <agent>", "Agent responsible for the work")
+  .option("--checklist <items...>", "Verification steps required before submit")
+  .option("--parent <id>", "Parent task id")
+  .action(async (options) => {
+    const tasks = new TaskStore(homeDir());
+    const messages = new MessageStore(homeDir());
+    const task = await tasks.create({
+      title: options.title,
+      description: options.description,
+      createdBy: options.createdBy,
+      assignee: options.assignee,
+      checklist: options.checklist,
+      parentId: options.parent
+    });
+    await messages.send({
+      from: options.createdBy,
+      to: options.assignee,
+      subject: `Task assigned: ${task.title}`,
+      body: `New task ${task.id}: ${task.title}${task.description ? `\n${task.description}` : ""}`
+    });
+    console.log(`Created ${task.id}, assigned to ${task.assignee}.`);
+  });
+
+taskCmd
+  .command("list")
+  .description("List tasks, optionally filtered")
+  .option("--assignee <agent>")
+  .option("--created-by <agent>")
+  .option("--status <status>")
+  .option("--active", "Only pending/in_progress/review/blocked", false)
+  .action(async (options) => {
+    const tasks = new TaskStore(homeDir());
+    const list = await tasks.list({
+      assignee: options.assignee,
+      createdBy: options.createdBy,
+      status: options.status,
+      activeOnly: options.active
+    });
+    if (!list.length) { console.log("No tasks found."); return; }
+    for (const t of list) printTask(t);
+  });
+
+taskCmd
+  .command("get")
+  .description("Show full task detail: checklist + note history")
+  .argument("<id>", "Task id")
+  .action(async (id) => {
+    const tasks = new TaskStore(homeDir());
+    const task = await tasks.get(id);
+    if (!task) { console.log(`Not found: ${id}`); process.exitCode = 1; return; }
+    printTask(task);
+    for (const n of task.notes) console.log(`  [${n.ts}] ${n.agent}: ${n.text}`);
+  });
+
+taskCmd
+  .command("update")
+  .description("Record progress: a note and/or a status change")
+  .argument("<id>", "Task id")
+  .requiredOption("-a, --agent <name>", "Your agent name")
+  .option("--note <text>", "Progress note")
+  .option("--status <status>", "pending|in_progress|review|done|blocked|cancelled")
+  .action(async (id, options) => {
+    const tasks = new TaskStore(homeDir());
+    const task = await tasks.update(id, options.agent, { note: options.note, status: options.status });
+    if (!task) { console.log(`Not found: ${id}`); process.exitCode = 1; return; }
+    console.log(`Updated ${id}.`);
+  });
+
+taskCmd
+  .command("check")
+  .description("Check off (or uncheck) a verification checklist item by index")
+  .argument("<id>", "Task id")
+  .argument("<index>", "0-based checklist index")
+  .option("--undo", "Uncheck instead of check", false)
+  .action(async (id, index, options) => {
+    const tasks = new TaskStore(homeDir());
+    const task = await tasks.setChecklistItem(id, Number(index), !options.undo);
+    if (!task) { console.log(`Not found: ${id}[${index}]`); process.exitCode = 1; return; }
+    printTask(task);
+  });
+
+taskCmd
+  .command("submit")
+  .description("Submit for review — blocks if any checklist item is unchecked; notifies the creator on success")
+  .argument("<id>", "Task id")
+  .requiredOption("-a, --agent <name>", "Your agent name")
+  .requiredOption("--summary <text>", "What you did, for the reviewer")
+  .action(async (id, options) => {
+    const tasks = new TaskStore(homeDir());
+    const messages = new MessageStore(homeDir());
+    try {
+      const task = await tasks.submitForReview(id, options.agent, options.summary);
+      await messages.send({
+        from: options.agent,
+        to: task.createdBy,
+        subject: `Task ready for review: ${task.title}`,
+        body: `Task ${task.id} submitted by ${options.agent}.\n${options.summary}`
+      });
+      console.log(`Submitted ${id} for review; ${task.createdBy} notified.`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
+
+taskCmd
+  .command("close")
+  .description("Approve (done) or reject (bounces to in_progress) a submitted task; notifies the assignee")
+  .argument("<id>", "Task id")
+  .requiredOption("-a, --agent <name>", "Your agent name (the reviewer)")
+  .option("--reject", "Reject instead of approve", false)
+  .option("--note <text>", "Reason, especially when rejecting")
+  .action(async (id, options) => {
+    const tasks = new TaskStore(homeDir());
+    const messages = new MessageStore(homeDir());
+    const approved = !options.reject;
+    const task = await tasks.close(id, options.agent, approved, options.note);
+    await messages.send({
+      from: options.agent,
+      to: task.assignee,
+      subject: approved ? `Task approved: ${task.title}` : `Task sent back: ${task.title}`,
+      body: approved
+        ? `Task ${task.id} approved and closed.${options.note ? ` ${options.note}` : ""}`
+        : `Task ${task.id} needs more work: ${options.note ?? "see notes"}`
+    });
+    console.log(approved ? `Closed ${id} as done.` : `Sent ${id} back to in_progress.`);
   });
 
 // ── identity ────────────────────────────────────────────────────
