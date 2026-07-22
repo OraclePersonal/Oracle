@@ -22,7 +22,7 @@ under `~/.oracle/`. No database, no daemon.
 |---|---|---|
 | **CLI** | Commander-based CLI: `ask`, `agent`, `memory`, `wiki`, `docs`, `web`, `msg`, `task`, `identity`, `github`, `session`, `skill` | `src/cli.ts` |
 | **MCP Server** | Stdio MCP server exposing 60 tools | `src/mcp/server.ts`, `src/mcp/runtime.ts` |
-| **Standalone coordination server** | `oracle-msg-mcp` binary — just `oracle_msg_*` + `oracle_task_*` (13 tools), no provider/memory/agent stack | `src/mcp-messaging.ts` |
+| **Standalone coordination server** | `oracle-msg-mcp` binary — just `oracle_msg_*` + `oracle_task_*` (14 tools), no provider/memory/agent stack | `src/mcp-messaging.ts` |
 | **ConsultService** | Core loop: load files → build context (memory + docs + web) → call provider → answer | `src/core/consult.ts` |
 | **Provider layer** | Codex CLI, Anthropic, OpenAI, OpenCode | `src/providers/` |
 | **Agent sandbox** | Autonomous file read/write/edit loop. No shell. Every mutation hashed and logged to an audit trail. | `src/agent/` |

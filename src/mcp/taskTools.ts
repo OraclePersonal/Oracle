@@ -3,6 +3,7 @@ import { z } from "zod";
 import { serializeOracleError } from "../errors.js";
 import type { TaskStore, TaskStatus } from "../tasks/store.js";
 import type { MessageStore } from "../messaging/store.js";
+import type { AgentRegistry } from "../messaging/registry.js";
 
 function success(text: string, structuredContent: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text }], structuredContent };
@@ -30,7 +31,7 @@ export const TASK_INSTRUCTIONS = [
   "As an assignee: call oracle_task_update to record progress notes and status changes as you go — this is the audit trail, not just an end-of-task summary. Check off each checklist item via oracle_task_checklist as you actually complete it, not preemptively.",
   "Before reporting a task done: call oracle_task_submit. It BLOCKS if any checklist item is unchecked, and on success automatically notifies the task creator — you do not need to separately message them that you're done.",
   "As a lead reviewing: oracle_task_get shows the full checklist and note history; oracle_task_close with approved=true finishes it, or approved=false with a note sends it back to in_progress.",
-  "Use oracle_task_list { assignee: <you>, activeOnly: true } to see your open work at a glance."
+  "Use oracle_task_list { assignee: <you>, activeOnly: true } to see your open work at a glance. Leads can use oracle_task_board to see an ASCII work board combining the agent roster and all main TODOs."
 ].join(" ");
 
 function formatTask(t: { id: string; title: string; status: TaskStatus; assignee: string; createdBy: string; checklist: { text: string; done: boolean }[] }): string {
@@ -47,7 +48,63 @@ function formatTask(t: { id: string; title: string; status: TaskStatus; assignee
  * — which auto-reports to the task creator over oracle_msg_send so no one
  * has to manually "tell the boss it's done."
  */
-export function registerTaskTools(server: McpServer, tasks: TaskStore, messages: MessageStore): void {
+function boardRow(task: { id: string; title: string; assignee: string; createdBy: string; status: TaskStatus }): string {
+  const title = task.title.length > 42 ? `${task.title.slice(0, 39)}...` : task.title;
+  return `| ${task.status.padEnd(11)} | ${task.assignee.padEnd(20)} | ${title.padEnd(42)} | ${task.id} |`;
+}
+
+/** Render a terminal-safe overview so every MCP client can inspect the work. */
+export function formatTaskBoard(
+  agents: Array<{ name: string; role?: string; active: boolean }>,
+  tasks: Array<{ id: string; title: string; assignee: string; createdBy: string; status: TaskStatus }>
+): string {
+  const agentLines = agents.length
+    ? agents.map((agent) => `| ${agent.name.padEnd(22)} | ${(agent.active ? "ACTIVE" : "idle").padEnd(6)} | ${(agent.role ?? "-").slice(0, 48).padEnd(48)} |`)
+    : ["| (no registered agents)                                                    |"];
+  const todoLines = tasks.length ? tasks.map(boardRow) : ["| (no TODOs on this board)                                                      |"];
+  return [
+    "+--------------------------+--------+--------------------------------------------------+",
+    "| AGENT ROSTER             | STATE  | ROLE                                             |",
+    "+--------------------------+--------+--------------------------------------------------+",
+    ...agentLines,
+    "+--------------------------+--------+--------------------------------------------------+",
+    "",
+    "+-------------+----------------------+--------------------------------------------+--------------------+",
+    "| STATUS      | ASSIGNEE             | MAIN TODO                                  | TASK ID            |",
+    "+-------------+----------------------+--------------------------------------------+--------------------+",
+    ...todoLines,
+    "+-------------+----------------------+--------------------------------------------+--------------------+"
+  ].join("\n");
+}
+
+export function registerTaskTools(server: McpServer, tasks: TaskStore, messages: MessageStore, registry: AgentRegistry): void {
+  server.registerTool(
+    "oracle_task_board",
+    {
+      title: "Show ASCII Work Board",
+      description: "Render an ASCII board of registered agents (with roles and activity) plus the main TODOs created by a lead. Filter by createdBy to see one lead's work board; activeOnly hides completed and cancelled TODOs.",
+      inputSchema: {
+        createdBy: z.string().min(1).optional().describe("Optional lead/creator name, e.g. claude-lead"),
+        activeOnly: z.boolean().default(true)
+      }
+    },
+    async ({ createdBy, activeOnly }) => {
+      try {
+        const [agents, list] = await Promise.all([
+          registry.list(),
+          tasks.list({ createdBy, activeOnly })
+        ]);
+        const board = formatTaskBoard(agents, list);
+        return success(board, {
+          createdBy: createdBy ?? null,
+          activeOnly,
+          agents: agents as unknown as Record<string, unknown>[],
+          tasks: list as unknown as Record<string, unknown>[]
+        });
+      } catch (error) { return failure(error); }
+    }
+  );
+
   server.registerTool(
     "oracle_task_create",
     {

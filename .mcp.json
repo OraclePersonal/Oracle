@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "oracle": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "D:\\Projects\\Github\\Oracle-Ecosystems\\dist\\mcp.js"
+      ],
+      "env": {
+        "ORACLE_WORKSPACE_ROOT": "D:\\Projects\\Github\\Oracle-Ecosystems"
+      }
+    }
+  }
+}

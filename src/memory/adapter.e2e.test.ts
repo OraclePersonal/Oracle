@@ -51,6 +51,21 @@ describe("MemoryAdapter — end to end", () => {
     expect(hits[0].content).toContain("Postgres");
   });
 
+  it("deduplicates equivalent content and normalizes tags without an LLM call", async () => {
+    const first = await memory.remember("me", "fact", "Oracle uses a shared task board.", { tags: ["Board", "board", "  Lead "] });
+    const second = await memory.remember("other", "fact", " oracle   uses a shared task board. ", { tags: ["ignored"] });
+    expect(second.id).toBe(first.id);
+    expect(first.tags).toEqual(["board", "lead"]);
+    expect(await memory.recall({ type: "fact" })).toHaveLength(1);
+  });
+
+  it("ranks partial multi-term matches instead of requiring the exact query phrase", async () => {
+    await memory.remember("me", "fact", "The release checklist is owned by the lead.", { tags: ["release"] });
+    await memory.remember("me", "fact", "A checklist exists for unrelated deploys.");
+    const hits = await memory.searchMemories("lead release checklist");
+    expect(hits[0].content).toContain("owned by the lead");
+  });
+
   it("scoredSearchMemories still returns keyword matches ranked without Ollama", async () => {
     await memory.remember("me", "fact", "Docker containers run the build pipeline");
     const hits = await memory.scoredSearchMemories("docker");

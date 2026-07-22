@@ -47,6 +47,7 @@ beforeAll(async () => {
     skills,
     oracles,
     memory: new MemoryAdapter(root),
+    globalMemory: new MemoryAdapter(root, "global-memory"),
     profile: new ProfileStore(root),
     messages: new MessageStore(root),
     agentRegistry: new AgentRegistry(root),
@@ -73,6 +74,7 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_oracle_list");
     expect(tools).toContain("oracle_oracle_register");
     expect(tools).toContain("oracle_memory_list");
+    expect(tools).toContain("oracle_memory_remember");
     expect(tools).toContain("oracle_memory_clear");
     expect(tools).toContain("oracle_identity_show");
     expect(tools).toContain("oracle_identity_setup");
@@ -88,6 +90,26 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_task_checklist");
     expect(tools).toContain("oracle_task_submit");
     expect(tools).toContain("oracle_task_close");
+  });
+
+  test("keeps project and global memory scopes separate", async () => {
+    const saved = await client.callTool({
+      name: "oracle_memory_remember",
+      arguments: { scope: "global", agent: "claude-lead", type: "fact", content: "Always use the shared release checklist." }
+    });
+    expect(saved.isError).not.toBe(true);
+
+    const global = await client.callTool({
+      name: "oracle_memory_search",
+      arguments: { scope: "global", query: "shared release checklist" }
+    });
+    expect((global.structuredContent as { count: number }).count).toBe(1);
+
+    const project = await client.callTool({
+      name: "oracle_memory_search",
+      arguments: { scope: "project", query: "shared release checklist" }
+    });
+    expect((project.structuredContent as { count: number }).count).toBe(0);
   });
 
   test("register onboards an agent: roster + unread in one call, presence tracked", async () => {

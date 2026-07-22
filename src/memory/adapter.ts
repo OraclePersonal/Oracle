@@ -69,18 +69,31 @@ function generateId(): string {
   return `${date}-${time}-${micros}-${rand}`;
 }
 
+/** Cheap canonical form used to prevent exact duplicate writes without an LLM. */
+function canonicalContent(content: string): string {
+  return content.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeTags(tags: string[]): string[] {
+  return [...new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))].slice(0, 50);
+}
+
+function queryTerms(query: string): string[] {
+  return [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])];
+}
+
 export class MemoryAdapter implements MemoryPort {
   private vectors: VectorStore;
   private vectorsLoaded = false;
   private entityGraph: EntityGraph;
 
-  constructor(private readonly rootDir: string) {
-    this.vectors = new VectorStore(rootDir);
-    this.entityGraph = new EntityGraph(rootDir);
+  constructor(private readonly rootDir: string, private readonly dataDirectory = DATA_DIR) {
+    this.vectors = new VectorStore(rootDir, dataDirectory);
+    this.entityGraph = new EntityGraph(rootDir, dataDirectory);
   }
 
   private dataDir(): string {
-    return path.join(this.rootDir, DATA_DIR);
+    return path.join(this.rootDir, this.dataDirectory);
   }
 
   private typeDir(type: MemoryType): string {
@@ -117,6 +130,16 @@ export class MemoryAdapter implements MemoryPort {
     await fs.rename(tmp, fp);
   }
 
+  /** Token overlap + durable-memory signals, deliberately zero-cost. */
+  private lexicalScore(entry: MemoryStoreEntry, terms: string[]): number {
+    const haystack = `${entry.content} ${entry.tags.join(" ")}`.toLowerCase();
+    const matched = terms.filter((term) => haystack.includes(term));
+    if (!matched.length) return 0;
+    const coverage = matched.length / terms.length;
+    const tagBonus = matched.filter((term) => entry.tags.some((tag) => tag.includes(term))).length * 0.12;
+    return (coverage * 0.7) + ((entry.importance ?? 0.5) * 0.2) + (Math.log1p(entry.accessCount ?? 0) * 0.04) + tagBonus;
+  }
+
   async remember(
     agent: string,
     type: MemoryType,
@@ -124,6 +147,10 @@ export class MemoryAdapter implements MemoryPort {
     opts?: { tags?: string[]; meta?: Record<string, unknown>; importance?: number }
   ): Promise<MemoryStoreEntry> {
     await this.ensureDirs();
+    const normalizedContent = canonicalContent(content);
+    const existing = await this.recall({ type, limit: 10_000, includeArchived: false, touch: false });
+    const duplicate = existing.find((entry) => canonicalContent(entry.content) === normalizedContent);
+    if (duplicate) return duplicate;
     const now = new Date().toISOString();
     const entry: MemoryStoreEntry = {
       id: generateId(),
@@ -131,7 +158,7 @@ export class MemoryAdapter implements MemoryPort {
       agent,
       type,
       content,
-      tags: opts?.tags ?? [],
+      tags: normalizeTags(opts?.tags ?? []),
       meta: opts?.meta ?? {},
       importance: opts?.importance ?? 0.5,
       accessCount: 0,
@@ -228,8 +255,14 @@ export class MemoryAdapter implements MemoryPort {
     }
 
     // Fallback: keyword filter
-    const entries = await this.recall({ type: opts?.type, agent: opts?.agent, limit });
-    return entries.filter((e) => e.content.toLowerCase().includes(q) || e.tags.some((t) => t.toLowerCase().includes(q)));
+    const terms = queryTerms(query);
+    const entries = await this.recall({ type: opts?.type, agent: opts?.agent, limit: Math.max(limit * 4, 100), touch: false });
+    return entries
+      .map((entry) => ({ entry, score: this.lexicalScore(entry, terms) }))
+      .filter((hit) => hit.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((hit) => hit.entry);
   }
 
   /**
@@ -267,13 +300,14 @@ export class MemoryAdapter implements MemoryPort {
     }
 
     // Fallback: keyword + recency sort
-    const entries = await this.recall({ type: opts?.type, agent: opts?.agent, limit: limit * 2 });
-    const filtered = entries.filter((e) => e.content.toLowerCase().includes(q) || e.tags.some((t) => t.toLowerCase().includes(q)));
-    return filtered.sort((a, b) => {
-      const scoreA = this.recencyWeightedScore(0.5, a);
-      const scoreB = this.recencyWeightedScore(0.5, b);
-      return scoreB - scoreA;
-    }).slice(0, limit);
+    const terms = queryTerms(query);
+    const entries = await this.recall({ type: opts?.type, agent: opts?.agent, limit: Math.max(limit * 4, 100), touch: false });
+    return entries
+      .map((entry) => ({ entry, score: this.lexicalScore(entry, terms) }))
+      .filter((hit) => hit.score > 0)
+      .sort((a, b) => this.recencyWeightedScore(b.score, b.entry) - this.recencyWeightedScore(a.score, a.entry))
+      .slice(0, limit)
+      .map((hit) => hit.entry);
   }
 
   async updateMemory(id: string, type: MemoryType, updates: { content?: string; tags?: string[]; importance?: number }): Promise<MemoryStoreEntry | null> {

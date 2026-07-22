@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { TaskStore } from "./store.js";
+import { formatTaskBoard } from "../mcp/taskTools.js";
 
 let home: string;
 let store: TaskStore;
@@ -17,6 +18,15 @@ afterEach(async () => {
 });
 
 describe("TaskStore", () => {
+  test("formats an ASCII board with named agents and main TODOs", () => {
+    const board = formatTaskBoard(
+      [{ name: "claude-lead", role: "lead", active: true }, { name: "codex-content-1", role: "content", active: false }],
+      [{ id: "task-1", title: "Draft launch copy", assignee: "codex-content-1", createdBy: "claude-lead", status: "pending" }]
+    );
+    expect(board).toContain("claude-lead");
+    expect(board).toContain("codex-content-1");
+    expect(board).toContain("Draft launch copy");
+  });
   test("create then list filters by assignee and status", async () => {
     await store.create({ title: "A", createdBy: "lead", assignee: "worker" });
     await store.create({ title: "B", createdBy: "lead", assignee: "other" });

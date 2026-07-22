@@ -38,6 +38,7 @@ interface OracleServerDependencies {
   skills: SkillRegistry;
   oracles: OracleRegistry;
   memory: MemoryPort;
+  globalMemory?: MemoryPort;
   profile: ProfileStore;
   messages: MessageStore;
   agentRegistry: AgentRegistry;
@@ -93,6 +94,7 @@ export function registerOracleTools({
   skills,
   oracles,
   memory,
+  globalMemory = memory,
   profile,
   messages,
   agentRegistry,
@@ -338,16 +340,38 @@ export function registerOracleTools({
   );
 
   server.registerTool(
+    "oracle_memory_remember",
+    {
+      title: "Save Memory",
+      description: "Save a memory to this project by default, or to shared ~/.oracle/memory with scope: global. Use global only for durable knowledge that applies across projects.",
+      inputSchema: {
+        scope: z.enum(["project", "global"]).default("project"),
+        agent: z.string().min(1),
+        type: z.enum(["fact", "insight", "chunk", "working"]),
+        content: z.string().min(1).max(20_000),
+        tags: z.array(z.string().min(1)).max(50).optional(),
+        importance: z.number().min(0).max(1).optional()
+      }
+    },
+    async ({ scope, agent, type, content, tags, importance }) => {
+      try {
+        const entry = await (scope === "global" ? globalMemory : memory).remember(agent, type, content, { tags, importance });
+        return success(`Saved ${scope} memory ${entry.id}.`, { scope, memory: entry });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
     "oracle_memory_list",
     {
       title: "List Memory",
-      description: "Show memory entries from the .oracle-memory store.",
-      inputSchema: { agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(100).default(10) }
+      description: "Show project memory by default, or shared global memory stored under ~/.oracle/memory.",
+      inputSchema: { scope: z.enum(["project", "global"]).default("project"), agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(100).default(10) }
     },
-    async ({ agent, type, limit }) => {
+    async ({ scope, agent, type, limit }) => {
       try {
-        const entries = await memory.recall({ type, agent: agent ?? undefined, limit });
-        return success(JSON.stringify(entries, null, 2), { entries });
+        const entries = await (scope === "global" ? globalMemory : memory).recall({ type, agent: agent ?? undefined, limit });
+        return success(JSON.stringify(entries, null, 2), { scope, entries });
       } catch (error) { return failure(error); }
     }
   );
@@ -357,12 +381,12 @@ export function registerOracleTools({
     {
       title: "Search Memory",
       description: "Search memory contents by keyword.",
-      inputSchema: { query: z.string().min(1), agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(200).default(20) }
+      inputSchema: { scope: z.enum(["project", "global"]).default("project"), query: z.string().min(1), agent: z.string().optional(), type: z.enum(["fact", "insight", "chunk", "working"]).optional(), limit: z.number().int().min(1).max(200).default(20) }
     },
-    async ({ query, agent, type, limit }) => {
+    async ({ scope, query, agent, type, limit }) => {
       try {
-        const entries = await memory.searchMemories(query, { type: type as any, agent: agent ?? undefined, limit });
-        return success(JSON.stringify(entries, null, 2), { count: entries.length, entries });
+        const entries = await (scope === "global" ? globalMemory : memory).searchMemories(query, { type: type as any, agent: agent ?? undefined, limit });
+        return success(JSON.stringify(entries, null, 2), { scope, count: entries.length, entries });
       } catch (error) { return failure(error); }
     }
   );
@@ -372,13 +396,13 @@ export function registerOracleTools({
     {
       title: "Update Memory",
       description: "Update content, tags, or importance of an existing memory.",
-      inputSchema: { id: z.string(), type: z.enum(["fact", "insight", "chunk", "working"]), content: z.string().optional(), tags: z.array(z.string()).optional(), importance: z.number().min(0).max(1).optional() }
+      inputSchema: { scope: z.enum(["project", "global"]).default("project"), id: z.string(), type: z.enum(["fact", "insight", "chunk", "working"]), content: z.string().optional(), tags: z.array(z.string()).optional(), importance: z.number().min(0).max(1).optional() }
     },
-    async ({ id, type, content, tags, importance }) => {
+    async ({ scope, id, type, content, tags, importance }) => {
       try {
-        const updated = await memory.updateMemory(id, type as any, { content, tags, importance });
+        const updated = await (scope === "global" ? globalMemory : memory).updateMemory(id, type as any, { content, tags, importance });
         if (!updated) return failure(new Error("Memory not found"));
-        return success(JSON.stringify(updated, null, 2), { memory: updated });
+        return success(JSON.stringify(updated, null, 2), { scope, memory: updated });
       } catch (error) { return failure(error); }
     }
   );
@@ -388,12 +412,12 @@ export function registerOracleTools({
     {
       title: "Memory Stats",
       description: "Get memory counts by type and agent.",
-      inputSchema: {}
+      inputSchema: { scope: z.enum(["project", "global"]).default("project") }
     },
-    async () => {
+    async ({ scope }) => {
       try {
-        const stats = await memory.getStats();
-        return success(JSON.stringify(stats, null, 2), { stats });
+        const stats = await (scope === "global" ? globalMemory : memory).getStats();
+        return success(JSON.stringify(stats, null, 2), { scope, stats });
       } catch (error) { return failure(error); }
     }
   );
@@ -403,12 +427,12 @@ export function registerOracleTools({
     {
       title: "Clear Memory",
       description: "Clear working memory for an agent or all.",
-      inputSchema: { agent: z.string().optional() }
+      inputSchema: { scope: z.enum(["project", "global"]).default("project"), agent: z.string().optional() }
     },
-    async ({ agent }) => {
+    async ({ scope, agent }) => {
       try {
-        const count = await memory.clearWorking(agent ?? undefined);
-        return success(`Cleared ${count} working memory entries.`, { cleared: count });
+        const count = await (scope === "global" ? globalMemory : memory).clearWorking(agent ?? undefined);
+        return success(`Cleared ${count} working memory entries.`, { scope, cleared: count });
       } catch (error) { return failure(error); }
     }
   );
@@ -878,7 +902,7 @@ export function registerOracleTools({
   // Registration lives in messagingTools.ts so the standalone messaging-only
   // server (src/mcp-messaging.ts) exposes the identical tool surface.
   registerMessagingTools(server, messages, agentRegistry);
-  registerTaskTools(server, tasks, messages);
+  registerTaskTools(server, tasks, messages, agentRegistry);
 
   // ── GitHub tools ────────────────────────────────────────────────
 

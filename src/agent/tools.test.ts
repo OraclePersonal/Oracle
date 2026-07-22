@@ -72,16 +72,18 @@ describe("agent tools", () => {
     await tool("write_file").execute({ path: "src/one.ts", content: "const foo = 1;\nconst bar = 2;" }, ctx);
     await tool("write_file").execute({ path: "src/two.ts", content: "const baz = 3;" }, ctx);
     const out = await tool("grep").execute({ query: "foo" }, ctx);
-    expect(out).toContain("src/one.ts:1:");
-    expect(out).not.toContain("two.ts");
+    const outStr = typeof out === "string" ? out : JSON.stringify(out);
+    expect(outStr.replace(/\\/g, "/")).toContain("src/one.ts:1:");
+    expect(outStr).not.toContain("two.ts");
   });
 
   test("glob matches by path substring", async () => {
     await tool("write_file").execute({ path: "src/a.test.ts", content: "x" }, ctx);
     await tool("write_file").execute({ path: "src/a.ts", content: "x" }, ctx);
     const out = await tool("glob").execute({ pattern: ".test.ts" }, ctx);
-    expect(out).toContain("a.test.ts");
-    expect(out.split("\n")).not.toContain("src/a.ts");
+    const outStr = typeof out === "string" ? out : JSON.stringify(out);
+    expect(outStr).toContain("a.test.ts");
+    expect(outStr.split("\n")).not.toContain("src/a.ts");
   });
 
   test("list_dir lists entries with trailing slash for folders", async () => {

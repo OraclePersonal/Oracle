@@ -14,6 +14,7 @@ import { TaskStore } from "../tasks/store.js";
 import { MESSAGING_INSTRUCTIONS } from "./messagingTools.js";
 import { TASK_INSTRUCTIONS } from "./taskTools.js";
 import { OrchestratorFactory } from "../orchestrator/factory.js";
+import { MemoryAdapter } from "../memory/adapter.js";
 import { VERSION } from "../version.js";
 import { registerOracleTools } from "./server.js";
 
@@ -34,6 +35,7 @@ export async function createOracleMcpServer(
   // Use OrchestratorFactory to create adapters with MCP support
   const orchestrator = new OrchestratorFactory(workspaceRoot, homeDir);
   const memory = await orchestrator.createMemoryAdapter();
+  const globalMemory = new MemoryAdapter(homeDir, "memory");
 
   // Start periodic background maintenance.
   // Default: consolidate + prune+promote every 1h,
@@ -59,6 +61,7 @@ export async function createOracleMcpServer(
     skills,
     oracles,
     memory,
+    globalMemory,
     profile: new ProfileStore(homeDir),
     messages: new MessageStore(homeDir),
     agentRegistry: new AgentRegistry(homeDir),

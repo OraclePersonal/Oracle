@@ -13,8 +13,8 @@ export class VectorStore {
   private dirty = false;
   private filePath: string;
 
-  constructor(rootDir: string) {
-    this.filePath = path.join(rootDir, ".oracle-memory", "vectors.json");
+  constructor(rootDir: string, dataDirectory = ".oracle-memory") {
+    this.filePath = path.join(rootDir, dataDirectory, "vectors.json");
   }
 
   async load(): Promise<void> {

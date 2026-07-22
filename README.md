@@ -11,6 +11,7 @@ When you fire up Claude Code, it has no memory of yesterday's work. If you start
 - **Autonomous action** — an agent sandbox that can read/write files and run commands, confined to your workspace, fully audited
 - **Inter-agent coordination** — multiple agent sessions on one machine can message each other, hand off work, wake each other up when something needs attention
 - **Task planning & verification** — a lead breaks work into assigned tasks with checklists; agents can't report "done" until their declared verification steps are actually checked off, and the lead is auto-notified when work is ready to review
+- **ASCII work board** — a lead can render the live agent roster and its main TODOs in any MCP client with `oracle_task_board`
 
 **Requires Node.js ≥ 24.** Installs three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), `oracle-msg-mcp` (messaging + task-tracking server for agents that only need to coordinate, not consult or act).
 
@@ -136,9 +137,11 @@ Every `oracle_memory_*` call updates the knowledge graph. Future queries auto-ra
 
 Auto-consolidation: finds overlapping memories by tag similarity (Jaccard ≥ 0.3) and merges them.
 
+To keep memory fast and inexpensive, Oracle normalizes tags, rejects exact duplicate content before writing, and uses local token-overlap ranking when embeddings are unavailable. These paths make no model or embedding request.
+
 Background maintenance runs every 1 hour (tunable): consolidate, prune stale low-value memories, promote frequently-used working memories to durable insights.
 
-**Storage:** `~/.oracle-memory/` — plain JSON files, no database needed.
+**Memory scopes:** project memory is stored at `<workspace>/.oracle-memory/` and stays isolated to that work. Shared, cross-project memory is stored at `~/.oracle/memory/`. Memory MCP tools use `scope: "project"` by default; pass `scope: "global"` only for durable cross-project knowledge such as team conventions or agent roles.
 
 ### 2. Consultation Engine
 
@@ -247,12 +250,27 @@ oracle task list --assignee builder --active
 
 **Storage:** `~/.oracle/tasks/` (atomic JSON, one file per task).
 
+#### ASCII work board
+
+Agent names are free-form identifiers, so a team can register names such as
+`claude-lead`, `codex-content-1`, `codex-marketing-2`, and `opencode-worker-1`.
+The Lead creates the main TODOs with `oracle_task_create`; then any client can
+show the workstream in a terminal-safe board:
+
+```
+oracle_task_board { createdBy: "claude-lead", activeOnly: true }
+```
+
+It renders the registered agent roles/activity and the Lead's active TODOs,
+grouped by status and assignee. The existing `parentId` field can link smaller
+assigned tasks to a larger Lead-created TODO.
+
 ---
 
 ## MCP Tools (60 Total)
 
 ### Memory (18 tools)
-`oracle_memory_*` — search, scored_search, list, update, clear, consolidate,
+`oracle_memory_*` — remember, search, scored_search, list, update, clear, consolidate,
 prune, promote, reflect, stats, maintenance, wiki_build/get/list, graph
 query/path/prune/stats.
 
@@ -262,8 +280,8 @@ query/path/prune/stats.
 ### Messaging & Coordination (6 tools)
 `oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`
 
-### Task Planning & Tracking (7 tools)
-`oracle_task_create`, `oracle_task_list`, `oracle_task_get`, `oracle_task_update`,
+### Task Planning & Tracking (8 tools)
+`oracle_task_create`, `oracle_task_board`, `oracle_task_list`, `oracle_task_get`, `oracle_task_update`,
 `oracle_task_checklist`, `oracle_task_submit`, `oracle_task_close`
 
 ### Identity & Config (3 tools)
@@ -334,7 +352,7 @@ CLI (src/cli.ts)
 └─ designed for scripting & local use
 
 Standalone Coordination Server (src/mcp-messaging.ts)
-├─ The 6 oracle_msg_* + 7 oracle_task_* tools
+├─ The 6 oracle_msg_* + 8 oracle_task_* tools
 ├─ No provider/memory/agent stack
 └─ for agents that only need to coordinate, not consult or act
 ```

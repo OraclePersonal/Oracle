@@ -175,7 +175,6 @@ function inferRelation(
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
-const GRAPH_DIR = ".oracle-memory/graph";
 const HOP_DECAY = [1, 0.5, 0.25];
 const MAX_HOPS = 2;
 
@@ -206,17 +205,17 @@ export class EntityGraph {
   private cache: GraphData | null = null;
   private mutex = new KeyedMutex();
 
-  constructor(rootDir: string) {
+  constructor(rootDir: string, private readonly dataDirectory = ".oracle-memory") {
     this.rootDir = rootDir;
     this.ready = this.init();
   }
 
   private async init(): Promise<void> {
-    await fs.mkdir(path.join(this.rootDir, GRAPH_DIR), { recursive: true });
+    await fs.mkdir(path.join(this.rootDir, this.dataDirectory, "graph"), { recursive: true });
   }
 
   private graphPath(): string {
-    return path.join(this.rootDir, GRAPH_DIR, "graph.json");
+    return path.join(this.rootDir, this.dataDirectory, "graph", "graph.json");
   }
 
   private async load(): Promise<GraphData> {

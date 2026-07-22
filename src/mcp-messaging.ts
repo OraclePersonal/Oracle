@@ -29,6 +29,7 @@ const server = new McpServer(
   { instructions: `${MESSAGING_INSTRUCTIONS} ${TASK_INSTRUCTIONS}` }
 );
 const messages = new MessageStore(homeDir);
-registerMessagingTools(server, messages, new AgentRegistry(homeDir));
-registerTaskTools(server, new TaskStore(homeDir), messages);
+const registry = new AgentRegistry(homeDir);
+registerMessagingTools(server, messages, registry);
+registerTaskTools(server, new TaskStore(homeDir), messages, registry);
 await server.connect(new StdioServerTransport());
