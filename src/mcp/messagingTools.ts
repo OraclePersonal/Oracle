@@ -27,7 +27,8 @@ export const MESSAGING_INSTRUCTIONS = [
   "BEFORE starting any task in this session: (1) call oracle_msg_register with a stable agent name (kebab-case, e.g. 'claude-main') and a short role; it returns the roster of other agents and your unread messages in one call. (2) Handle anything urgent in that unread list, ack it, then proceed with your task.",
   "During work: reply with replyTo to keep threads, ack every message you have handled, and check oracle_msg_inbox again at natural pauses (after finishing a subtask, before declaring done).",
   "Use oracle_msg_agents anytime to see who is registered and recently active before addressing them.",
-  "STANDBY MODE: if the user asks you to wait for / listen for / stand by for messages, call oracle_msg_inbox with wait: true (timeoutSeconds up to 600). It blocks until a message arrives. On waitTimedOut: true, immediately call it again with wait: true — keep this loop going until a message arrives or the user tells you to stop. Never end your turn just because one wait timed out."
+  "STANDBY MODE: if the user asks you to wait for / listen for / stand by for messages, call oracle_msg_inbox with wait: true (timeoutSeconds up to 600). It blocks until a message arrives. On waitTimedOut: true, immediately call it again with wait: true — keep this loop going until a message arrives or the user tells you to stop. Never end your turn just because one wait timed out.",
+  "If you entered standby and then received work (a message or task): do the work, then RETURN TO STANDBY — re-enter the wait loop for the next assignment instead of ending your turn. You leave standby only when the user says so."
 ].join(" ");
 
 /**

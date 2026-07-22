@@ -310,4 +310,66 @@ describe("Oracle MCP tools", () => {
     const notes = (detail.structuredContent as { task: { notes: unknown[] } }).task.notes;
     expect(notes.length).toBeGreaterThanOrEqual(4);
   });
+
+  test("inbox wait:true returns immediately when a message is already queued", async () => {
+    // Message lands before the recipient ever waits.
+    await client.callTool({
+      name: "oracle_msg_send",
+      arguments: { from: "waiter-sender", to: "waiter-queued", body: "already here" }
+    });
+
+    const start = Date.now();
+    const waited = await client.callTool({
+      name: "oracle_msg_inbox",
+      arguments: { agent: "waiter-queued", wait: true, timeoutSeconds: 5 }
+    });
+    // Must not sit through a poll interval when there is already something to read.
+    expect(Date.now() - start).toBeLessThan(1000);
+    const sc = waited.structuredContent as { count: number; waitTimedOut: boolean };
+    expect(sc.count).toBe(1);
+    expect(sc.waitTimedOut).toBe(false);
+  });
+
+  test("inbox wait:true unblocks when a message arrives mid-wait", async () => {
+    // Start waiting on an empty inbox, then send from a parallel promise after a
+    // short delay — the poll loop (1.5s interval) should pick it up and return.
+    const start = Date.now();
+    const [waited] = await Promise.all([
+      client.callTool({
+        name: "oracle_msg_inbox",
+        arguments: { agent: "waiter-live", wait: true, timeoutSeconds: 5 }
+      }),
+      new Promise((r) => setTimeout(r, 500)).then(() =>
+        client.callTool({
+          name: "oracle_msg_send",
+          arguments: { from: "waiter-sender", to: "waiter-live", body: "arrived mid-wait" }
+        })
+      )
+    ]);
+    const elapsed = Date.now() - start;
+    // Unblocked by the message, not by the 5s timeout.
+    expect(elapsed).toBeGreaterThanOrEqual(500);
+    expect(elapsed).toBeLessThan(4000);
+    const sc = waited.structuredContent as {
+      count: number;
+      waitTimedOut: boolean;
+      messages: Array<{ body: string }>;
+    };
+    expect(sc.count).toBe(1);
+    expect(sc.waitTimedOut).toBe(false);
+    expect(sc.messages[0].body).toBe("arrived mid-wait");
+  });
+
+  test("inbox wait:true reports waitTimedOut with an empty inbox when nothing arrives", async () => {
+    const start = Date.now();
+    const waited = await client.callTool({
+      name: "oracle_msg_inbox",
+      arguments: { agent: "waiter-silent", wait: true, timeoutSeconds: 1 }
+    });
+    // Waited out the full (short) timeout without a message.
+    expect(Date.now() - start).toBeGreaterThanOrEqual(1000);
+    const sc = waited.structuredContent as { count: number; waitTimedOut: boolean };
+    expect(sc.count).toBe(0);
+    expect(sc.waitTimedOut).toBe(true);
+  });
 });
