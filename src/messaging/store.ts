@@ -140,6 +140,35 @@ export class MessageStore {
     return this.ack(agent, unread.map((m) => m.id));
   }
 
+  /**
+   * Time-first search across the WHOLE bus (any sender/recipient) — for
+   * recalling what was discussed, e.g. "this morning's messages between
+   * frontend and backend". `since`/`until` bound the window (ISO strings;
+   * message `ts` is ISO so plain string compare is correct); `query` is an
+   * optional case-insensitive substring filter over body+subject. Read-only:
+   * never touches readBy — searching is recall, not receiving.
+   */
+  async search(opts: {
+    since?: string;
+    until?: string;
+    query?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }): Promise<AgentMessage[]> {
+    const limit = opts.limit ?? 20;
+    const q = opts.query?.toLowerCase();
+    const all = await this.readAll();
+    return all
+      .filter((m) => !opts.since || m.ts >= opts.since)
+      .filter((m) => !opts.until || m.ts <= opts.until)
+      .filter((m) => !opts.from || m.from === opts.from)
+      .filter((m) => !opts.to || m.to === opts.to)
+      .filter((m) => !q || m.body.toLowerCase().includes(q) || (m.subject ?? "").toLowerCase().includes(q))
+      .slice(-limit)
+      .reverse(); // newest first — recency matters when recalling
+  }
+
   /** Full thread for a message: walk up to the root, then collect all replies below it. */
   async thread(id: string): Promise<AgentMessage[]> {
     const all = await this.readAll();
