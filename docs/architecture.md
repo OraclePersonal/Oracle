@@ -44,14 +44,19 @@ one machine shares the same file-backed bus at `~/.oracle/`. There is no
 server to run and no network hop — writes are atomic (tmp file + rename), so
 concurrent readers never see a partial message.
 
-**Wake-up has three tiers**, weakest to strongest:
+**Wake-up has four tiers**, weakest to strongest:
 
 1. **Pull** — an agent calls `oracle_msg_inbox` whenever it wants.
-2. **Push-on-idle** — a Claude Code Stop hook (`scripts/oracle-msg-stop-hook.mjs`)
+2. **Standby wait** — `oracle_msg_inbox { wait: true }` blocks (up to
+   `timeoutSeconds`, max 600) until an unread message lands, then returns it;
+   on timeout the agent re-arms. No config — for plain windows told to
+   stand by for work.
+3. **Push-on-idle** — a Claude Code Stop hook (`scripts/oracle-msg-stop-hook.mjs`)
    blocks the agent from ending its turn while unread messages remain.
-3. **Real-time push** — `oracle msg watch --exec "<cmd>"` runs a command
-   (e.g. `tmux send-keys`) the instant a message lands, for genuinely live
-   wake-ups.
+4. **Real-time push** — an external watcher types into the agent's tmux pane
+   the instant a message lands, waking a fully idle session:
+   `scripts/oracle-tmux-launch.sh <agent>` (Claude + watcher in one command)
+   or `oracle msg watch --exec "<cmd>"` for a custom nudge.
 
 **Self-onboarding:** the MCP server sends `instructions` to every client on
 connect, teaching it to call `oracle_msg_register` and check its task list

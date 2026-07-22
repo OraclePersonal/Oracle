@@ -195,10 +195,11 @@ Every agent can:
 
 No human has to say "go check your messages." The agent learns the pattern from instructions alone.
 
-**Wake-up mechanics (3 tiers):**
+**Wake-up mechanics (4 tiers):**
 1. **Pull** — Agent calls `oracle_msg_inbox` when it feels like it.
-2. **Push-on-idle (Stop hook)** — When Claude finishes a turn and tries to stop, the hook checks for unread messages. If any, it blocks the stop → Claude reads/acks → then can close.
-3. **Real-time push (watcher)** — `oracle msg watch -a <agent> --exec "<cmd>"` — a separate process watches the bus and fires a command (e.g. `tmux send-keys`) the moment a message lands.
+2. **Standby (blocking wait)** — `oracle_msg_inbox { wait: true, timeoutSeconds: <=600 }` blocks until a message arrives; on `waitTimedOut: true` the agent re-arms. Zero config — just tell a session to "stand by for messages".
+3. **Push-on-idle (Stop hook)** — When Claude finishes a turn and tries to stop, the hook checks for unread messages. If any, it blocks the stop → Claude reads/acks → then can close.
+4. **Real-time push (watcher)** — wakes a fully idle session: `scripts/oracle-tmux-launch.sh <agent>` starts Claude + watcher in tmux (or `oracle msg watch --exec` for a custom nudge). The watcher types into the pane the moment a message lands.
 
 **CLI:**
 ```bash

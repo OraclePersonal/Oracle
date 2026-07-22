@@ -136,10 +136,18 @@ completed, not just claimed.
 
 ## Wake-up mechanics (how idle agents learn about messages)
 
-Three layers, weakest to strongest:
+Four layers, weakest to strongest:
 
 1. **Pull** — agents check `oracle_msg_inbox` at task boundaries. Zero setup.
-2. **Push-on-idle (Stop hook)** — when Claude finishes a turn, the hook
+2. **Standby (blocking wait)** — `oracle_msg_inbox { wait: true, timeoutSeconds: <=600 }`
+   blocks until an unread message lands (1.5s poll), so an agent told to
+   "stand by for work" reacts within seconds. On timeout it returns
+   `waitTimedOut: true`; the agent should immediately re-call with
+   `wait: true` (the server instructions teach this loop as STANDBY MODE).
+   Zero setup — ideal for plain windows with no watcher. Trade-off: the
+   agent is parked in the call and can't do other work while waiting.
+   CLI equivalent: `oracle msg inbox -a me --wait --timeout 120`.
+3. **Push-on-idle (Stop hook)** — when Claude finishes a turn, the hook
    blocks the stop if unread messages exist, so the agent reads/acks before
    idling. Register in `.claude/settings.json`:
 
@@ -154,16 +162,34 @@ Three layers, weakest to strongest:
 
    Loop-safe: it passes `stop_hook_active` through, fails open on any error,
    and is a no-op without an agent name.
-3. **Real-time push (watcher)** — a separate process fires the moment a
-   message lands; `--exec` runs per message with `ORACLE_MSG_ID/FROM/TO/
-   SUBJECT/BODY` env vars. Point it at whatever wakes the live session,
-   e.g. tmux:
+4. **Real-time push (watcher)** — a separate process fires the moment a
+   message lands and types a nudge into the agent's tmux pane, waking a
+   fully idle session. Two ready-made scripts (verified Windows + WSL):
+
+   ```bash
+   # inside WSL — launches claude.exe (Windows auth reused) + watcher in tmux:
+   ./scripts/oracle-tmux-launch.sh <agent-name>
+   # or run the watcher alone against any pane:
+   node scripts/oracle-tmux-push-watcher.mjs --agent <name> --pane <sess:win.pane> \
+     --home /mnt/c/Users/<you>/.oracle   # share the Windows bus
+   ```
+
+   Generic alternative via the CLI (`--exec` runs per message with
+   `ORACLE_MSG_ID/FROM/TO/SUBJECT/BODY` env vars):
 
    ```bash
    # POSIX ($VAR); on Windows --exec runs under cmd.exe → use %VAR%
    oracle msg watch -a codex \
      --exec 'tmux send-keys -t claude-pane "Oracle msg from $ORACLE_MSG_FROM — check oracle_msg_inbox" Enter'
    ```
+
+**Which tier for which session:**
+
+| Session type | Tier |
+|---|---|
+| You're actively chatting with it | 1 or 3 (hook checks at each turn end) |
+| Plain window told to "wait for work" | 2 (standby wait — no config) |
+| Detached background worker | 4 (tmux watcher — wakes from idle) |
 
 ## Setup checklist (once per machine)
 

@@ -65,7 +65,9 @@ then `node dist/cli.js msg ...` or a linked `oracle` bin).
 
 4. Waiting on a reply and out of other work:
      CLI:  oracle msg inbox -a <me> --wait --timeout 120   ← blocks, no poll loop
-     MCP:  exit the turn and let the Stop hook / watcher wake you.
+     MCP:  oracle_msg_inbox { agent: "<me>", wait: true, timeoutSeconds: 600 }
+           ← blocks until a message lands; on waitTimedOut: true call it again
+             (STANDBY MODE) — don't end the turn just because one wait expired.
 ```
 
 **Scripting tips (learned from live two-agent runs):**
