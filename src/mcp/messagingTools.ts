@@ -245,4 +245,68 @@ export function registerMessagingTools(server: McpServer, messages: MessageStore
       } catch (error) { return failure(error); }
     }
   );
+
+  server.registerTool(
+    "oracle_msg_heartbeat",
+    {
+      title: "Agent Heartbeat",
+      description:
+        "Update your presence on the agent bus. Call this periodically (every ~5 min) during long work so other agents can see you are still active. " +
+        "Agents that haven't heartbeated in 20+ minutes are reported as stale by oracle_msg_stale.",
+      inputSchema: {
+        name: z.string().min(1).describe("Your agent name")
+      }
+    },
+    async ({ name }) => {
+      try {
+        await registry.touch(name);
+        const roster = await registry.list();
+        const me = roster.find((a) => a.name === name);
+        return success(
+          `Heartbeat recorded for ${name}.${me?.active ? " Active." : ""}`,
+          { name, active: me?.active ?? false, lastSeen: me?.lastSeen ?? null }
+        );
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_msg_stale",
+    {
+      title: "Find Stale Agents",
+      description:
+        "List agents that haven't heartbeated in 20+ minutes — likely crashed or abandoned. Use the returned names to clean up registrations or reassign work.",
+      inputSchema: {
+        windowMinutes: z.number().int().min(1).max(1440).optional().describe("Inactivity window (default 20 min)")
+      }
+    },
+    async ({ windowMinutes }) => {
+      try {
+        const windowMs = (windowMinutes ?? 20) * 60_000;
+        const stale = await registry.stale(windowMs);
+        const lines = stale.length
+          ? stale.map((a) => `${a.name}${a.role ? ` — ${a.role}` : ""} (last seen ${a.lastSeen})`).join("\n")
+          : "No stale agents.";
+        return success(lines, { count: stale.length, stale: stale as unknown as Record<string, unknown>[] });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_msg_unregister",
+    {
+      title: "Unregister Agent",
+      description:
+        "Remove your agent registration on graceful shutdown. Other agents will stop seeing you in the roster.",
+      inputSchema: {
+        name: z.string().min(1).describe("Your agent name")
+      }
+    },
+    async ({ name }) => {
+      try {
+        const removed = await registry.unregister(name);
+        return success(removed ? `Unregistered ${name}.` : `No registration found for ${name}.`, { removed });
+      } catch (error) { return failure(error); }
+    }
+  );
 }

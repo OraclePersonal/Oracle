@@ -76,9 +76,12 @@ cache.invalidatePattern("skill-.*");
 
 ## Tool Categories
 
-### 1. Ask & Agent (2 tools)
+### 1. Ask & Agent (5 tools)
 - `oracle_ask` — Single entry point for Q&A: freeform question, or "look at these files and tell me X" when `files` is passed
-- `oracle_agent` — Autonomous coding loop: reads/writes/edits files, searches, and runs shell commands in a tool-use loop until the task is done (see [`AGENT.md`](AGENT.md))
+- `oracle_agent` — Autonomous coding loop (see [`AGENT.md`](AGENT.md))
+- `oracle_agent_checkpoints` — List saved agent loop checkpoints
+- `oracle_agent_checkpoint_delete` — Delete a checkpoint by id
+- `oracle_skills` — List available skills
 
 **Standards (`oracle_ask`):**
 - Question max 50KB
@@ -94,6 +97,9 @@ cache.invalidatePattern("skill-.*");
 - All filesystem tools confined to the workspace root (traversal rejected)
 - Emits per-turn MCP progress notifications when a progress token is passed
 - Requires an agent-capable provider (`anthropic` or `opencode`); otherwise returns `ORACLE_AGENT_UNAVAILABLE`
+- Optional `resumeId` parameter: resume from a saved checkpoint after a crash
+- Returns `checkpointId` on each run; save it to resume later
+- Checkpoint persisted after every tool-calling turn under `~/.oracle/checkpoints/`
 
 ### 2. Memory (8 tools)
 - `oracle_memory_list` — Recall entries
@@ -236,12 +242,15 @@ Example:
 |---|---|---|---|
 | `oracle_ask` | 10/min | No | — |
 | `oracle_agent` | 5/min | No | — |
+| `oracle_agent_checkpoints` | — | Yes | 1min |
+| `oracle_agent_checkpoint_delete` | — | No | — |
 | `oracle_memory_*` | — | Yes (update clears) | 5min |
 | `oracle_docs_search` | 20/min | Yes | 10min |
 | `oracle_web_*` | 5/min | Yes (fetch) | 30min |
 | `oracle_identity_*` | — | Yes | session |
 | `oracle_skills` | — | Yes | 5min |
 | `oracle_doctor` | — | No | — |
+| `oracle_msg_*` (messaging) | — | No | — |
 
 ## Error Handling Checklist
 
@@ -351,5 +360,5 @@ npm test
 ---
 
 **Last updated:** 2026-07-20  
-**Tool count:** 26  
+**Tool count:** 31  
 **MCP version:** OpenAI-compatible (MCP SDK 0.8+)

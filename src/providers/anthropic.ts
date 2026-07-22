@@ -244,9 +244,14 @@ export class AnthropicProvider implements Provider, AgentProvider {
     });
 
     let status = batch;
-    while (status.processing_status !== "ended") {
+    const maxPolls = 120; // 120 * 5s = 10 minutes max
+    for (let poll = 0; poll < maxPolls; poll++) {
+      if (status.processing_status === "ended") break;
       await new Promise((resolve) => setTimeout(resolve, 5000));
       status = await client.messages.batches.retrieve(batch.id);
+    }
+    if (status.processing_status !== "ended") {
+      throw new Error(`Batch ${batch.id} did not complete within the polling timeout.`);
     }
 
     const results = new Map<string, ProviderResponse>();

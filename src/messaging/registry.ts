@@ -106,4 +106,24 @@ export class AgentRegistry {
       .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
       .map((r) => ({ ...r, active: now - Date.parse(r.lastSeen) < ACTIVE_WINDOW_MS }));
   }
+
+  /**
+   * Return agents whose lastSeen is older than `windowMs`. Defaults to 2x the
+   * active window (20 min). Use to detect crashed/abandoned agents.
+   */
+  async stale(windowMs: number = ACTIVE_WINDOW_MS * 2): Promise<AgentRecord[]> {
+    const all = await this.list();
+    const cutoff = Date.now() - windowMs;
+    return all.filter((a) => Date.parse(a.lastSeen) < cutoff);
+  }
+
+  /** Remove an agent's registration file. Used on graceful shutdown. */
+  async unregister(name: string): Promise<boolean> {
+    try {
+      await fs.rm(this.filePath(name));
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }

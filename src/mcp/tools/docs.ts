@@ -1,0 +1,87 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { serializeOracleError } from "../../errors.js";
+import { listDocs, searchDocs, addDoc, removeDoc } from "../../docs/reader.js";
+
+function success(text: string, structuredContent: Record<string, unknown>) {
+  return { content: [{ type: "text" as const, text }], structuredContent };
+}
+
+function failure(error: unknown) {
+  const serialized = serializeOracleError(error);
+  return {
+    isError: true,
+    content: [{ type: "text" as const, text: JSON.stringify(serialized) }],
+    structuredContent: serialized as unknown as Record<string, unknown>
+  };
+}
+
+export function registerDocsTools(server: McpServer, workspaceRoot: string): void {
+  server.registerTool(
+    "oracle_docs_list",
+    {
+      title: "List Docs",
+      description: "List available documentation files in .oracle/docs/.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const docs = await listDocs(workspaceRoot);
+        const summary = docs.map((d) => ({ name: d.name, size: d.size }));
+        return success(JSON.stringify(summary, null, 2), { count: docs.length, docs: summary });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_docs_search",
+    {
+      title: "Search Docs",
+      description: "BM25-ranked passage search over .oracle/docs/ — chunked by heading, not whole files.",
+      inputSchema: {
+        query: z.string().min(1),
+        limit: z.number().int().min(1).max(20).default(5),
+      }
+    },
+    async ({ query, limit }) => {
+      try {
+        const results = await searchDocs(workspaceRoot, query, limit);
+        return success(JSON.stringify(results, null, 2), { count: results.length, results });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_docs_add",
+    {
+      title: "Add Doc",
+      description: "Add or overwrite a file in .oracle/docs/ (.md, .txt, .json, .mdx).",
+      inputSchema: {
+        name: z.string().min(1).describe("Relative filename, e.g. 'auth/oauth.md'"),
+        content: z.string()
+      }
+    },
+    async ({ name, content }) => {
+      try {
+        const filePath = await addDoc(workspaceRoot, name, content);
+        return success(`Added ${name}`, { path: filePath });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_docs_remove",
+    {
+      title: "Remove Doc",
+      description: "Delete a file from .oracle/docs/.",
+      inputSchema: { name: z.string().min(1) }
+    },
+    async ({ name }) => {
+      try {
+        const removed = await removeDoc(workspaceRoot, name);
+        if (!removed) return failure(new Error(`Doc not found: ${name}`));
+        return success(`Removed ${name}`, { name });
+      } catch (error) { return failure(error); }
+    }
+  );
+}

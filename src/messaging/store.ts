@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { withRetry } from "./retry.js";
 
 /**
  * File-backed inter-agent message store. Oracle acts as the relay: every
@@ -11,6 +12,10 @@ import crypto from "node:crypto";
  * One JSON file per message, written atomically (tmp + rename) so concurrent
  * readers never see a partial file. Read state lives inside the message as a
  * `readBy` list, updated with the same atomic pattern.
+ *
+ * I/O operations are wrapped with exponential-backoff retry for transient
+ * system errors. Messages for agents that disappear can be pruned to the
+ * dead-letter directory via `prune()`.
  */
 
 export interface AgentMessage {
@@ -56,8 +61,8 @@ export class MessageStore {
 
   private async writeAtomic(filePath: string, msg: AgentMessage): Promise<void> {
     const tmp = `${filePath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(msg, null, 2), "utf8");
-    await fs.rename(tmp, filePath);
+    await withRetry(() => fs.writeFile(tmp, JSON.stringify(msg, null, 2), "utf8"));
+    await withRetry(() => fs.rename(tmp, filePath));
   }
 
   async send(input: SendInput): Promise<AgentMessage> {
@@ -79,7 +84,8 @@ export class MessageStore {
   async get(id: string): Promise<AgentMessage | null> {
     const filePath = this.filePath(id); // validates id before any fs access
     try {
-      const msg = JSON.parse(await fs.readFile(filePath, "utf8")) as AgentMessage;
+      const raw = await withRetry(() => fs.readFile(filePath, "utf8"));
+      const msg = JSON.parse(raw) as AgentMessage;
       // Normalize shape: a hand-written or older-schema file missing readBy
       // must not poison every inbox call that touches it (verified live —
       // inbox() threw on m.readBy.includes and lost the whole inbox).
@@ -93,7 +99,7 @@ export class MessageStore {
   private async readAll(): Promise<AgentMessage[]> {
     let entries: string[];
     try {
-      entries = await fs.readdir(this.dir());
+      entries = await withRetry(() => fs.readdir(this.dir()));
     } catch {
       return [];
     }
@@ -194,5 +200,99 @@ export class MessageStore {
       for (const m of all) if (m.replyTo === current) queue.push(m.id);
     }
     return result.sort((a, b) => a.ts.localeCompare(b.ts));
+  }
+
+  // ─── Dead-letter queue ────────────────────────────────────────────
+
+  private deadLetterDir(): string {
+    return path.join(this.homeDir, "dead-letter");
+  }
+
+  /**
+   * Move a message to the dead-letter directory. Idempotent — returns false
+   * if the message does not exist or is already dead.
+   */
+  async deadLetter(id: string): Promise<boolean> {
+    this.filePath(id); // validates id
+    const src = this.filePath(id);
+    await fs.mkdir(this.deadLetterDir(), { recursive: true });
+    const dst = path.join(this.deadLetterDir(), `${id}.json`);
+    try {
+      await withRetry(() => fs.rename(src, dst));
+      return true;
+    } catch {
+      return false; // already gone or concurrent move
+    }
+  }
+
+  /**
+   * Prune messages from the live bus:
+   * - `orphanDays`: messages addressed to agents whose lastSeen is older than
+   *   this threshold. Pass an agent registry list to check liveness, or pass
+   *   `staleRecipients` directly for bulk dead-lettering.
+   * - `maxAgeDays`: any message older than this is moved (regardless of read state).
+   *
+   * Returns the count of pruned messages.
+   */
+  async prune(opts: {
+    staleRecipients?: string[];
+    maxAgeDays?: number;
+  }): Promise<number> {
+    const all = await this.readAll();
+    const now = Date.now();
+    const staleRecipients = new Set(opts.staleRecipients ?? []);
+    const maxAge = opts.maxAgeDays ? opts.maxAgeDays * 86400_000 : 0;
+
+    let pruned = 0;
+    for (const msg of all) {
+      const tooOld = maxAge > 0 && now - new Date(msg.ts).getTime() > maxAge;
+      const orphan = staleRecipients.size > 0 && staleRecipients.has(msg.to);
+      if (tooOld || orphan) {
+        if (await this.deadLetter(msg.id)) pruned++;
+      }
+    }
+    return pruned;
+  }
+
+  /** Count and total size of dead-letter files. */
+  async deadLetterStats(): Promise<{ count: number; sizeBytes: number }> {
+    let entries: string[];
+    try {
+      entries = await withRetry(() => fs.readdir(this.deadLetterDir()));
+    } catch {
+      return { count: 0, sizeBytes: 0 };
+    }
+    const names = entries.filter((f) => f.endsWith(".json"));
+    let sizeBytes = 0;
+    for (const name of names) {
+      try {
+        const stat = await fs.stat(path.join(this.deadLetterDir(), name));
+        sizeBytes += stat.size;
+      } catch { /* best-effort */ }
+    }
+    return { count: names.length, sizeBytes };
+  }
+
+  /** Permanently delete dead-letter files older than `maxAgeDays`. */
+  async purgeDeadLetter(maxAgeDays: number = 30): Promise<number> {
+    let entries: string[];
+    try {
+      entries = await withRetry(() => fs.readdir(this.deadLetterDir()));
+    } catch {
+      return 0;
+    }
+    const cutoff = Date.now() - maxAgeDays * 86400_000;
+    let removed = 0;
+    for (const name of entries) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const stat = await fs.stat(path.join(this.deadLetterDir(), name));
+        if (stat.mtimeMs < cutoff) {
+          await fs.rm(path.join(this.deadLetterDir(), name));
+          removed++;
+        }
+      } catch { /* best-effort */ }
+    }
+    return removed;
   }
 }

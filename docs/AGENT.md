@@ -100,8 +100,9 @@ The `oracle_agent` tool exposes the same capability to any MCP client:
   "name": "oracle_agent",
   "arguments": {
     "prompt": "add input validation to the config loader and a test for it",
-    "readOnly": false,   // optional; true = investigate only
-    "maxSteps": 20        // optional; 1..50
+    "readOnly": false,         // optional; true = investigate only
+    "maxSteps": 20,            // optional; 1..50
+    "resumeId": "cp-..."       // optional; resume from a checkpoint
   }
 }
 ```
@@ -114,9 +115,46 @@ Structured result:
   "turns": 6,
   "stoppedOnLimit": false,
   "steps": [ { "turn": 1, "text": "...", "toolsUsed": ["read_file"] }, ... ],
-  "usage": { "inputTokens": 12000, "outputTokens": 3400 }
+  "usage": { "inputTokens": 12000, "outputTokens": 3400 },
+  "checkpointId": "cp-20260722-a1b2c3d4"   // save this to resume later
 }
 ```
+
+### Checkpoint & Resume
+
+If the agent process crashes mid-run (network blip, OOM, accidental kill), the
+work is **not lost**. The agent loop saves a checkpoint after every tool-calling
+turn. Resume from the last checkpoint by passing `resumeId` with the
+`checkpointId` from a previous (interrupted) run.
+
+```jsonc
+{
+  "name": "oracle_agent",
+  "arguments": {
+    "prompt": "continue implementing the feature",
+    "resumeId": "cp-20260722-a1b2c3d4"
+  }
+}
+```
+
+The agent reconstructs the full transcript, skips already-completed turns, and
+continues from where it left off. Tool implementations are rebuilt from the
+current environment — only the transcript is persisted, not runtime state.
+
+**Note on duplicate work:** file changes made before the crash are already
+applied. The model sees the full transcript including prior tool calls and
+results, so it will not redo completed work unless the task explicitly asks for
+it.
+
+Two supporting MCP tools:
+
+| Tool | Purpose |
+|---|---|
+| `oracle_agent_checkpoints` | List saved checkpoints with timestamps |
+| `oracle_agent_checkpoint_delete` | Remove a checkpoint by id |
+
+Checkpoint files live in `~/.oracle/checkpoints/`. They are automatically
+deleted on successful completion.
 
 If the configured provider can't run the agent, `oracle_agent` returns an
 `ORACLE_AGENT_UNAVAILABLE` error explaining that you need `anthropic` or
@@ -146,9 +184,10 @@ Set the provider in `.oracle/config.json`:
 | `src/agent/types.ts` | Neutral types (`AgentMessage`, `ToolCall`, `AgentTool`, `AgentProvider`) |
 | `src/agent/tools.ts` | The 8 tool executors + workspace confinement |
 | `src/agent/audit.ts` | Audit trail: records every file mutation with a content hash |
-| `src/agent/loop.ts` | Provider-agnostic tool-use loop |
+| `src/agent/loop.ts` | Provider-agnostic tool-use loop + checkpoint save/resume |
+| `src/agent/checkpoint.ts` | Disk-backed checkpoint store for crash recovery |
 | `src/agent/service.ts` | `AgentService` — wires tools + provider, runs the loop |
 | `src/providers/anthropic.ts` | `runAgentTurn` via native tool use |
 | `src/providers/openai.ts` | `runAgentTurn` via OpenAI function calling (opencode) |
-| `src/mcp/server.ts` | `oracle_agent` MCP tool |
+| `src/mcp/server.ts` | `oracle_agent` + `oracle_agent_checkpoints` + `oracle_agent_checkpoint_delete` MCP tools |
 | `src/cli.ts` | `oracle agent` command |

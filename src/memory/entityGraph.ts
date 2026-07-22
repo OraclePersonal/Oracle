@@ -300,7 +300,7 @@ export class EntityGraph {
 
     for (let hop = 1; hop <= MAX_HOPS && frontier.size > 0; hop++) {
       const next = new Set<string>();
-      const decay = HOP_DECAY[hop] ?? 0;
+      const decay = HOP_DECAY[hop - 1] ?? 0;
       for (const node of frontier) {
         for (const edge of data.edges) {
           const neighbor =

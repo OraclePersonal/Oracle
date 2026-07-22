@@ -358,6 +358,7 @@ export class MemoryAdapter implements MemoryPort {
         const id = file.replace(".json", "");
         await fs.unlink(path.join(dir, file));
         if (USE_OLLAMA) this.vectors.remove(id).catch(() => {});
+        this.entityGraph.removeMemory(id).catch(() => {});
         count++;
       }
     } catch { /* ignore */ }

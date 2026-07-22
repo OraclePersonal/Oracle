@@ -138,6 +138,7 @@ program
     });
     console.log(result.finalText);
     if (result.stoppedOnLimit) console.error(`Stopped after ${options.maxSteps} turns.`);
+    if (result.checkpointId) console.error(`[checkpoint: ${result.checkpointId}]`);
   });
 
 const oracleCmd = program.command("oracle").description("Manage oracle profiles");

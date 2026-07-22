@@ -1,103 +1,112 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ConsultService } from "../../core/consult.js";
-import type { SkillRegistry } from "../../skills/registry.js";
-import type { ProfileStore } from "../../identity/profile.js";
 import type { ProjectConfig } from "../../config/project.js";
-import { OracleToolError, ErrorCode } from "../oracleErrors.js";
-import { ToolDefinition, toolSuccess } from "../toolBuilder.js";
-import { DEFAULT_SYSTEM_PROMPT } from "../../context/bundle.js";
+import type { MemoryPort } from "../../orchestrator/ports.js";
+import { serializeOracleError } from "../../errors.js";
+import { getConversationContext, recordSelfLog } from "../../core/selfMemory.js";
+import { loadSoul } from "../../core/souls.js";
+import { buildOracleSystemPrompt } from "../../core/systemPrompt.js";
+import { searchDocs } from "../../docs/reader.js";
 
-const ConsultOutputSchema = z.object({
-  success: z.boolean(),
-  data: z
-    .object({
-      output: z.string().describe("The consultant's analysis or answer"),
-      sessionId: z.string().describe("Session ID for recalling this consult"),
-      filesIncluded: z.number().describe("Number of files analyzed"),
-      metadata: z.record(z.string(), z.unknown()).optional(),
-    })
-    .optional(),
-  error: z.string().optional(),
-});
+function success(text: string, structuredContent: Record<string, unknown>) {
+  return { content: [{ type: "text" as const, text }], structuredContent };
+}
 
-export function createConsultTool(
-  service: ConsultService,
-  config: ProjectConfig,
-  workspaceRoot: string,
-  providerId: string,
-  skills: SkillRegistry,
-  profile: ProfileStore
-): ToolDefinition {
+function failure(error: unknown) {
+  const serialized = serializeOracleError(error);
   return {
-    name: "oracle_consult",
-    category: "consult",
-    title: "Consult Oracle",
-    description:
-      "Analyze project files with a focused engineering skill. Supply a prompt and optional file patterns; Oracle reads files matching the patterns, applies the chosen skill, and provides structured analysis.",
-    inputSchema: z.object({
-      prompt: z
-        .string()
-        .min(1)
-        .max(50000)
-        .describe("The question or task you want Oracle to analyze"),
-      skill: z
-        .string()
-        .optional()
-        .describe("Engineering skill to apply (review, debug, security, etc.). Defaults to 'review'"),
-      files: z
-        .array(z.string())
-        .optional()
-        .describe("File paths or glob patterns (e.g., ['src/**/*.ts', '!*.test.ts'])"),
-      previousSessionId: z
-        .string()
-        .optional()
-        .describe("Session ID to include previous analysis for continuity"),
-    }),
-    outputSchema: ConsultOutputSchema,
-    keywords: ["analyze", "review", "code-analysis"],
-    rateLimitPerMin: 10,
-    cacheable: false,
-    handler: async ({ prompt, skill, files, previousSessionId }) => {
-      const skillName = skill ?? "review";
-      const selected = skills.get(skillName);
-      if (!selected) {
-        throw new OracleToolError(
-          ErrorCode.INVALID_SKILL,
-          `Unknown skill: ${skillName}`,
-          `Available: ${skills.names().join(", ")}`
-        );
-      }
-
-      const patterns = [...(files ?? config.include), ...config.exclude.map((item) => `!${item}`)];
-      let previousResponseId: string | undefined;
-      if (previousSessionId) {
-        const prev = await service.session(previousSessionId);
-        previousResponseId = prev?.responseId;
-      }
-
-      const basePrompt = skills.compose(skillName, DEFAULT_SYSTEM_PROMPT);
-      const personalCtx = await profile.buildPersonalContext();
-      const systemPrompt = personalCtx ? `${personalCtx}\n\n${basePrompt}` : basePrompt;
-
-      const result = await service.consult({
-        prompt,
-        preset: skillName,
-        provider: providerId,
-        files: patterns,
-        model: selected.model ?? config.model,
-        cwd: workspaceRoot,
-        maxFileSizeBytes: config.maxFileSizeBytes,
-        maxInputBytes: config.maxInputBytes,
-        previousResponseId,
-        systemPrompt,
-      });
-
-      return toolSuccess({
-        output: result.output,
-        sessionId: result.sessionId,
-        filesIncluded: result.files.length,
-        metadata: { provider: providerId, preset: skillName },
-      });
-    },
+    isError: true,
+    content: [{ type: "text" as const, text: JSON.stringify(serialized) }],
+    structuredContent: serialized as unknown as Record<string, unknown>
   };
+}
+
+export function registerConsultTool(
+  server: McpServer,
+  deps: {
+    service: ConsultService;
+    config: ProjectConfig;
+    workspaceRoot: string;
+    providerId: string;
+    memory: MemoryPort;
+    soulsDir: string;
+  }
+): void {
+  server.registerTool(
+    "oracle_ask",
+    {
+      title: "Ask Oracle",
+      description: "Ask Oracle anything — a question, or 'look at these files and tell me X'. One entry point: pass `files` when the answer needs actual code, omit it for a plain conversation. Pass `conversationId` across calls in the same exchange so Oracle remembers what it already told you.",
+      inputSchema: {
+        question: z.string().min(1).describe("Your question or what you're stuck on"),
+        soul: z.string().optional().describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),
+        context: z.string().optional().describe("Additional context: code snippets, error messages, what you've tried"),
+        files: z.array(z.string()).optional().describe("File paths or glob patterns to read and include, when the question needs real code (e.g. ['src/**/*.ts'])"),
+        conversationId: z.string().optional().describe("Stable id for this exchange — pass the same value across multiple oracle_ask calls so Oracle recalls what it already said"),
+        include_docs: z.boolean().optional().describe("Search .oracle/docs/ for relevant documentation and include as context"),
+        doc_search: z.string().optional().describe("Specific doc query (defaults to using the question itself)")
+      }
+    },
+    async ({ question, soul, context, files, conversationId, include_docs, doc_search }) => {
+      try {
+        if (soul !== undefined) {
+          soul = soul.trim();
+          if (soul === "") soul = undefined;
+        }
+        let soulName: string;
+        let soulPrompt: string | undefined;
+        if (soul) {
+          soulName = soul;
+          soulPrompt = await loadSoul(soulName, deps.soulsDir);
+        } else {
+          soulName = "auto";
+        }
+        const systemPrompt = buildOracleSystemPrompt(soulPrompt);
+        let ctxBlock = context ? `\n\n## Context from the asking agent\n${context}` : "";
+
+        if (conversationId) {
+          ctxBlock += await getConversationContext(deps.memory, conversationId);
+        }
+
+        if (include_docs) {
+          const docQuery = doc_search ?? question;
+          const matched = await searchDocs(deps.workspaceRoot, docQuery, 5);
+          if (matched.length > 0) {
+            const docsBlock = matched
+              .map((d) => `### ${d.name}${d.heading ? ` — ${d.heading}` : ""}\n${d.snippet}`)
+              .join("\n\n");
+            ctxBlock += `\n\n## Documentation from .oracle/docs/\n${docsBlock}\n\n(Match: "${docQuery}")`;
+          }
+        }
+
+        const prompt = `${ctxBlock}\n\n## Question\n${question}`;
+        const hasFiles = files !== undefined && files.length > 0;
+        const result = await deps.service.consult({
+          prompt,
+          preset: "review",
+          provider: deps.providerId,
+          files: hasFiles ? files : [],
+          model: deps.config.model,
+          cwd: deps.workspaceRoot,
+          maxFileSizeBytes: deps.config.maxFileSizeBytes,
+          maxInputBytes: deps.config.maxInputBytes,
+          systemPrompt,
+          allowEmptyFiles: !hasFiles,
+        });
+
+        if (conversationId) {
+          await recordSelfLog(deps.memory, conversationId, { question, answerSummary: result.output.slice(0, 400) });
+        }
+
+        return success(result.output, {
+          soul: soulName,
+          sessionId: result.sessionId,
+          filesIncluded: result.files.length
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    }
+  );
 }

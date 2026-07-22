@@ -4,6 +4,7 @@ import type { AgentProvider, AgentTool } from "./types.js";
 import { McpClientManager } from "../orchestrator/mcp-client-manager.js";
 import { loadProjectConfig } from "../config/project.js";
 import { SkillRegistry } from "../skills/registry.js";
+import { CheckpointStore } from "./checkpoint.js";
 import os from "node:os";
 import path from "node:path";
 
@@ -30,6 +31,8 @@ export interface AgentRequest {
   onStep?: (step: AgentStep) => void | Promise<void>;
   /** Override the toolset (mainly for tests). */
   tools?: AgentTool[];
+  /** Resume from a previous checkpoint id. Saves a new checkpoint each turn. */
+  resumeId?: string;
 }
 
 /**
@@ -80,6 +83,9 @@ export class AgentService {
       }
     }
 
+    const oracleDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
+    const checkpointStore = new CheckpointStore(oracleDir);
+
     return runAgentLoop({
       provider: this.provider,
       model: request.model,
@@ -89,6 +95,8 @@ export class AgentService {
       context: { workspaceRoot: request.workspaceRoot, readOnly },
       maxSteps: request.maxSteps,
       onStep: request.onStep,
+      checkpointStore,
+      resumeCheckpointId: request.resumeId,
     });
   }
 }

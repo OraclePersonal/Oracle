@@ -8,6 +8,8 @@ import type {
 } from "./types.js";
 import { AuditTrail } from "./audit.js";
 import { logAgent, logTool } from "../observability/log.js";
+import crypto from "node:crypto";
+import type { CheckpointStore } from "./checkpoint.js";
 
 export interface AgentStep {
   /** 1-based index of this assistant turn. */
@@ -30,6 +32,8 @@ export interface AgentRunResult {
   usage: { inputTokens: number; outputTokens: number };
   /** Audit trail of file operations performed by the agent. */
   audit: { getChanges(): any[]; getSummary(): any };
+  /** Checkpoint id, if checkpointing was enabled. Save this to resume later. */
+  checkpointId?: string;
 }
 
 export interface RunAgentLoopParams {
@@ -43,6 +47,12 @@ export interface RunAgentLoopParams {
   maxSteps?: number;
   /** Optional callback fired after each turn (for progress reporting). */
   onStep?: (step: AgentStep) => void | Promise<void>;
+  /**
+   * Enable checkpoint persistence. Provide a CheckpointStore and the id of a
+   * checkpoint to resume from, or a new id to create a fresh checkpoint chain.
+   */
+  checkpointStore?: CheckpointStore;
+  resumeCheckpointId?: string;
 }
 
 /**
@@ -54,27 +64,98 @@ export interface RunAgentLoopParams {
  * translation, and `tools` own all side effects (confined by `context`).
  */
 export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRunResult> {
-  const { provider, model, system, prompt, tools, context } = params;
+  const { provider, model, system, prompt, tools, context, checkpointStore } = params;
   const maxSteps = params.maxSteps ?? 20;
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
   const audit = new AuditTrail();
+  const toolNames = tools.map((t) => t.name).sort();
 
-  logAgent("start", { model, toolCount: tools.length, maxSteps });
+  // ── Resume from checkpoint? ────────────────────────────────────────
+  let checkpointId = params.resumeCheckpointId;
+  let transcript: AgentMessage[];
+  let steps: AgentStep[];
+  let inputTokens: number;
+  let outputTokens: number;
+  let finalText: string;
+  let startTurn: number;
 
-  const userContent = typeof prompt === "string" ? [{ type: "text" as const, text: prompt }] : prompt;
-  const transcript: AgentMessage[] = [{ role: "user", content: userContent }];
-  const steps: AgentStep[] = [];
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let finalText = "";
+  if (checkpointId && checkpointStore) {
+    const cp = await checkpointStore.load(checkpointId);
+    if (cp) {
+      // Verify the tool environment hasn't changed in incompatible ways
+      const cpTools: string[] = cp.toolNames ?? [];
+      if (cpTools.length && JSON.stringify(cpTools) !== JSON.stringify(toolNames)) {
+        logAgent("resume-warn", { checkpointId, msg: "tool set differs from checkpoint" });
+      }
+      transcript = cp.transcript;
+      steps = [];
+      inputTokens = cp.usage.inputTokens;
+      outputTokens = cp.usage.outputTokens;
+      finalText = transcript
+        .filter((m): m is Extract<AgentMessage, { role: "assistant" }> => m.role === "assistant")
+        .map((m) => m.text)
+        .filter(Boolean)
+        .pop() ?? "";
+      startTurn = cp.turn + 1;
+      logAgent("resume", { checkpointId, fromTurn: startTurn, maxSteps });
+    } else {
+      logAgent("resume-miss", { checkpointId });
+      checkpointId = undefined;
+      startTurn = 1;
+      const userContent = typeof prompt === "string" ? [{ type: "text" as const, text: prompt }] : prompt;
+      transcript = [{ role: "user", content: userContent }];
+      steps = [];
+      inputTokens = 0;
+      outputTokens = 0;
+      finalText = "";
+    }
+  } else {
+    startTurn = 1;
+    const userContent = typeof prompt === "string" ? [{ type: "text" as const, text: prompt }] : prompt;
+    transcript = [{ role: "user", content: userContent }];
+    steps = [];
+    inputTokens = 0;
+    outputTokens = 0;
+    finalText = "";
+  }
+
+  // Allocate a new checkpoint id for fresh runs
+  if (!checkpointId && checkpointStore) {
+    const ts = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 17);
+    checkpointId = `cp-${ts}-${crypto.randomBytes(4).toString("hex")}`;
+  }
+
   let stoppedOnLimit = true;
+
+  logAgent("start", { model, toolCount: tools.length, maxSteps, resumeFrom: startTurn > 1 ? startTurn : undefined });
 
   // Inject audit trail into context for tools to record
   const contextWithAudit = { ...context, audit };
 
-  for (let turn = 1; turn <= maxSteps; turn++) {
+  for (let turn = startTurn; turn <= maxSteps; turn++) {
     const turnStart = Date.now();
-    const result = await provider.runAgentTurn({ model, system, messages: transcript, tools });
+    let result;
+    try {
+      result = await provider.runAgentTurn({ model, system, messages: transcript, tools });
+    } catch (err) {
+      // Save a checkpoint before re-throwing so a crash mid-run can resume
+      if (checkpointId && checkpointStore) {
+        const checkpoint = {
+          id: checkpointId,
+          system,
+          model,
+          transcript: [...transcript],
+          turn: turn - 1, // last completed turn
+          maxSteps,
+          toolNames,
+          usage: { inputTokens, outputTokens },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        await checkpointStore.save(checkpoint).catch(() => {});
+      }
+      throw err;
+    }
     const turnMs = Date.now() - turnStart;
     const auditSummary = audit.getSummary();
     logAgent("audit-summary", { turn, mutations: auditSummary.mutations, filesChanged: auditSummary.filesChanged });
@@ -85,11 +166,18 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
     const { text, toolCalls } = result.message;
     const step: AgentStep = { turn, text, toolsUsed: toolCalls.map((c) => c.name) };
     steps.push(step);
-    if (params.onStep) await params.onStep(step);
+    if (params.onStep) {
+      try { await params.onStep(step); } catch { /* non-fatal */ }
+    }
 
     if (toolCalls.length === 0) {
       finalText = text;
       stoppedOnLimit = false;
+      // Clean up checkpoint on successful completion
+      if (checkpointId && checkpointStore) {
+        await checkpointStore.delete(checkpointId).catch(() => {});
+        checkpointId = undefined;
+      }
       break;
     }
 
@@ -124,6 +212,25 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
 
     // Keep the last text seen so a limit-truncated run still returns something.
     if (text) finalText = text;
+
+    // Persist checkpoint after each tool-calling turn
+    if (checkpointId && checkpointStore) {
+      const checkpoint = {
+        id: checkpointId,
+        system,
+        model,
+        transcript: [...transcript],
+        turn,
+        maxSteps,
+        toolNames,
+        usage: { inputTokens, outputTokens },
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await checkpointStore.save(checkpoint).catch((err) => {
+        logAgent("checkpoint-error", { checkpointId, error: String(err) });
+      });
+    }
   }
 
   const auditSummary = audit.getSummary();
@@ -143,5 +250,6 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
     stoppedOnLimit,
     usage: { inputTokens, outputTokens },
     audit,
+    checkpointId,
   };
 }

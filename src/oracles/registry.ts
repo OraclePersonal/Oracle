@@ -16,6 +16,9 @@ export class OracleRegistry {
   }
 
   private oraclePath(name: string): string {
+    if (!/^[a-z0-9][a-z0-9-_.]{0,63}$/i.test(name)) {
+      throw new Error(`Invalid oracle name "${name}": use up to 64 letters/digits/hyphens/dots/underscores.`);
+    }
     return path.join(this.oraclesDir(), `${name}.json`);
   }
 
