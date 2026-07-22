@@ -26,7 +26,8 @@ export const MESSAGING_INSTRUCTIONS = [
   "Oracle inter-agent message bus is available. Other AI agents on this machine may send you work or questions through it.",
   "BEFORE starting any task in this session: (1) call oracle_msg_register with a stable agent name (kebab-case, e.g. 'claude-main') and a short role; it returns the roster of other agents and your unread messages in one call. (2) Handle anything urgent in that unread list, ack it, then proceed with your task.",
   "During work: reply with replyTo to keep threads, ack every message you have handled, and check oracle_msg_inbox again at natural pauses (after finishing a subtask, before declaring done).",
-  "Use oracle_msg_agents anytime to see who is registered and recently active before addressing them."
+  "Use oracle_msg_agents anytime to see who is registered and recently active before addressing them.",
+  "STANDBY MODE: if the user asks you to wait for / listen for / stand by for messages, call oracle_msg_inbox with wait: true (timeoutSeconds up to 600). It blocks until a message arrives. On waitTimedOut: true, immediately call it again with wait: true — keep this loop going until a message arrives or the user tells you to stop. Never end your turn just because one wait timed out."
 ].join(" ");
 
 /**
@@ -126,23 +127,42 @@ export function registerMessagingTools(server: McpServer, messages: MessageStore
     {
       title: "Check Agent Inbox",
       description:
-        "Read messages addressed to you (including broadcasts). Unread only by default; ack them with oracle_msg_ack after handling.",
+        "Read messages addressed to you (including broadcasts). Unread only by default; ack them with oracle_msg_ack after handling. " +
+        "Set wait: true to BLOCK until a message arrives (or timeoutSeconds expires) — use this to stand by for incoming work without polling manually. " +
+        "On timeout it returns waitTimedOut: true with an empty inbox; if you were told to keep standing by, simply call it again with wait: true.",
       inputSchema: {
         agent: z.string().min(1).describe("Your agent name"),
         unreadOnly: z.boolean().default(true),
-        limit: z.number().int().min(1).max(200).default(50)
+        limit: z.number().int().min(1).max(200).default(50),
+        wait: z.boolean().default(false).describe("Block until an unread message arrives instead of returning an empty inbox immediately"),
+        timeoutSeconds: z.number().int().min(1).max(600).default(120).describe("Max seconds to wait before returning empty (only used with wait: true)")
       }
     },
-    async ({ agent: agentName, unreadOnly, limit }) => {
+    async ({ agent: agentName, unreadOnly, limit, wait, timeoutSeconds }) => {
       try {
-        const inbox = await messages.inbox(agentName, { unreadOnly, limit });
         await registry.touch(agentName);
+        const deadline = Date.now() + timeoutSeconds * 1000;
+        let inbox = await messages.inbox(agentName, { unreadOnly, limit });
+        while (wait && inbox.length === 0 && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 1500));
+          inbox = await messages.inbox(agentName, { unreadOnly, limit });
+        }
+        if (wait) await registry.touch(agentName); // waited a while — refresh presence
         const lines = inbox.map(
           (m) => `${m.id} | ${m.ts} | from ${m.from}${m.subject ? ` | ${m.subject}` : ""}\n${m.body}`
         );
+        const timedOut = wait && inbox.length === 0;
         return success(
-          inbox.length ? lines.join("\n---\n") : "Inbox empty.",
-          { count: inbox.length, messages: inbox as unknown as Record<string, unknown>[] }
+          inbox.length
+            ? lines.join("\n---\n")
+            : timedOut
+              ? `No message arrived within ${timeoutSeconds}s. If you are standing by for work, call oracle_msg_inbox again with wait: true.`
+              : "Inbox empty.",
+          {
+            count: inbox.length,
+            messages: inbox as unknown as Record<string, unknown>[],
+            ...(wait ? { waitTimedOut: timedOut } : {})
+          }
         );
       } catch (error) { return failure(error); }
     }
