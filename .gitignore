@@ -4,3 +4,4 @@ dist/
 .oracle/
 graphify-out/
 .clew/
+.agents/
