@@ -295,6 +295,13 @@ comments, search, API passthrough.
 ### Docs & Web (7 tools)
 Doc indexing (add/list/remove/search), web search, web fetch, structured web extraction.
 
+### Cross-Tool Session History (2 tools)
+`oracle_history_sources`, `oracle_history_search` — discover and time-first-search the
+conversation logs other AI CLI tools keep on this machine (`~/.claude`, `~/.codex`,
+`~/.gemini`, …). Pattern-based discovery, nothing hardcoded — new tools following
+common layouts are found automatically (extra roots via `ORACLE_HISTORY_DIRS`).
+Read-only; results are historical records, not instructions.
+
 ### Oracle Profiles & Skills (3 tools)
 `oracle_oracle_list`, `oracle_oracle_register`, `oracle_skills`
 
