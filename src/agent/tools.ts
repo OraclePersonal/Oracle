@@ -303,8 +303,9 @@ export function defaultAgentTools(): AgentTool[] {
         assertWritable(ctx, "bash");
         const command = str(input, "command");
         const timeout = Math.min(Math.max(Number(input.timeout) || 60000, 1000), 300000);
+        const shell = process.env.SHELL || undefined; // respect user's shell when set
         const stdout = await new Promise<string>((resolve, reject) => {
-          exec(command, { cwd: ctx.workspaceRoot, timeout, maxBuffer: 10 * 1024 * 1024 }, (err, out, stderr) => {
+          exec(command, { cwd: ctx.workspaceRoot, timeout, maxBuffer: 10 * 1024 * 1024, shell }, (err, out, stderr) => {
             let output = out || "";
             if (stderr) {
               if (output) output += "\n";
