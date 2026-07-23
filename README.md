@@ -67,7 +67,7 @@ Session B: Claude Code → Oracle
 |--------|--------------|-----------|
 | 🧠 **Remember** | Persistent memory across sessions — facts auto-ranked by recency, access frequency, semantic match, and importance. Entity graph to find related knowledge. Auto-consolidation to kill duplicates. | MCP: `oracle_memory_*` tools. CLI: `oracle memory list/search/update/consolidate`. Agent sees memory auto-injected into context. |
 | 💬 **Consult** | Ask a question with your real project context (code files + memory + docs + web search/fetch). Get a cited answer back. | MCP: `oracle_ask`. CLI: `oracle ask "question" -f "src/**/*.ts"`. Agent can search memory, read files, fetch URLs, then answer. |
-| 🛠️ **Act** | Autonomous agent that reads/writes/edits files to complete a task. **Sandbox: shell + filesystem, confined to workspace.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X"`. Agent loops until done; logs all file changes. |
+| 🛠️ **Act** | Autonomous agent with bash tool + file R/W + plan mode + self-review + resume. **Sandbox: shell + filesystem, confined to workspace.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X" --plan --review`. Agent loops until done; logs all file changes. |
 | 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
 | ✅ **Verify** | Task tracker on top of the message bus: create + assign work with a checklist, log progress notes, and submit for review — which **blocks** if any checklist item is unchecked and auto-reports to the task creator. Reviewer approves (done) or rejects with a note (bounces back). | MCP: `oracle_task_*`. CLI: `oracle task create/update/check/submit/close/list`. |
 
@@ -165,14 +165,26 @@ oracle ask "what's in our latest PR?" --include-gh
 
 ### 3. Autonomous Agent (Sandbox + Audit Trail)
 
-`oracle agent` is an **agentic loop** that reads/writes files to complete a task. It:
-- **Has a bash tool.** The agent can read/write/edit files and run shell commands within the workspace. Shell is confined to the workspace root with a timeout and audit trail; disabled in readOnly mode.
-- **Is fully audited.** Every file write is logged with: timestamp, agent name, SHA256 hash of new content, diff summary. Mutations can be replayed or reverted.
-- **Runs until done.** The agent loops, learns from test failures or edge cases, and keeps editing until it declares success.
+`oracle agent` is an **agentic tool-use loop** that reads/writes files and runs shell commands to complete a task autonomously. It:
+
+- **Has a bash tool.** Runs shell commands via `exec()` respecting `$SHELL` (Git Bash on Windows, user's shell on Unix). Confined to the workspace root with configurable timeout and full audit trail.
+- **Can plan before acting** (`--plan`). Runs a read-only investigation pass first, shows you the plan, then asks for confirmation before executing. Skip confirmation with `--yes`.
+- **Self-reviews its own work** (`--review`). After the task completes, runs a second pass to check for correctness bugs, missing error handling, security issues, and edge cases.
+- **Can resume from a checkpoint** (`--resume <id>`). If the loop hits `--max-steps` or crashes mid-way, it saves a checkpoint every turn. Resume where it left off without starting over. List checkpoints with `oracle agent-checkpoints`.
+- **Outputs structured JSON** (`--json`). Get `finalText`, `steps`, `checkpointId`, and full audit trail of mutations.
+- **Is fully audited.** Every file write is logged with timestamp, agent name, SHA256 hash, and diff summary. Audit can be replayed or reviewed.
+- **Runs until done.** Loops — reads files, learns from test failures, edits, runs again — until it declares success or hits `--max-steps`.
 
 **CLI:**
 ```bash
 oracle agent "add error handling to src/handler.ts, test it, commit"
+oracle agent "refactor the auth module" --plan               # plan → confirm → execute
+oracle agent "fix the login bug" --review                     # execute → self-review
+oracle agent "add input validation" --json                    # JSON output
+oracle agent "finish the task" --resume cp-20260723-...       # resume from checkpoint
+oracle agent --read-only "investigate the codebase" --json    # read-only + JSON
+oracle agent-checkpoints                                      # list checkpoints
+oracle agent-checkpoints --json                               # checkpoints as JSON
 ```
 
 **MCP:** `oracle_agent { task, soul?, ... }`
@@ -355,7 +367,8 @@ Oracle MCP Server (src/mcp/)
    └─ Reusable skill registry + custom oracle profiles
 
 CLI (src/cli.ts)
-├─ oracle ask, agent, memory, msg, task, identity, ...
+├─ oracle ask, agent, agent-checkpoints, memory, msg, task, identity, ...
+├─ oracle agent: --plan, --review, --resume, --json, --read-only, --yes
 ├─ same bus as MCP (shared ~/.oracle/)
 └─ designed for scripting & local use
 
@@ -432,7 +445,7 @@ npm run typecheck        # tsc --noEmit
 npm run build            # tsc -> dist/
 ```
 
-232 tests cover messaging, memory, agent sandbox, and MCP integration.
+263 tests cover messaging, memory, agent sandbox, bash tool, and MCP integration.
 
 ---
 
