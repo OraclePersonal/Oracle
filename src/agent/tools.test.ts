@@ -92,8 +92,12 @@ describe("agent tools", () => {
     expect(out).toContain("src/");
   });
 
-  test("no shell-execution tool is exposed", () => {
-    expect(tools.has("bash")).toBe(false);
+  test("bash tool is exposed and executes a command", async () => {
+    const bash = tools.get("bash");
+    expect(bash).toBeDefined();
+    expect(bash!.mutating).toBe(true);
+    const out = await bash!.execute({ command: "echo hello-oracle" }, ctx);
+    expect(String(out).trim()).toBe("hello-oracle");
   });
 
   test("read-only mode disables mutating tools", async () => {

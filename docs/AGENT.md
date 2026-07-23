@@ -2,8 +2,7 @@
 
 Oracle can act as an autonomous coding agent: you give it a task, and it
 reads, writes, and edits files and searches the codebase in a **tool-use
-loop** until the task is complete. Unlike Claude Code or opencode, it has
-**no shell tool** — that's an architectural constraint, not a missing
+loop** until the task is complete. it has a **bash tool** for running shell commands — confined to the workspace, with timeout and audit trail
 feature (see [Safety boundaries](#safety-boundaries)). This document
 explains how it works, the toolset, safety boundaries, and how to use it
 from the CLI and MCP.
@@ -39,8 +38,7 @@ today; the agent requires `anthropic` or `opencode`.
 
 All tools live in `src/agent/tools.ts`. Filesystem access is confined to the
 workspace root — a single trust boundary (`resolveInWorkspace`) rejects any
-path that escapes it. There is **no shell/bash tool** — the agent can only
-reach the filesystem through the tools below.
+path that escapes it. The agent also has a **bash** tool for running shell commands (disabled in readOnly mode).
 
 | Tool | Mutating | Purpose |
 |---|---|---|
@@ -52,12 +50,11 @@ reach the filesystem through the tools below.
 | `read_video` | no | Read a video file for a vision-capable model |
 | `write_file` | yes | Create/overwrite a file (makes parent dirs); audited |
 | `edit_file` | yes | Replace an exact, unique string in a file; audited |
+| `bash` | yes | Run a shell command in the workspace root (timeout, audited, disabled in readOnly) |
 
 ## Safety boundaries
 
-- **No shell** — the tool list above is exhaustive; there is no way for the
-  agent to run arbitrary commands. This is an architectural guarantee, not
-  input filtering that could be bypassed.
+- **Shell confined** — the `bash` tool runs in the workspace root with a timeout; it is disabled in readOnly mode. Every command is logged to the audit trail.
 - **Workspace confinement** — every path is resolved against the workspace root;
   traversal outside it (`../`) is rejected before any I/O happens.
 - **Read-only mode** — pass `readOnly` (MCP) or `--read-only` (CLI) to drop

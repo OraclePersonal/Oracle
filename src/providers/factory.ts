@@ -27,20 +27,23 @@ export function createProvider(name: ProviderName = "codex"): Provider {
 }
 
 /** Providers that implement the agentic tool-use loop (read/write/bash). */
-export const AGENT_PROVIDERS: readonly ProviderName[] = ["anthropic", "opencode"];
+export const AGENT_PROVIDERS: readonly ProviderName[] = ["anthropic", "opencode", "codex"];
 
 /**
- * Create a tool-capable provider for the agentic loop. Only `anthropic` and
- * `opencode` support tool use today; the others throw with a clear pointer.
+ * Create a tool-capable provider for the agentic loop. Supports:
+ * - `anthropic` — Anthropic SDK (Claude)
+ * - `opencode` — OpenAI-compatible (OpenRouter, Groq, local LLMs) with native function calling
+ * - `codex` — Codex CLI via text-based tool calling through `codex exec`
  */
 export function createAgentProvider(name: ProviderName): AgentProvider {
   switch (name) {
     case "anthropic": return new AnthropicProvider();
     case "opencode": return new OpenCodeProvider();
+    case "codex": return new CodexCliProvider();
     default:
       throw new Error(
         `Provider '${name}' does not support agentic tool use. ` +
-          `Set provider to 'anthropic' or 'opencode' in .oracle/config.json, or pass --provider.`
+          `Set provider to 'anthropic', 'opencode', or 'codex'.`
       );
   }
 }

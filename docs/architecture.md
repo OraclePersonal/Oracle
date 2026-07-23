@@ -25,7 +25,7 @@ under `~/.oracle/`. No database, no daemon.
 | **Standalone coordination server** | `oracle-msg-mcp` binary — just `oracle_msg_*` + `oracle_task_*` (14 tools), no provider/memory/agent stack | `src/mcp-messaging.ts` |
 | **ConsultService** | Core loop: load files → build context (memory + docs + web) → call provider → answer | `src/core/consult.ts` |
 | **Provider layer** | Codex CLI, Anthropic, OpenAI, OpenCode | `src/providers/` |
-| **Agent sandbox** | Autonomous file read/write/edit loop. No shell. Every mutation hashed and logged to an audit trail. | `src/agent/` |
+| **Agent sandbox** | Autonomous file read/write/edit loop with a bash tool for shell commands. Every mutation hashed and logged to an audit trail. | `src/agent/` |
 | **Memory system** | BM25 + vector search + entity knowledge graph + auto-consolidation + background maintenance | `src/memory/` |
 | **Messaging bus** | Atomic file-backed message store, presence registry, real-time watcher, Stop-hook wake-up | `src/messaging/` |
 | **Task tracker** | Plan/assign/verify/report on top of the messaging bus; checklist-gated review | `src/tasks/` |
@@ -101,11 +101,10 @@ for the full lifecycle.
 
 ## Security model
 
-The agent sandbox has **no shell access** — it can only read, write, and edit
-files within the workspace. Every mutation is logged with a timestamp, agent
-name, SHA-256 content hash, and diff summary, so file changes can be audited
-or reverted after the fact. This is an architectural constraint, not input
-filtering: there is no bash tool to sandbox in the first place.
+The agent sandbox has a **bash tool** for running shell commands, confined to the
+workspace root with a timeout and audit trail. Every mutation is logged with a timestamp,
+agent name, SHA-256 content hash, and diff summary, so file changes and commands can be
+audited or reverted after the fact. The bash tool is disabled in readOnly mode.
 
 The message bus and task store are plain local JSON files with no
 encryption — suitable for single-machine multi-agent coordination, not for

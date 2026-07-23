@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Provider, ProviderRequest } from "./provider.js";
 import type { ProviderResponse } from "../types.js";
+import type { AgentMessage, AgentProvider, AgentTool, AgentTurn, ToolCall } from "../agent/types.js";
 
 interface CommandResult {
   exitCode: number;
@@ -69,7 +70,7 @@ export const runCommand: CommandRunner = (command, args, options) =>
     child.stdin.end(options.input);
   });
 
-export class CodexCliProvider implements Provider {
+export class CodexCliProvider implements Provider, AgentProvider {
   readonly id = "codex";
   private readonly runner: CommandRunner;
 
@@ -109,6 +110,113 @@ export class CodexCliProvider implements Provider {
       return { text: text.trim(), usage: {} };
     } finally {
       await fs.rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  }
+
+  /** Runs one agentic turn via text-based tool calling through `codex exec`. */
+  async runAgentTurn(params: {
+    model: string;
+    system: string;
+    messages: AgentMessage[];
+    tools: AgentTool[];
+  }): Promise<AgentTurn> {
+    // ── Format tool definitions ───────────────────────────────────────
+    const toolDefs = params.tools.map((t) => {
+      const props = t.inputSchema.properties
+        ? Object.entries(t.inputSchema.properties as Record<string, unknown>)
+            .map(([k, v]) => `  ${k}: ${(v as any).type}${(v as any).description ? ` — ${(v as any).description}` : ""}`)
+            .join("\n")
+        : "  (no parameters)";
+      return `### ${t.name}\n${t.description}\nParameters:\n${props}`;
+    }).join("\n\n");
+
+    const toolNames = params.tools.map((t) => t.name).join(", ");
+
+    const systemBlock = `${params.system}
+
+AVAILABLE TOOLS:
+${toolDefs}
+
+To use a tool, end your response with a JSON code block:
+\`\`\`tool
+{"tool": "tool_name", "args": { "param": "value" } }
+\`\`\`
+
+Available tools: ${toolNames}
+Only use tools from the list above. You can call at most one tool per turn.`;
+
+    // ── Format conversation ───────────────────────────────────────────
+    const lines: string[] = [];
+    for (const m of params.messages) {
+      if (m.role === "user") {
+        const content = typeof m.content === "string" ? m.content : m.content.map((c) => c.type === "text" ? c.text : "").filter(Boolean).join("\n");
+        lines.push(`## User\n${content}`);
+      } else if (m.role === "assistant") {
+        if (m.text) lines.push(`## Assistant\n${m.text}`);
+        for (const tc of m.toolCalls) {
+          lines.push(`\`\`\`tool\n${JSON.stringify({ tool: tc.name, args: tc.input })}\n\`\`\``);
+        }
+      } else if (m.role === "tool") {
+        for (const r of m.results) {
+          const text = r.content.map((c) => c.type === "text" ? c.text : "").filter(Boolean).join("\n");
+          lines.push(`## Tool Result (${r.isError ? "ERROR" : "ok"})\n${text.slice(0, 5000)}`);
+        }
+      }
+    }
+    lines.push("## Assistant");
+
+    const fullPrompt = `${systemBlock}\n\n${lines.join("\n\n")}`;
+
+    // ── Call codex exec ─────────────────────────────────────────────
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-codex-agent-"));
+    const outputPath = path.join(tempDir, "output.md");
+    try {
+      const result = await this.runner("codex", [
+        "exec",
+        "--sandbox", "read-only",
+        "--ephemeral",
+        "--color", "never",
+        "--cd", ".",
+        "--model", params.model,
+        "--output-last-message", outputPath,
+        "-"
+      ], { input: fullPrompt });
+
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr.trim() || `Codex exited with code ${result.exitCode}.`);
+      }
+
+      const raw = await fs.readFile(outputPath, "utf8");
+      const text = raw.trim();
+
+      // ── Parse tool call from response ──────────────────────────────
+      const toolMatch = text.match(/```tool\n(\{[\s\S]*?\n?)\n?```/);
+      let toolCalls: ToolCall[] = [];
+
+      if (toolMatch) {
+        try {
+          const parsed = JSON.parse(toolMatch[1].trim());
+          if (parsed && typeof parsed === "object" && parsed.tool && parsed.args) {
+            toolCalls.push({
+              id: `call_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              name: String(parsed.tool),
+              input: parsed.args as Record<string, unknown>,
+            });
+          }
+        } catch {
+          // Malformed JSON — treat as plain text
+        }
+      }
+
+      // Strip the tool block from displayed text
+      const cleanText = text.replace(/```tool\n[\s\S]*?\n```/g, "").trim();
+
+      return {
+        message: { role: "assistant", text: cleanText, toolCalls },
+        usage: {},
+      };
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   }
 }

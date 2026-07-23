@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { exec } from "node:child_process";
 import type { AgentContext, AgentTool, ContentBlock } from "./types.js";
 import { logSandbox } from "../observability/log.js";
-import type { AuditTrail } from "./audit.js";
 
 /** Cap on how much text any single tool returns to the model. */
 const MAX_OUTPUT_CHARS = 30_000;
@@ -71,8 +71,8 @@ async function walk(dir: string, root: string, acc: string[], limit: number): Pr
 }
 
 /**
- * The default toolset: read, write, edit, list, glob, grep, and media reads.
- * No shell execution — every tool resolves paths through resolveInWorkspace,
+ * The default toolset: read, write, edit, list, glob, grep, media reads,
+ * and shell execution. File tools resolve paths through resolveInWorkspace
  * so the agent can only ever touch files inside the workspace root.
  */
 export function defaultAgentTools(): AgentTool[] {
@@ -281,6 +281,47 @@ export function defaultAgentTools(): AgentTool[] {
           data: data.toString("base64"),
         };
         return [contentBlock];
+      },
+    },
+    {
+      name: "bash",
+      description:
+        "Run a shell command in the workspace root directory. Use for running tests, git operations, build tools, linters, etc. Commands timeout after 60 seconds (configurable via the timeout param in ms).",
+      mutating: true,
+      inputSchema: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "Shell command to execute" },
+          timeout: {
+            type: "number",
+            description: "Timeout in milliseconds (default: 60000, max: 300000)",
+          },
+        },
+        required: ["command"],
+      },
+      async execute(input, ctx) {
+        assertWritable(ctx, "bash");
+        const command = str(input, "command");
+        const timeout = Math.min(Math.max(Number(input.timeout) || 60000, 1000), 300000);
+        const stdout = await new Promise<string>((resolve, reject) => {
+          exec(command, { cwd: ctx.workspaceRoot, timeout, maxBuffer: 10 * 1024 * 1024 }, (err, out, stderr) => {
+            let output = out || "";
+            if (stderr) {
+              if (output) output += "\n";
+              output += stderr;
+            }
+            if (err) {
+              if (err.killed) reject(new ToolError(`Command timed out after ${timeout}ms`));
+              else reject(new ToolError(output || err.message));
+            } else {
+              resolve(output || "(no output)");
+            }
+          });
+        });
+        if (ctx.audit) {
+          ctx.audit.record("bash", command.slice(0, 200), { timeout });
+        }
+        return truncate(stdout);
       },
     },
   ];

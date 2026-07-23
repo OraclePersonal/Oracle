@@ -116,7 +116,7 @@ program
   .command("agent")
   .description("Autonomously carry out a coding task with a tool-use loop")
   .argument("<task>", "The task to carry out")
-  .option("--provider <provider>", "Provider override (agent needs anthropic or opencode)")
+  .option("--provider <provider>", "Provider override (anthropic, opencode, or codex)")
   .option("-m, --model <model>", "Model override", "auto")
   .option("--read-only", "Investigate only")
   .option("--max-steps <n>", "Max agent turns before stopping", "20")

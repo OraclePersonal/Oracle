@@ -73,9 +73,9 @@ oracle ask "review this code" --soul engineer
 oracle agent "add error handling to src/handler.ts and add a test"
 ```
 
-The agent reads/writes/edits files to complete the task. It has **no shell
-access** — a security boundary, not a limitation — and every file mutation
-is logged to an audit trail.
+The agent reads/writes/edits files and runs shell commands to complete the task. Shell
+commands are confined to the workspace root with a timeout and audit trail, and disabled
+in readOnly mode.
 
 ## Coordinate multiple agent sessions
 

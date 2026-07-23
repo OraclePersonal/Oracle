@@ -67,7 +67,7 @@ Session B: Claude Code → Oracle
 |--------|--------------|-----------|
 | 🧠 **Remember** | Persistent memory across sessions — facts auto-ranked by recency, access frequency, semantic match, and importance. Entity graph to find related knowledge. Auto-consolidation to kill duplicates. | MCP: `oracle_memory_*` tools. CLI: `oracle memory list/search/update/consolidate`. Agent sees memory auto-injected into context. |
 | 💬 **Consult** | Ask a question with your real project context (code files + memory + docs + web search/fetch). Get a cited answer back. | MCP: `oracle_ask`. CLI: `oracle ask "question" -f "src/**/*.ts"`. Agent can search memory, read files, fetch URLs, then answer. |
-| 🛠️ **Act** | Autonomous agent that reads/writes/edits files to complete a task. **Sandbox: no shell execution, filesystem-only.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X"`. Agent loops until done; logs all file changes. |
+| 🛠️ **Act** | Autonomous agent that reads/writes/edits files to complete a task. **Sandbox: shell + filesystem, confined to workspace.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X"`. Agent loops until done; logs all file changes. |
 | 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
 | ✅ **Verify** | Task tracker on top of the message bus: create + assign work with a checklist, log progress notes, and submit for review — which **blocks** if any checklist item is unchecked and auto-reports to the task creator. Reviewer approves (done) or rejects with a note (bounces back). | MCP: `oracle_task_*`. CLI: `oracle task create/update/check/submit/close/list`. |
 
@@ -166,7 +166,7 @@ oracle ask "what's in our latest PR?" --include-gh
 ### 3. Autonomous Agent (Sandbox + Audit Trail)
 
 `oracle agent` is an **agentic loop** that reads/writes files to complete a task. It:
-- **Has no shell.** The agent can read/write files, edit code, but cannot run bash commands directly. (This is a security boundary, not a limitation — the agent learns its workspace constraints and works within them.)
+- **Has a bash tool.** The agent can read/write/edit files and run shell commands within the workspace. Shell is confined to the workspace root with a timeout and audit trail; disabled in readOnly mode.
 - **Is fully audited.** Every file write is logged with: timestamp, agent name, SHA256 hash of new content, diff summary. Mutations can be replayed or reverted.
 - **Runs until done.** The agent loops, learns from test failures or edge cases, and keeps editing until it declares success.
 
@@ -346,7 +346,7 @@ Oracle MCP Server (src/mcp/)
 ├─ Task Tracker (src/tasks/)
 │  └─ File-backed store: plan/assign/verify/report, layered on messaging
 ├─ Agent Sandbox (src/agent/)
-│  └─ File R/W, audit trail, no shell, looping until done
+│  └─ File R/W, bash tool, audit trail, looping until done
 ├─ Observability (src/observability/)
 │  └─ Structured JSON logging to stderr
 ├─ Identity & Personas (src/identity/)
@@ -380,20 +380,18 @@ Standalone Coordination Server (src/mcp-messaging.ts)
 
 ## Security Model
 
-### Agent Sandbox (No Shell)
+### Agent Sandbox (Shell Confined)
 
-The agent has **no access to bash/shell.** It can only:
+The agent has a **bash tool** for running shell commands within the workspace. It can also:
 - Read files (via `Read` tool)
 - Write files (via `Write` / `Edit` tools)
 - Spawn other agents via MCP
 
-It **cannot:**
-- Run arbitrary commands
-- Install packages
-- Fork processes
-- Escape the workspace
-
-**Why?** Shell access = footgun risk. Agents are deterministic; if they need to run something, you either (1) provide a tool for it, or (2) ask for explicit permission.
+The bash tool is:
+- **Confined** to the workspace root (paths escaping it are rejected)
+- **Timed out** (default 120s per command)
+- **Audited** (every command logged with exit code and truncated output)
+- **Disabled in readOnly mode** — passing `readOnly` drops the bash tool entirely
 
 ### Audit Trail
 
