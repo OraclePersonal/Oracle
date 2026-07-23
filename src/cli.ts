@@ -121,24 +121,111 @@ program
   .option("--read-only", "Investigate only")
   .option("--max-steps <n>", "Max agent turns before stopping", "20")
   .option("--cwd <path>", "Working directory", process.cwd())
+  .option("--resume <id>", "Resume from a checkpoint id")
+  .option("--json", "Output result as JSON (includes finalText, steps, mutations)")
+  .option("--plan", "Plan first (read-only), show the plan, then ask before executing")
+  .option("--review", "Run a self-review pass after the task completes")
+  .option("--yes", "Skip confirmation prompts (use with --plan)")
   .action(async (task, options) => {
     const cwd = path.resolve(options.cwd);
-    const parsedProvider = parseProviderName(options.provider ?? "anthropic");
+    const parsedProvider = parseProviderName(options.provider ?? "codex");
     const checks = await checkProvider(parsedProvider);
     const failedCheck = checks.find((chk) => !chk.ok);
     if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
-    const agent = new AgentService(createAgentProvider(parsedProvider));
+    const provider = createAgentProvider(parsedProvider);
+    const agent = new AgentService(provider);
+
+    // ── Plan mode: read-only pass first ───────────────────────────
+    if (options.plan && !options.resume) {
+      console.error("[plan] Investigating before executing...");
+      const planResult = await agent.run({
+        prompt: `You are planning how to accomplish this task. Investigate the codebase and produce a concise step-by-step plan.\n\nTask: ${task}`,
+        workspaceRoot: cwd,
+        model: options.model,
+        readOnly: true,
+        maxSteps: Math.min(Number(options.maxSteps), 10),
+        onStep: (step) => console.error(`[plan turn ${step.turn}] ${step.toolsUsed.join(", ") || "done"}`),
+      });
+      console.error("\n── Plan ──────────────────────────────");
+      console.log(planResult.finalText);
+      console.error("───────────────────────────────────────\n");
+
+      if (!options.yes) {
+        console.error("Proceed with execution? (Y/n) ");
+        const answer = await new Promise<string>((r) => {
+          process.stdin.setEncoding("utf8");
+          process.stdin.once("data", (d) => r((d as string).trim().toLowerCase()));
+        });
+        if (answer === "n" || answer === "no") {
+          console.error("Cancelled.");
+          process.exitCode = 0;
+          return;
+        }
+      }
+    }
+
+    // ── Main agent run ────────────────────────────────────────────
     const result = await agent.run({
       prompt: task,
       workspaceRoot: cwd,
       model: options.model,
       readOnly: Boolean(options.readOnly),
       maxSteps: Number(options.maxSteps),
-      onStep: (step) => console.error(`[turn ${step.turn}] ${step.toolsUsed.join(", ") || "done"}`)
+      resumeId: options.resume || undefined,
+      onStep: (step) => console.error(`[turn ${step.turn}] ${step.toolsUsed.join(", ") || "done"}`),
     });
-    console.log(result.finalText);
+
+    // ── Output ────────────────────────────────────────────────────
+    if (options.json) {
+      const output: Record<string, unknown> = {
+        finalText: result.finalText,
+        steps: result.steps.map((s) => ({ turn: s.turn, toolsUsed: s.toolsUsed })),
+        stoppedOnLimit: result.stoppedOnLimit,
+        checkpointId: result.checkpointId,
+      };
+      const summary = result.audit.getSummary();
+      if (summary.mutations > 0) {
+        output.changes = summary;
+        output.changesDetail = result.audit.getChanges();
+      }
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      console.log(result.finalText);
+    }
+
     if (result.stoppedOnLimit) console.error(`Stopped after ${options.maxSteps} turns.`);
     if (result.checkpointId) console.error(`[checkpoint: ${result.checkpointId}]`);
+
+    // ── Self-review mode ──────────────────────────────────────────
+    if (options.review && result.steps.length > 0) {
+      console.error("\n[review] Reviewing changes...");
+      const reviewResult = await agent.run({
+        prompt: `Review the changes made in the previous agent run. Check for:\n- Correctness bugs\n- Missing error handling\n- Security issues\n- Edge cases not handled\n- Code quality problems\n\nIf you find issues, list them with file paths and line numbers. If everything looks good, say "No issues found."\n\nTask context: ${task}`,
+        workspaceRoot: cwd,
+        model: options.model,
+        readOnly: true,
+        maxSteps: 8,
+        onStep: (step) => console.error(`[review turn ${step.turn}] ${step.toolsUsed.join(", ") || "done"}`),
+      });
+      console.error("\n── Review ────────────────────────────");
+      console.log(reviewResult.finalText);
+      console.error("───────────────────────────────────────");
+    }
+  });
+
+program
+  .command("agent-checkpoints")
+  .description("List saved agent checkpoints (for --resume)")
+  .option("--json", "Output as JSON array")
+  .option("--cwd <path>", "Working directory", process.cwd())
+  .action(async (options) => {
+    const oracleDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
+    const { CheckpointStore } = await import("./agent/checkpoint.js");
+    const store = new CheckpointStore(oracleDir);
+    const list = await store.list();
+    if (!list.length) { console.log("No checkpoints found."); return; }
+    if (options.json) { console.log(JSON.stringify(list, null, 2)); return; }
+    for (const cp of list) console.log(`${cp.id.padEnd(50)} ${cp.updatedAt.slice(0, 19)}`);
   });
 
 const oracleCmd = program.command("oracle").description("Manage oracle profiles");
