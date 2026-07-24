@@ -54,8 +54,11 @@ export async function loadPolicy(workspaceRoot: string): Promise<OraclePolicy> {
       forbiddenCommands: [...DEFAULT_POLICY.forbiddenCommands, ...(raw.forbiddenCommands ?? [])],
       maxMutationsPerSession: raw.maxMutationsPerSession ?? DEFAULT_POLICY.maxMutationsPerSession,
     };
-  } catch {
-    return { ...DEFAULT_POLICY };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULT_POLICY };
+    throw new Error(
+      `Invalid Oracle policy at ${policyFile}: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -64,9 +67,15 @@ export async function loadPolicy(workspaceRoot: string): Promise<OraclePolicy> {
  */
 export function validateFilePath(relPath: string, policy: OraclePolicy): void {
   const normalized = relPath.replace(/\\/g, "/").toLowerCase();
+  const segments = normalized.split("/");
   for (const forbidden of policy.forbiddenGlobs) {
     const target = forbidden.toLowerCase();
-    if (normalized === target || normalized.includes(`/${target}`) || normalized.endsWith(target)) {
+    const matches =
+      normalized === target ||
+      normalized.includes(`/${target}`) ||
+      normalized.endsWith(target) ||
+      (target.endsWith(".") && segments.some((segment) => segment.startsWith(target)));
+    if (matches) {
       logSandbox("mutation-denied", { requestedPath: relPath, rule: `forbidden_glob:${forbidden}` });
       throw new PolicyViolationError(`Access to '${relPath}' denied by security policy (forbidden pattern: ${forbidden})`, `forbidden_glob:${forbidden}`);
     }

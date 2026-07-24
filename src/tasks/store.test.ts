@@ -89,4 +89,30 @@ describe("TaskStore", () => {
     await expect(store.get("../evil")).resolves.toBeNull();
     await expect(store.update("../evil", "a", { note: "x" })).rejects.toThrow(/Invalid task id/);
   });
+
+  test("persists consensus proposals and accumulates votes", async () => {
+    const task = await store.create({ title: "Release", createdBy: "lead", assignee: "builder" });
+    const proposal = await store.createProposal(task.id, "builder", "Deploy release", {
+      requiredQuorum: 2,
+      approvalThresholdRatio: 0.5
+    });
+
+    const first = await new TaskStore(home).castProposalVote(
+      proposal.id,
+      "reviewer",
+      "approve",
+      "looks good"
+    );
+    expect(first?.proposal.status).toBe("pending");
+    expect(first?.proposal.votes).toHaveLength(1);
+
+    const second = await new TaskStore(home).castProposalVote(
+      proposal.id,
+      "qa",
+      "approve",
+      "tests pass"
+    );
+    expect(second?.proposal.status).toBe("approved");
+    expect(second?.proposal.votes.map((vote) => vote.agentId)).toEqual(["reviewer", "qa"]);
+  });
 });

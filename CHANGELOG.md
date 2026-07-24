@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent `stdout` pollution breaking MCP protocol framing
 - Fast-fallback orchestrator supervisor timeouts
 - Windows bash tool shell selection (`$SHELL` fallback)
+- Built CLI import paths for the swarm and audit commands
+- Swarm workflow state now persists across separate CLI invocations
+- Task consensus proposals and votes now persist and accumulate
+- Agent tool and policy-denial events now populate `.oracle/audit.jsonl`
+- Agent policy loading now fails closed and enforces mutation limits
+- Message inbox ordering is deterministic for rapid sequential sends
 
 ## [0.0.2] - 2026-07-24
 

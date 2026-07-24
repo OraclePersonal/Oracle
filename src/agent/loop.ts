@@ -8,6 +8,8 @@ import type {
 } from "./types.js";
 import { AuditTrail } from "./audit.js";
 import { logAgent, logTool } from "../observability/log.js";
+import { AuditLogger, type AuditRecord } from "../observability/audit.js";
+import { PolicyViolationError } from "./policy.js";
 import crypto from "node:crypto";
 import type { CheckpointStore } from "./checkpoint.js";
 
@@ -55,6 +57,24 @@ export interface RunAgentLoopParams {
   resumeCheckpointId?: string;
 }
 
+function persistentAuditAction(toolName: string): AuditRecord["action"] {
+  if (["read_file", "read_image", "read_video", "list_dir", "glob", "grep"].includes(toolName)) return "read";
+  if (toolName === "write_file") return "write";
+  if (toolName === "edit_file") return "edit";
+  if (toolName === "delete_file") return "delete";
+  if (toolName === "bash") return "bash";
+  return "tool";
+}
+
+function persistentAuditTarget(toolName: string, input: Record<string, unknown>): string {
+  if (typeof input.path === "string") return input.path;
+  if (typeof input.command === "string") {
+    const executable = input.command.trim().split(/\s+/, 1)[0] || "shell";
+    return `bash:${executable.slice(0, 80)}`;
+  }
+  return toolName;
+}
+
 /**
  * Run the agentic tool-use loop: the model alternates between producing text
  * and requesting tool calls; we execute each tool, feed the results back, and
@@ -68,6 +88,7 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
   const maxSteps = params.maxSteps ?? 20;
   const toolsByName = new Map(tools.map((t) => [t.name, t]));
   const audit = new AuditTrail();
+  const persistentAudit = new AuditLogger();
   const toolNames = tools.map((t) => t.name).sort();
 
   // ── Resume from checkpoint? ────────────────────────────────────────
@@ -126,6 +147,11 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
   }
 
   let stoppedOnLimit = true;
+  let mutationCount = transcript
+    .filter((message): message is Extract<AgentMessage, { role: "assistant" }> => message.role === "assistant")
+    .flatMap((message) => message.toolCalls)
+    .filter((call) => toolsByName.get(call.name)?.mutating)
+    .length;
 
   logAgent("start", { model, toolCount: tools.length, maxSteps, resumeFrom: startTurn > 1 ? startTurn : undefined });
 
@@ -192,14 +218,42 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
       try {
         logTool("call", { toolName: call.name, turn });
         const callStart = Date.now();
+        if (
+          tool.mutating &&
+          context.policy &&
+          mutationCount >= context.policy.maxMutationsPerSession
+        ) {
+          throw new PolicyViolationError(
+            `Mutation limit reached (${context.policy.maxMutationsPerSession} per session).`,
+            "max_mutations_per_session"
+          );
+        }
         const output = await tool.execute(call.input, contextWithAudit);
+        if (tool.mutating) mutationCount += 1;
         const callMs = Date.now() - callStart;
         const content: ContentBlock[] = typeof output === "string" ? [{ type: "text", text: output }] : output;
         logTool("result", { toolName: call.name, turn, durationMs: callMs, outputSize: JSON.stringify(output).length });
+        await persistentAudit.log(context.workspaceRoot, {
+          action: persistentAuditAction(call.name),
+          target: persistentAuditTarget(call.name, call.input),
+          agentId: provider.id,
+          details: { toolName: call.name, turn, durationMs: callMs }
+        }).catch(() => {});
         results.push({ id: call.id, content });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         logTool("error", { toolName: call.name, turn, error: errorMsg });
+        await persistentAudit.log(context.workspaceRoot, {
+          action: error instanceof PolicyViolationError ? "policy_denied" : "tool",
+          target: persistentAuditTarget(call.name, call.input),
+          agentId: provider.id,
+          details: {
+            toolName: call.name,
+            turn,
+            error: errorMsg,
+            ...(error instanceof PolicyViolationError ? { rule: error.rule } : {})
+          }
+        }).catch(() => {});
         results.push({
           id: call.id,
           content: [{ type: "text", text: errorMsg }],

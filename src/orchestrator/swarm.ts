@@ -14,6 +14,8 @@ export interface SwarmWorkflow {
   title: string;
   assignedRoles: Record<AgentRole, string>; // Role -> Agent ID
   proposals: TaskProposal[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export class SwarmOrchestrator {
@@ -24,6 +26,7 @@ export class SwarmOrchestrator {
    */
   createSwarmWorkflow(title: string, agents: SwarmAgent[]): SwarmWorkflow {
     const assignedRoles: Partial<Record<AgentRole, string>> = {};
+    const now = new Date().toISOString();
 
     for (const a of agents) {
       if (!assignedRoles[a.role]) {
@@ -36,6 +39,8 @@ export class SwarmOrchestrator {
       title,
       assignedRoles: assignedRoles as Record<AgentRole, string>,
       proposals: [],
+      createdAt: now,
+      updatedAt: now,
     };
   }
 
@@ -57,6 +62,7 @@ export class SwarmOrchestrator {
     });
 
     workflow.proposals.push(proposal);
+    workflow.updatedAt = new Date().toISOString();
     return proposal;
   }
 

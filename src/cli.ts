@@ -975,7 +975,11 @@ schedCmd
 
 // ── swarm ───────────────────────────────────────────────────────
 const swarmCmd = program.command("swarm").description("Autonomous multi-agent swarm workflow");
-const activeSwarmWorkflows: Record<string, import("../src/orchestrator/swarm.js").SwarmWorkflow> = {};
+
+async function makeSwarmStore(): Promise<import("./orchestrator/swarmStore.js").SwarmStore> {
+  const { SwarmStore } = await import("./orchestrator/swarmStore.js");
+  return new SwarmStore(homeDir());
+}
 
 swarmCmd
   .command("create")
@@ -986,15 +990,16 @@ swarmCmd
   .requiredOption("-r, --reviewer <id>", "Reviewer agent id")
   .requiredOption("-q, --qa <id>", "QA agent id")
   .action(async (title: string, options) => {
-    const { SwarmOrchestrator } = await import("../src/orchestrator/swarm.js");
+    const { SwarmOrchestrator } = await import("./orchestrator/swarm.js");
     const orch = new SwarmOrchestrator();
+    const store = await makeSwarmStore();
     const workflow = orch.createSwarmWorkflow(title, [
       { id: options.architect, name: options.architect, role: "architect", capabilities: [] },
       { id: options.coder, name: options.coder, role: "coder", capabilities: [] },
       { id: options.reviewer, name: options.reviewer, role: "reviewer", capabilities: [] },
       { id: options.qa, name: options.qa, role: "qa", capabilities: [] },
     ]);
-    activeSwarmWorkflows[workflow.id] = workflow;
+    await store.save(workflow);
     console.log(`Swarm workflow created: ${workflow.id}`);
     console.log(`  title:    ${title}`);
     console.log(`  architect: ${options.architect}`);
@@ -1010,12 +1015,13 @@ swarmCmd
   .argument("<agent-id>", "Proposing agent id")
   .argument("<action>", "Proposed action description")
   .action(async (workflowId: string, agentId: string, action: string) => {
-    const wf = activeSwarmWorkflows[workflowId];
+    const store = await makeSwarmStore();
+    const wf = await store.get(workflowId);
     if (!wf) { console.error(`Workflow not found: ${workflowId}`); process.exitCode = 1; return; }
-    const { SwarmOrchestrator } = await import("../src/orchestrator/swarm.js");
+    const { SwarmOrchestrator } = await import("./orchestrator/swarm.js");
     const orch = new SwarmOrchestrator();
     const proposal = orch.initiateProposal(wf, workflowId, agentId, action);
-    wf.proposals.push(proposal);
+    await store.save(wf);
     console.log(`Proposal submitted: ${proposal.id}`);
     console.log(`  proposer:  ${agentId}`);
     console.log(`  action:    ${action}`);
@@ -1032,15 +1038,23 @@ swarmCmd
   .argument("<decision>", "approve | reject | abstain")
   .argument("[justification]", "Optional vote justification")
   .action(async (proposalId: string, agentId: string, decision: string, justification?: string) => {
-    const { SwarmOrchestrator } = await import("../src/orchestrator/swarm.js");
-    const orch = new SwarmOrchestrator();
-    let proposal: import("../src/tasks/consensus.js").TaskProposal | undefined;
-    for (const wf of Object.values(activeSwarmWorkflows)) {
-      proposal = wf.proposals.find((p) => p.id === proposalId);
-      if (proposal) break;
+    if (!["approve", "reject", "abstain"].includes(decision)) {
+      console.error(`Invalid decision: ${decision}. Expected approve, reject, or abstain.`);
+      process.exitCode = 1;
+      return;
     }
-    if (!proposal) { console.error(`Proposal not found: ${proposalId}`); process.exitCode = 1; return; }
-    const updated = orch.reviewProposal(proposal, agentId, decision as any, justification ?? "");
+    const store = await makeSwarmStore();
+    const stored = await store.findProposal(proposalId);
+    if (!stored) { console.error(`Proposal not found: ${proposalId}`); process.exitCode = 1; return; }
+    const { SwarmOrchestrator } = await import("./orchestrator/swarm.js");
+    const orch = new SwarmOrchestrator();
+    const updated = orch.reviewProposal(
+      stored.proposal,
+      agentId,
+      decision as import("./tasks/consensus.js").VoteDecision,
+      justification ?? ""
+    );
+    await store.save(stored.workflow);
     console.log(`Vote recorded: ${agentId} → ${decision}`);
     console.log(`  proposal:  ${proposalId}`);
     console.log(`  votes:     ${updated.votes.length}`);
@@ -1055,7 +1069,7 @@ swarmCmd
   .command("status")
   .description("Show active swarm workflows and their proposals")
   .action(async () => {
-    const workflows = Object.values(activeSwarmWorkflows);
+    const workflows = await (await makeSwarmStore()).list();
     if (!workflows.length) { console.log("No active swarm workflows."); return; }
     for (const wf of workflows) {
       console.log(`\nWorkflow: ${wf.id}  (${wf.title})`);
@@ -1080,7 +1094,7 @@ auditCmd
   .option("-n, --limit <n>", "Max entries to show", "50")
   .option("--cwd <path>", "Workspace root", process.cwd())
   .action(async (options: { limit?: string; cwd?: string }) => {
-    const { AuditLogger } = await import("../src/observability/audit.js");
+    const { AuditLogger } = await import("./observability/audit.js");
     const workspaceRoot = options.cwd ?? process.cwd();
     const logger = new AuditLogger();
     const records = await logger.readRecords(workspaceRoot, Number(options.limit ?? 50));
@@ -1098,7 +1112,7 @@ auditCmd
   .option("-n, --limit <n>", "Max entries to show", "50")
   .option("--cwd <path>", "Workspace root", process.cwd())
   .action(async (options: { limit?: string; cwd?: string }) => {
-    const { AuditLogger } = await import("../src/observability/audit.js");
+    const { AuditLogger } = await import("./observability/audit.js");
     const workspaceRoot = options.cwd ?? process.cwd();
     const logger = new AuditLogger();
     const records = await logger.readRecords(workspaceRoot, Number(options.limit ?? 50));

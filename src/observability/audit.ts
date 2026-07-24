@@ -3,7 +3,7 @@ import path from "node:path";
 
 export interface AuditRecord {
   timestamp: string;
-  action: "read" | "write" | "edit" | "bash" | "tool" | "policy_denied";
+  action: "read" | "write" | "edit" | "delete" | "bash" | "tool" | "policy_denied";
   target: string;
   agentId?: string;
   details?: Record<string, unknown>;

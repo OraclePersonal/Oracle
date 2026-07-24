@@ -41,12 +41,14 @@ export interface SendInput {
   replyTo?: string;
 }
 
-function generateId(): string {
-  const now = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 17);
+function generateId(timestamp: string): string {
+  const now = timestamp.replace(/[-:.TZ]/g, "").slice(0, 17);
   return `${now}-${crypto.randomBytes(4).toString("hex")}`;
 }
 
 export class MessageStore {
+  private lastTimestampMs = 0;
+
   constructor(private readonly homeDir: string) {}
 
   private dir(): string {
@@ -67,9 +69,14 @@ export class MessageStore {
 
   async send(input: SendInput): Promise<AgentMessage> {
     await fs.mkdir(this.dir(), { recursive: true });
+    // Preserve call order even when several messages are created within the
+    // same millisecond. This keeps inbox tail/limit behavior deterministic.
+    const timestampMs = Math.max(Date.now(), this.lastTimestampMs + 1);
+    this.lastTimestampMs = timestampMs;
+    const timestamp = new Date(timestampMs).toISOString();
     const msg: AgentMessage = {
-      id: generateId(),
-      ts: new Date().toISOString(),
+      id: generateId(timestamp),
+      ts: timestamp,
       from: input.from,
       to: input.to,
       subject: input.subject,

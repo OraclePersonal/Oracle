@@ -50,7 +50,9 @@
     "mcp:messaging": "tsx src/mcp-messaging.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
-    "prepublishOnly": "npm run build && npm run test"
+    "test:cli": "node scripts/smoke-cli.mjs",
+    "verify": "npm run build && npm run test && npm run test:cli",
+    "prepublishOnly": "npm run verify"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

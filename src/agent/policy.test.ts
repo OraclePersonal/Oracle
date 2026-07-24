@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_POLICY, validateCommand, validateFilePath, PolicyViolationError } from "./policy.js";
+import { DEFAULT_POLICY, loadPolicy, validateCommand, validateFilePath, PolicyViolationError } from "./policy.js";
 
 describe("OraclePolicy Enforcement", () => {
   it("allows standard workspace relative paths", () => {
@@ -9,6 +12,7 @@ describe("OraclePolicy Enforcement", () => {
 
   it("blocks forbidden globs and sensitive files", () => {
     expect(() => validateFilePath(".env", DEFAULT_POLICY)).toThrow(PolicyViolationError);
+    expect(() => validateFilePath(".env.production", DEFAULT_POLICY)).toThrow(PolicyViolationError);
     expect(() => validateFilePath("config/.env.local", DEFAULT_POLICY)).toThrow(PolicyViolationError);
     expect(() => validateFilePath("keys/id_rsa", DEFAULT_POLICY)).toThrow(PolicyViolationError);
     expect(() => validateFilePath("server.pem", DEFAULT_POLICY)).toThrow(PolicyViolationError);
@@ -29,5 +33,16 @@ describe("OraclePolicy Enforcement", () => {
     expect(() => validateCommand("npm test", strictPolicy)).not.toThrow();
     expect(() => validateCommand("git status", strictPolicy)).not.toThrow();
     expect(() => validateCommand("curl https://malicious.site", strictPolicy)).toThrow(PolicyViolationError);
+  });
+
+  it("fails closed when policy JSON is invalid", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "oracle-policy-"));
+    try {
+      await fs.mkdir(path.join(root, ".oracle"));
+      await fs.writeFile(path.join(root, ".oracle", "policy.json"), "{ invalid", "utf8");
+      await expect(loadPolicy(root)).rejects.toThrow(/Invalid Oracle policy/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

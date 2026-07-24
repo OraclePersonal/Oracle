@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import {
+  ConsensusEngine,
+  type TaskProposal,
+  type VoteDecision
+} from "./consensus.js";
 
 /**
  * Task tracking for multi-agent work: a lead breaks work into tasks, assigns
@@ -32,6 +37,7 @@ export interface TaskRecord {
   status: TaskStatus;
   checklist: ChecklistItem[];
   notes: TaskNote[];
+  proposals: TaskProposal[];
   parentId?: string;
   createdAt: string;
   updatedAt: string;
@@ -83,6 +89,7 @@ export class TaskStore {
       status: "pending",
       checklist: (opts.checklist ?? []).map((text) => ({ text, done: false })),
       notes: [],
+      proposals: [],
       parentId: opts.parentId,
       createdAt: now,
       updatedAt: now
@@ -96,6 +103,7 @@ export class TaskStore {
       const task = JSON.parse(await fs.readFile(this.filePath(id), "utf8")) as TaskRecord;
       if (!Array.isArray(task.checklist)) task.checklist = [];
       if (!Array.isArray(task.notes)) task.notes = [];
+      if (!Array.isArray(task.proposals)) task.proposals = [];
       return task;
     } catch {
       return null;
@@ -180,5 +188,43 @@ export class TaskStore {
     task.updatedAt = new Date().toISOString();
     await this.writeAtomic(this.filePath(id), task);
     return task;
+  }
+
+  async createProposal(
+    taskId: string,
+    proposerAgentId: string,
+    proposedAction: string,
+    options: { requiredQuorum?: number; approvalThresholdRatio?: number } = {}
+  ): Promise<TaskProposal> {
+    const task = await this.get(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    const proposal = new ConsensusEngine().createProposal({
+      taskId,
+      proposerAgentId,
+      proposedAction,
+      requiredQuorum: options.requiredQuorum,
+      approvalThresholdRatio: options.approvalThresholdRatio
+    });
+    task.proposals.push(proposal);
+    task.updatedAt = new Date().toISOString();
+    await this.writeAtomic(this.filePath(task.id), task);
+    return proposal;
+  }
+
+  async castProposalVote(
+    proposalId: string,
+    agentId: string,
+    decision: VoteDecision,
+    justification: string
+  ): Promise<{ task: TaskRecord; proposal: TaskProposal } | null> {
+    for (const task of await this.readAll()) {
+      const proposal = task.proposals.find((candidate) => candidate.id === proposalId);
+      if (!proposal) continue;
+      const updated = new ConsensusEngine().castVote(proposal, agentId, decision, justification);
+      task.updatedAt = new Date().toISOString();
+      await this.writeAtomic(this.filePath(task.id), task);
+      return { task, proposal: updated };
+    }
+    return null;
   }
 }

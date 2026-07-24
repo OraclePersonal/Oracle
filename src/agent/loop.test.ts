@@ -148,4 +148,53 @@ describe("runAgentLoop", () => {
       expect(toolMsg.results[0].isError).toBe(true);
     }
   });
+
+  test("persists audit records and enforces the mutation limit", async () => {
+    const provider = scriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          text: "",
+          toolCalls: [
+            { id: "c1", name: "write_file", input: { path: "one.txt", content: "one" } },
+            { id: "c2", name: "write_file", input: { path: "two.txt", content: "two" } }
+          ],
+        },
+      },
+      { message: { role: "assistant", text: "Stopped after the policy denial.", toolCalls: [] } },
+    ]);
+
+    await runAgentLoop({
+      provider,
+      model: "test",
+      system: "sys",
+      prompt: "write two files",
+      tools: defaultAgentTools(),
+      context: {
+        workspaceRoot: root,
+        readOnly: false,
+        policy: {
+          forbiddenGlobs: [],
+          forbiddenCommands: [],
+          maxMutationsPerSession: 1
+        }
+      },
+    });
+
+    expect(await fs.readFile(path.join(root, "one.txt"), "utf8")).toBe("one");
+    await expect(fs.readFile(path.join(root, "two.txt"), "utf8")).rejects.toThrow();
+
+    const auditLines = (await fs.readFile(path.join(root, ".oracle", "audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string; target: string; details?: { rule?: string } });
+    expect(auditLines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "write", target: "one.txt" }),
+      expect.objectContaining({
+        action: "policy_denied",
+        target: "two.txt",
+        details: expect.objectContaining({ rule: "max_mutations_per_session" })
+      })
+    ]));
+  });
 });

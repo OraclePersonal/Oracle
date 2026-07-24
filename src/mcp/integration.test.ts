@@ -90,6 +90,8 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_task_checklist");
     expect(tools).toContain("oracle_task_submit");
     expect(tools).toContain("oracle_task_close");
+    expect(tools).toContain("oracle_task_propose");
+    expect(tools).toContain("oracle_task_vote");
   });
 
   test("keeps project and global memory scopes separate", async () => {
@@ -309,6 +311,55 @@ describe("Oracle MCP tools", () => {
     const detail = await client.callTool({ name: "oracle_task_get", arguments: { id: taskId } });
     const notes = (detail.structuredContent as { task: { notes: unknown[] } }).task.notes;
     expect(notes.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("task consensus proposals persist and accumulate MCP votes", async () => {
+    const created = await client.callTool({
+      name: "oracle_task_create",
+      arguments: { title: "Release candidate", createdBy: "lead", assignee: "builder" }
+    });
+    const taskId = (created.structuredContent as { task: { id: string } }).task.id;
+
+    const proposed = await client.callTool({
+      name: "oracle_task_propose",
+      arguments: {
+        taskId,
+        proposerAgentId: "builder",
+        proposedAction: "Deploy the release candidate",
+        requiredQuorum: 2,
+        approvalThresholdRatio: 0.5
+      }
+    });
+    expect(proposed.isError).not.toBe(true);
+    const proposalId = (proposed.structuredContent as { proposal: { id: string } }).proposal.id;
+
+    const firstVote = await client.callTool({
+      name: "oracle_task_vote",
+      arguments: {
+        proposalId,
+        agentId: "reviewer",
+        decision: "approve",
+        justification: "review passed"
+      }
+    });
+    expect((firstVote.structuredContent as { status: string; voteCount: number })).toMatchObject({
+      status: "pending",
+      voteCount: 1
+    });
+
+    const secondVote = await client.callTool({
+      name: "oracle_task_vote",
+      arguments: {
+        proposalId,
+        agentId: "qa",
+        decision: "approve",
+        justification: "tests passed"
+      }
+    });
+    expect((secondVote.structuredContent as { status: string; voteCount: number })).toMatchObject({
+      status: "approved",
+      voteCount: 2
+    });
   });
 
   test("inbox wait:true returns immediately when a message is already queued", async () => {

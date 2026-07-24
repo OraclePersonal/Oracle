@@ -31,6 +31,7 @@ export const TASK_INSTRUCTIONS = [
   "As an assignee: use oracle_task_update to log progress as you go. Check off checklist items via oracle_task_checklist as you complete them, not preemptively.",
   "Before reporting done: call oracle_task_submit. It blocks if any checklist item is unchecked, then auto-notifies the creator.",
   "As a reviewer: oracle_task_get shows the full checklist and notes; oracle_task_close with approved=true finishes it, or approved=false sends it back.",
+  "For decisions requiring multiple reviewers: create a persistent proposal with oracle_task_propose, then vote with oracle_task_vote.",
   "Use oracle_task_list to see open work. Leads use oracle_task_board for an ASCII board view."
 ].join(" ");
 
@@ -279,6 +280,32 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
   );
 
   server.registerTool(
+    "oracle_task_propose",
+    {
+      title: "Create Task Consensus Proposal",
+      description: "Create a persistent proposal attached to a task for multi-agent review and voting.",
+      inputSchema: {
+        taskId: z.string().min(1),
+        proposerAgentId: z.string().min(1),
+        proposedAction: z.string().min(1).max(5000),
+        requiredQuorum: z.number().int().min(1).max(50).default(2),
+        approvalThresholdRatio: z.number().min(0).max(1).default(0.66)
+      }
+    },
+    async ({ taskId, proposerAgentId, proposedAction, requiredQuorum, approvalThresholdRatio }) => {
+      try {
+        const proposal = await tasks.createProposal(taskId, proposerAgentId, proposedAction, {
+          requiredQuorum,
+          approvalThresholdRatio
+        });
+        return success(`Created proposal ${proposal.id} for task ${taskId}.`, {
+          proposal: proposal as unknown as Record<string, unknown>
+        });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
     "oracle_task_vote",
     {
       title: "Cast Vote on Task Proposal",
@@ -292,10 +319,10 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     },
     async ({ proposalId, agentId, decision, justification }) => {
       try {
-        const { ConsensusEngine } = await import("../tasks/consensus.js");
-        const engine = new ConsensusEngine();
-        const updated = engine.castVote(proposalId, agentId, decision, justification ?? "");
-        const activeVotes = updated.votes.filter((v: any) => v.decision !== "abstain").length;
+        const result = await tasks.castProposalVote(proposalId, agentId, decision, justification);
+        if (!result) return failure(new Error(`Proposal not found: ${proposalId}`));
+        const updated = result.proposal;
+        const activeVotes = updated.votes.filter((vote) => vote.decision !== "abstain").length;
         const status = updated.status === "approved" ? "APPROVED"
           : updated.status === "rejected" ? "REJECTED"
           : `pending (${activeVotes}/${updated.requiredQuorum} voted)`;
@@ -304,7 +331,8 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
           agentId,
           decision,
           status: updated.status,
-          voteCount: updated.votes.length
+          voteCount: updated.votes.length,
+          taskId: result.task.id
         });
       } catch (error) { return failure(error); }
     }

@@ -86,12 +86,9 @@ export class AgentService {
     const oracleDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
     const checkpointStore = new FileCheckpointStore(oracleDir);
 
-    let policy;
-    try {
-      policy = await loadPolicy(request.workspaceRoot);
-    } catch {
-      policy = undefined; // non-fatal: run without policy if config is unreadable
-    }
+    // Policy loading is fail-closed: an invalid policy must never silently
+    // disable the workspace's security boundary.
+    const policy = await loadPolicy(request.workspaceRoot);
 
     return runAgentLoop({
       provider: this.provider,
