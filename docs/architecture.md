@@ -12,9 +12,10 @@ you ──▶ oracle ask ──▶ context (memory · docs · web · files) ─�
      memory (facts · insights · wiki · entity graph)  ◀──▶  bus (messages · tasks · presence)
 ```
 
-Oracle is a single MCP server + CLI, not a set of subprocess microservices —
-memory, messaging, and task tracking are all in-process, file-backed stores
-under `~/.oracle/`. No database, no daemon.
+Oracle combines an MCP server and CLI with an optional persistent Runtime
+daemon. Coordination and memory remain local stores under `~/.oracle/`;
+Runtime owns long-lived scheduling, SQLite state, and the loopback
+HTTP/WebSocket API.
 
 ## Components
 
@@ -23,6 +24,7 @@ under `~/.oracle/`. No database, no daemon.
 | **CLI** | Commander-based CLI: `ask`, `agent`, `memory`, `wiki`, `docs`, `web`, `msg`, `task`, `identity`, `github`, `session`, `skill` | `src/cli.ts` |
 | **MCP Server** | Stdio MCP server exposing Oracle's full tool surface | `src/mcp/server.ts`, `src/mcp/runtime.ts` |
 | **Standalone coordination server** | `oracle-msg-mcp` binary — 21 messaging, task, consensus, and recovery tools without the provider/memory/agent stack | `src/mcp-messaging.ts` |
+| **Runtime daemon** | Long-lived Scheduler owner, SQLite backend, loopback API, WebSocket events | `src/runtime/`, `src/daemon.ts` |
 | **ConsultService** | Core loop: load files → build context (memory + docs + web) → call provider → answer | `src/core/consult.ts` |
 | **Provider layer** | Codex CLI, Anthropic, OpenAI, OpenCode | `src/providers/` |
 | **Agent sandbox** | Autonomous file read/write/edit loop with a bash tool for shell commands. Every mutation hashed and logged to an audit trail. | `src/agent/` |
@@ -30,6 +32,7 @@ under `~/.oracle/`. No database, no daemon.
 | **Messaging bus** | Atomic file-backed message store, presence registry, real-time watcher, Stop-hook wake-up | `src/messaging/` |
 | **Task tracker** | Plan/assign/verify/report on top of the messaging bus; checklist-gated review | `src/tasks/` |
 | **Coordination service** | Durable Task↔Message outbox, Swarm linkage, consensus reconciliation, recovery | `src/coordination/` |
+| **Scheduler service** | Cron lifecycle over a repository port; SQLite in Runtime, legacy file store for compatibility | `src/scheduler/`, `src/runtime/schedulerService.ts` |
 | **Docs knowledge base** | BM25-indexed local doc retrieval | `src/docs/` |
 | **Web providers** | Brave, Tavily, Firecrawl, AgentQL with auto-fallback | `src/web/` |
 | **Skills** | Built-in + custom skill loading | `src/skills/` |
@@ -95,6 +98,11 @@ for the full lifecycle.
 ├── messages/           # inter-agent message store (atomic JSON per message)
 ├── tasks/               # task tracker (atomic JSON per task)
 ├── swarms/              # workflow state + Task/Message/consensus links
+├── runtime/
+│   ├── oracle.db        # SQLite tasks, run history, metadata, events
+│   ├── daemon.json      # pid, loopback endpoint, owner-only token
+│   └── daemon.log       # detached process output
+├── scheduler/           # legacy JSON tasks imported into SQLite
 ├── agents/               # presence registry (one JSON per registered agent)
 ├── memory/               # facts · insights · wiki · entity graph
 ├── skills/                # custom skill definitions

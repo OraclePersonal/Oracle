@@ -215,18 +215,13 @@ cache.invalidatePattern("skill-.*");
 - Checks: Node.js version, config, workspace, provider auth
 - Returns structured `{ healthy: boolean, checks: [...] }`
 
-### Scheduler (6 tools)
-- `oracle_schedule_list` — List all scheduled tasks
-- `oracle_schedule_add` — Create a new cron task
-- `oracle_schedule_remove` — Delete a task by id
-- `oracle_schedule_run` — Run a task once immediately
-- `oracle_schedule_watch` — Start the watch daemon (persistent)
-- `oracle_schedule_once` — Run a task once and exit
+### Runtime boundary
 
-**Standards:**
-- Atomic JSON per task under `~/.oracle/scheduler/`
-- Tasks survive restarts; `watch` daemon re-reads on restart
-- Cron expressions validated on add
+The Scheduler is exposed through `oracle schedule`, the authenticated
+loopback Runtime API, and its WebSocket event stream. It is not registered as
+an MCP tool category. Tasks and run history live in
+`~/.oracle/runtime/oracle.db`; cron expressions are validated on create and
+update. See [`runtime.md`](runtime.md).
 
 ## Input Validation
 

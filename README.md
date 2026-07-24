@@ -71,7 +71,7 @@ Session B: Claude Code → Oracle
 | 🛠️ **Act** | Autonomous agent with bash tool + file R/W + plan mode + self-review + resume. **Sandbox: shell + filesystem, confined to workspace.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X" --plan --review`. Agent loops until done; logs all file changes. |
 | 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
 | ✅ **Verify** | Durable task/message coordination: lifecycle notifications are persisted before delivery, linked back to their Task and Swarm, and recover safely without duplicates. Checklist submit still **blocks** while verification is incomplete. | MCP: `oracle_task_*`, `oracle_coordination_recover`. CLI: `oracle task ...`, `oracle swarm .../recover`. |
-| ⏰ **Schedule** | Persistent cron task system — define, list, run, and watch scheduled tasks. Tasks survive restarts and run via `oracle schedule watch` daemon. | MCP: `oracle_schedule_*`. CLI: `oracle schedule list/add/remove/run/watch`. |
+| ⏰ **Runtime** | Persistent Oracle daemon owning the Scheduler service, SQLite backend, token-authenticated local API, and replayable WebSocket events. | CLI: `oracle daemon start/status/events/stop`, `oracle schedule list/add/update/run/remove`. |
 
 ---
 
@@ -321,8 +321,9 @@ Read-only; results are historical records, not instructions.
 ### Oracle Profiles & Skills (3 tools)
 `oracle_oracle_list`, `oracle_oracle_register`, `oracle_skills`
 
-### Scheduler (6 tools)
-`oracle_schedule_list`, `oracle_schedule_add`, `oracle_schedule_remove`, `oracle_schedule_run`, `oracle_schedule_watch`, `oracle_schedule_once`
+Scheduler is a Runtime CLI/API capability rather than an MCP tool category.
+Use `oracle schedule ...` or the authenticated loopback API documented in
+[runtime.md](docs/runtime.md).
 
 See [**MESSAGING.md**](docs/MESSAGING.md) for the full messaging + task-tracking
 reference; [**docs/**](docs/) for deeper architecture.
@@ -336,6 +337,8 @@ reference; [**docs/**](docs/) for deeper architecture.
 ```bash
 ORACLE_WORKSPACE_ROOT      # Project root (default: cwd)
 ORACLE_HOME_DIR            # Memory/agents/messages store (default: ~/.oracle)
+ORACLE_RUNTIME_HOST        # Runtime loopback host (default: 127.0.0.1)
+ORACLE_RUNTIME_PORT        # Runtime local API port (default: 4777)
 ORACLE_MEMORY_LLM_GRAPH    # Enable LLM-based memory graph reflection (default: off)
 ANTHROPIC_API_KEY          # For Claude models (required if using Anthropic)
 OPENAI_API_KEY             # For GPT (required if using OpenAI)
@@ -348,7 +351,8 @@ OPENAI_API_KEY             # For GPT (required if using OpenAI)
 3. **Workspace:** `cd /path/to/project`
 4. **MCP:** `oracle setup-mcp --client claude-code` (or wire manually).
 5. **Identity:** `oracle identity setup` (optional; sets your name/preferences).
-6. **Test:** `oracle doctor`
+6. **Runtime:** `oracle daemon start` (optional; persistent scheduler/API).
+7. **Test:** `oracle doctor`
 
 ---
 
@@ -369,7 +373,9 @@ Oracle MCP Server (src/mcp/)
 ├─ Agent Sandbox (src/agent/)
 │  └─ File R/W, bash tool, audit trail, plan mode, self-review, resume, checkpoints
 ├─ Scheduler (src/scheduler/)
-│  └─ CronEngine + taskStore, node-cron backed, atomic JSON storage
+│  └─ CronEngine + repository port, owned by Runtime while active
+├─ Runtime (src/runtime/)
+│  └─ Daemon + SQLite + Scheduler service + local HTTP/WebSocket API
 ├─ Observability (src/observability/)
 │  └─ Structured JSON logging to stderr
 ├─ Identity & Personas (src/identity/)
@@ -378,9 +384,10 @@ Oracle MCP Server (src/mcp/)
    └─ Reusable skill registry + custom oracle profiles
 
 CLI (src/cli.ts)
-├─ oracle ask, agent, agent-checkpoints, memory, msg, task, identity, schedule, ...
+├─ oracle ask, agent, daemon, memory, msg, task, identity, schedule, ...
 ├─ oracle agent: --plan, --review, --resume, --json, --read-only, --yes
-├─ oracle schedule: list, add, remove, run, watch (cron daemon)
+├─ oracle daemon: start, run, status, stop, events
+├─ oracle schedule: list, add, update, remove, run, watch
 ├─ same bus as MCP (shared ~/.oracle/)
 └─ designed for scripting & local use
 
@@ -396,7 +403,11 @@ Standalone Coordination Server (src/mcp-messaging.ts)
 ├─ messages/              # Inter-agent message store (atomic JSON per message)
 ├─ tasks/                 # Task tracker (atomic JSON per task, one file each)
 ├─ swarms/                # Workflow, task/message links, recovery metadata
-├─ scheduler/             # Cron tasks (atomic JSON per task)
+├─ runtime/
+│  ├─ oracle.db           # SQLite scheduler tasks, runs, metadata, events
+│  ├─ daemon.json         # Local endpoint + owner-only API credential
+│  └─ daemon.log          # Background daemon output
+├─ scheduler/             # Legacy JSON tasks (import source)
 ├─ agents/                # Presence registry (one JSON per registered agent)
 ├─ memory/                # Persistent memory (facts, insights, wiki, graph)
 ├─ skills/                # Local skill definitions

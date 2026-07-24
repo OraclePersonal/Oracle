@@ -173,14 +173,16 @@ agent modified the same files between the crash and the resume.
 
 1. Check the task exists: `oracle schedule list`
 2. Verify the cron expression is valid
-3. Ensure the watch daemon is running:
+3. Check the Runtime daemon:
 
 ```bash
-oracle schedule watch
+oracle daemon status
+oracle daemon start
 ```
 
-Tasks are persisted to `~/.oracle/scheduler/` and survive restarts; the daemon
-re-reads on startup.
+Tasks and run history are persisted to `~/.oracle/runtime/oracle.db`. Legacy
+JSON tasks under `~/.oracle/scheduler/` are imported idempotently when Runtime
+starts. Use `oracle daemon events` to inspect live scheduler activity.
 
 ---
 

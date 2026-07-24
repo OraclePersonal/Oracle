@@ -1,20 +1,31 @@
 import { exec } from "node:child_process";
 import cron from "node-cron";
-import { CronTaskStore, type CronTask } from "./taskStore.js";
+import {
+  CronTaskStore,
+  type CronTask,
+  type CronTaskRepository,
+  type CreateTaskInput,
+  type UpdateTaskInput
+} from "./taskStore.js";
 
 export interface CronEngineOptions {
-  homeDir: string;
+  homeDir?: string;
+  store?: CronTaskRepository;
+  onTaskStart?: (task: CronTask) => void;
   onTaskComplete?: (task: CronTask, result: "success" | "error", output: string) => void;
 }
 
 export class CronEngine {
-  private store: CronTaskStore;
+  private store: CronTaskRepository;
   private scheduledTasks: Map<string, cron.ScheduledTask> = new Map();
   private options: CronEngineOptions;
   _running = false;
 
   constructor(options: CronEngineOptions) {
-    this.store = new CronTaskStore(options.homeDir);
+    if (!options.store && !options.homeDir) {
+      throw new Error("CronEngine requires either store or homeDir.");
+    }
+    this.store = options.store ?? new CronTaskStore(options.homeDir!);
     this.options = options;
   }
 
@@ -24,6 +35,10 @@ export class CronEngine {
 
   set onTaskComplete(cb: CronEngineOptions["onTaskComplete"]) {
     this.options.onTaskComplete = cb;
+  }
+
+  set onTaskStart(cb: CronEngineOptions["onTaskStart"]) {
+    this.options.onTaskStart = cb;
   }
 
   async start(): Promise<void> {
@@ -45,12 +60,7 @@ export class CronEngine {
     this._running = false;
   }
 
-  async addTask(input: {
-    name: string;
-    cron: string;
-    command: string;
-    description?: string;
-  }): Promise<CronTask> {
+  async addTask(input: CreateTaskInput): Promise<CronTask> {
     const task = await this.store.create(input);
     if (this._running && task.status === "active") {
       this.scheduleTask(task);
@@ -67,13 +77,7 @@ export class CronEngine {
     return this.store.delete(id);
   }
 
-  async updateTask(id: string, input: {
-    name?: string;
-    cron?: string;
-    command?: string;
-    description?: string;
-    status?: "active" | "paused" | "deleted";
-  }): Promise<CronTask | null> {
+  async updateTask(id: string, input: UpdateTaskInput): Promise<CronTask | null> {
     const scheduled = this.scheduledTasks.get(id);
     if (scheduled) {
       scheduled.stop();
@@ -111,6 +115,7 @@ export class CronEngine {
   }
 
   private async executeTask(task: CronTask): Promise<{ result: "success" | "error"; output: string }> {
+    this.options.onTaskStart?.(task);
     try {
       const output = await this.runCommand(task.command);
       await this.store.recordRun(task.id, "success", output);

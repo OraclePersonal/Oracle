@@ -54,17 +54,17 @@ npx -p @oraclepersonal/oracle oracle ask "review this" -f "src/**/*.ts"
 | 8 | [Setup Checklist](SETUP_CHECKLIST.md) | Verification checklist for MCP setup |
 | 9 | [Setup Complete](SETUP_COMPLETE.md) | What was configured and how to test it |
 | 10 | [Messaging & Task Tracking](MESSAGING.md) | Inter-agent messaging, wake-up tiers, task workflow |
-| 11 | [Scheduler](scheduler.md) | Cron task commands and expressions |
-| 12 | [Troubleshooting](troubleshooting.md) | Common issues and how to resolve them |
-| 13 | [Superpowers / Specs](superpowers/specs/) | Architecture design specs |
-| 14 | [Changelog](/CHANGELOG.md) | Release notes and version history |
-| 15 | [Init](getting-started.md#initialize-the-workspace) | Bootstrap `.oracle/` for a new project |
+| 11 | [Scheduler](scheduler.md) | Runtime-backed cron task commands and expressions |
+| 12 | [Runtime](runtime.md) | Daemon, SQLite, local API, WebSocket events, security |
+| 13 | [Troubleshooting](troubleshooting.md) | Common issues and how to resolve them |
+| 14 | [Superpowers / Specs](superpowers/specs/) | Architecture design specs |
+| 15 | [Changelog](/CHANGELOG.md) | Release notes and version history |
+| 16 | [Init](getting-started.md#initialize-the-workspace) | Bootstrap `.oracle/` for a new project |
 
 ## MCP Tools
 
-Memory (18) · Docs & web (7) · Task tracking (8) · Messaging (8) ·
-Consultation & agent (5) · Identity & config (3) · Oracle profiles & skills (4) ·
-Session & history (6) · Util (1) · Scheduler (6).
+Memory · Docs & web · Task tracking · Messaging · Consultation & agent ·
+Identity & config · Oracle profiles & skills · Session & history · Util.
 
 Full tool-by-tool breakdown and the messaging/task-tracking onboarding flow
 live in [MESSAGING.md](MESSAGING.md).
@@ -75,7 +75,8 @@ live in [MESSAGING.md](MESSAGING.md).
 ~/.oracle/
 ├── messages/    # inter-agent message store (atomic JSON per message)
 ├── tasks/       # task tracker (atomic JSON per task)
-├── scheduler/   # cron tasks (atomic JSON per task)
+├── runtime/     # SQLite database, daemon state, logs
+├── scheduler/   # legacy cron JSON imported into Runtime
 ├── agents/      # presence registry
 ├── memory/      # persistent memory: facts, insights, wiki, entity graph
 ├── skills/      # local skill definitions

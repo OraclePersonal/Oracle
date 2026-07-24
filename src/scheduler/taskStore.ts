@@ -33,7 +33,16 @@ export interface UpdateTaskInput {
   status?: CronTaskStatus;
 }
 
-export class CronTaskStore {
+export interface CronTaskRepository {
+  create(input: CreateTaskInput): Promise<CronTask>;
+  get(id: string): Promise<CronTask | null>;
+  list(): Promise<CronTask[]>;
+  update(id: string, input: UpdateTaskInput): Promise<CronTask | null>;
+  delete(id: string): Promise<boolean>;
+  recordRun(id: string, result: "success" | "error", output: string): Promise<void>;
+}
+
+export class CronTaskStore implements CronTaskRepository {
   constructor(private readonly homeDir: string) {}
 
   private dir(): string {

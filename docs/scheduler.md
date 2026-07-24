@@ -1,10 +1,15 @@
 # Scheduled Cron Tasks
 
-The `oracle schedule` command group provides a persistent cron task system — define, list, run, and watch scheduled tasks.
+The `oracle schedule` command group uses the Runtime 0.2.0 Scheduler service —
+define, list, update, run, and remove persistent cron tasks. While
+`oracle daemon` is running, commands go through its local API so the live
+engine reschedules immediately.
 
 ## Data Storage
 
-Tasks are stored as one JSON file per task under `~/.oracle/scheduler/`. Each file contains a `CronTask` record with full metadata including last run time and output.
+Tasks and run history are stored in `~/.oracle/runtime/oracle.db`. Existing
+JSON tasks under `~/.oracle/scheduler/` are imported idempotently on daemon
+startup and are not deleted.
 
 ## CLI Commands
 
@@ -22,7 +27,7 @@ Add a new scheduled task.
 
 ```
 oracle schedule add "daily backup" "0 2 * * *" "pg_dump mydb > /tmp/backup.sql"
-oracle schedule add add -d "Run tests every 5 minutes" "*/5 * * * *" "npm test"
+oracle schedule add -d "Run tests every 5 minutes" "tests" "*/5 * * * *" "npm test"
 ```
 
 ### `oracle schedule remove <id>`
@@ -31,6 +36,17 @@ Remove a scheduled task by its ID (shown in `list` output).
 
 ```
 oracle schedule remove abc1234-5678-...
+```
+
+### `oracle schedule update <id>`
+
+Update fields or pause/resume a task. Active cron registrations are replaced
+immediately when Runtime is running.
+
+```bash
+oracle schedule update <id> --cron "*/10 * * * *"
+oracle schedule update <id> --status paused
+oracle schedule update <id> --status active
 ```
 
 ### `oracle schedule run <id>`
@@ -45,13 +61,14 @@ Exit code matches the task result: `0` for success, `1` for error.
 
 ### `oracle schedule watch`
 
-Start the cron daemon — loads all active tasks from storage and runs them on their cron schedule.
+Compatibility alias for running the full Oracle Runtime in the foreground.
 
 ```
 oracle schedule watch
 ```
 
-Runs until interrupted (SIGINT/SIGTERM). Prints task completions to stderr.
+Runs until interrupted (SIGINT/SIGTERM). Runtime events are available through
+`oracle daemon events`.
 
 ```
 oracle schedule watch --once
@@ -74,7 +91,9 @@ Uses standard 5-field cron syntax via [`node-cron`](https://github.com/kelektiv/
 
 ## Configuration
 
-Tasks are stored under `~/.oracle/scheduler/`. No additional configuration needed.
+Runtime state is stored under `~/.oracle/runtime/`. See
+[runtime.md](runtime.md) for the API, WebSocket, security, and daemon
+lifecycle.
 
 ## Examples
 

@@ -32,6 +32,13 @@ import { MessageStore } from "./messaging/store.js";
 import { TaskStore } from "./tasks/store.js";
 import { CoordinationService } from "./coordination/service.js";
 import { SwarmStore } from "./orchestrator/swarmStore.js";
+import { RuntimeClient } from "./runtime/client.js";
+import { daemonStatus, startDaemon, stopDaemon } from "./runtime/control.js";
+import type {
+  CreateTaskInput as CreateCronTaskInput,
+  CronTask,
+  UpdateTaskInput as UpdateCronTaskInput
+} from "./scheduler/taskStore.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
@@ -855,15 +862,163 @@ taskCmd
     console.log(approved ? `Closed ${id} as done.` : `Sent ${id} back to in_progress.`);
   });
 
+// ── runtime daemon ──────────────────────────────────────────────
+async function runDaemonForeground(host: string, port: number): Promise<void> {
+  const { OracleDaemon } = await import("./runtime/daemon.js");
+  let resolveStopped!: () => void;
+  const stopped = new Promise<void>((resolve) => { resolveStopped = resolve; });
+  const daemon = new OracleDaemon({
+    homeDir: homeDir(),
+    host,
+    port,
+    onShutdown: resolveStopped
+  });
+  const state = await daemon.start();
+  console.error(`Oracle Runtime ${VERSION} listening on http://${state.host}:${state.port}`);
+  console.error(`SQLite: ${state.databasePath}`);
+
+  const shutdown = async () => {
+    await daemon.stop();
+    resolveStopped();
+  };
+  const onSigint = () => void shutdown();
+  const onSigterm = () => void shutdown();
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
+  await stopped;
+  process.off("SIGINT", onSigint);
+  process.off("SIGTERM", onSigterm);
+}
+
+const daemonCmd = program
+  .command("daemon")
+  .description("Manage the persistent Oracle Runtime service");
+
+daemonCmd
+  .command("start")
+  .description("Start Oracle Runtime in the background")
+  .option("--host <host>", "Loopback host", "127.0.0.1")
+  .option("--port <port>", "Local API port", "4777")
+  .action(async (options) => {
+    const result = await startDaemon({
+      homeDir: homeDir(),
+      host: options.host,
+      port: Number(options.port)
+    });
+    console.log(result.alreadyRunning ? "Oracle Runtime is already running." : "Oracle Runtime started.");
+    console.log(`  pid:     ${result.state.pid}`);
+    console.log(`  API:     http://${result.state.host}:${result.state.port}`);
+    console.log(`  SQLite:  ${result.state.databasePath}`);
+  });
+
+daemonCmd
+  .command("run")
+  .description("Run Oracle Runtime in the foreground")
+  .option("--host <host>", "Loopback host", "127.0.0.1")
+  .option("--port <port>", "Local API port", "4777")
+  .action(async (options) => {
+    await runDaemonForeground(options.host, Number(options.port));
+  });
+
+daemonCmd
+  .command("status")
+  .description("Show daemon, scheduler, API, and storage status")
+  .option("--json", "Print machine-readable status", false)
+  .action(async (options) => {
+    const status = await daemonStatus(homeDir());
+    const safeState = status.state ? { ...status.state, token: undefined } : undefined;
+    if (options.json) {
+      console.log(JSON.stringify({ ...status, state: safeState }, null, 2));
+      return;
+    }
+    if (!status.running) {
+      console.log(status.stale ? "Oracle Runtime is stopped (stale state detected)." : "Oracle Runtime is stopped.");
+      return;
+    }
+    console.log(`Oracle Runtime ${status.health?.version} is running.`);
+    console.log(`  pid:       ${status.state?.pid}`);
+    console.log(`  API:       http://${status.state?.host}:${status.state?.port}`);
+    console.log(`  scheduler: ${status.health?.schedulerRunning ? "running" : "stopped"}`);
+    console.log(`  storage:   ${status.health?.storage} (${status.state?.databasePath})`);
+  });
+
+daemonCmd
+  .command("stop")
+  .description("Gracefully stop Oracle Runtime")
+  .action(async () => {
+    const stopped = await stopDaemon(homeDir());
+    console.log(stopped ? "Oracle Runtime stopped." : "Oracle Runtime is not running.");
+  });
+
+daemonCmd
+  .command("events")
+  .description("Stream daemon and scheduler events over WebSocket")
+  .option("--after <id>", "Replay events after this event id", "0")
+  .action(async (options) => {
+    const client = await RuntimeClient.connect(homeDir());
+    if (!client) throw new Error("Oracle Runtime is not running.");
+    const { WebSocket } = await import("ws");
+    const socket = new WebSocket(client.webSocketUrl(Number(options.after)));
+    await new Promise<void>((resolve, reject) => {
+      socket.on("open", () => console.error("Connected to Oracle Runtime events. Press Ctrl+C to stop."));
+      socket.on("message", (data) => console.log(data.toString()));
+      socket.on("error", reject);
+      socket.on("close", () => resolve());
+      process.once("SIGINT", () => socket.close(1000, "client stopped"));
+    });
+  });
+
 // ── schedule ────────────────────────────────────────────
 const schedCmd = program.command("schedule").description("Manage scheduled cron tasks");
 
-async function makeScheduler(): Promise<import("./scheduler/cronEngine.js").CronEngine> {
-  const { CronEngine } = await import("./scheduler/cronEngine.js");
-  return new CronEngine({ homeDir: homeDir() });
+interface SchedulerAccess {
+  listTasks(): Promise<CronTask[]>;
+  getTask(id: string): Promise<CronTask | null>;
+  addTask(input: CreateCronTaskInput): Promise<CronTask>;
+  updateTask(id: string, input: UpdateCronTaskInput): Promise<CronTask | null>;
+  removeTask(id: string): Promise<boolean>;
+  runOnce(id: string): Promise<{ result: "success" | "error"; output: string }>;
 }
 
-function printCronTask(t: import("./scheduler/taskStore.js").CronTask): void {
+async function makeScheduler(): Promise<SchedulerAccess> {
+  const root = homeDir();
+  const client = await RuntimeClient.connect(root);
+  if (client) {
+    return {
+      listTasks: () => client.listSchedules(),
+      getTask: (id) => client.getSchedule(id),
+      addTask: (input) => client.createSchedule(input),
+      updateTask: (id, input) => client.updateSchedule(id, input),
+      removeTask: (id) => client.removeSchedule(id),
+      runOnce: (id) => client.runSchedule(id)
+    };
+  }
+
+  // Daemon not running: keep CLI useful while writing to the same SQLite
+  // backend. The next daemon start will load these tasks.
+  const [
+    { RuntimeDatabase },
+    { RuntimeEventBus },
+    { SchedulerService }
+  ] = await Promise.all([
+    import("./runtime/database.js"),
+    import("./runtime/events.js"),
+    import("./runtime/schedulerService.js")
+  ]);
+  const database = new RuntimeDatabase(root);
+  const service = new SchedulerService(database, new RuntimeEventBus(database));
+  await service.store.importLegacyDirectory(root);
+  return {
+    listTasks: () => service.list(),
+    getTask: (id) => service.get(id),
+    addTask: (input) => service.create(input),
+    updateTask: (id, input) => service.update(id, input),
+    removeTask: (id) => service.remove(id),
+    runOnce: (id) => service.run(id)
+  };
+}
+
+function printCronTask(t: CronTask): void {
   const statusIcon = t.status === "active" ? "\x1b[32m●\x1b[0m" : t.status === "paused" ? "\x1b[33m○\x1b[0m" : "\x1b[31m●\x1b[0m";
   console.log(`${statusIcon} ${t.id}  ${t.name.padEnd(24)} ${t.cron.padEnd(20)} ${t.command}`);
   if (t.description) console.log(`       ${t.description}`);
@@ -897,6 +1052,31 @@ schedCmd
   });
 
 schedCmd
+  .command("update")
+  .description("Update a scheduled task")
+  .argument("<id>", "Task id")
+  .option("--name <name>", "New task name")
+  .option("--cron <expression>", "New cron expression")
+  .option("--command <command>", "New shell command")
+  .option("-d, --description <text>", "New description")
+  .option("--status <status>", "active | paused | deleted")
+  .action(async (id: string, options) => {
+    if (options.status && !["active", "paused", "deleted"].includes(options.status)) {
+      throw new Error("status must be active, paused, or deleted.");
+    }
+    const engine = await makeScheduler();
+    const task = await engine.updateTask(id, {
+      name: options.name,
+      cron: options.cron,
+      command: options.command,
+      description: options.description,
+      status: options.status
+    });
+    if (!task) { console.error(`Task not found: ${id}`); process.exitCode = 1; return; }
+    printCronTask(task);
+  });
+
+schedCmd
   .command("remove")
   .description("Remove a scheduled task")
   .argument("<id>", "Task id")
@@ -920,44 +1100,22 @@ schedCmd
 
 schedCmd
   .command("watch")
-  .description("Start the cron daemon — runs all active tasks on schedule")
+  .description("Run the Runtime daemon in the foreground (legacy scheduler alias)")
   .option("--once", "Run active tasks once then exit", false)
   .action(async (options) => {
-    const engine = await makeScheduler();
-    await engine.start();
-    const tasks = await engine.listTasks();
-    const active = tasks.filter((t) => t.status === "active");
-    console.error(`Cron daemon started — ${active.length} active task(s).`);
-    for (const t of active) {
-      console.error(`  ${t.id} ${t.cron}  ${t.name}`);
-    }
-
     if (options.once) {
+      const engine = await makeScheduler();
+      const active = (await engine.listTasks()).filter((task) => task.status === "active");
       console.error("Running once and exiting...");
       for (const t of active) {
         const { result, output } = await engine.runOnce(t.id);
         if (output) console.log(output);
         console.error(`[${result}] ${t.name}`);
       }
-      await engine.stop();
       return;
     }
-
-    engine.onTaskComplete = (_task, result, output) => {
-      const icon = result === "success" ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
-      console.error(`[${icon}] ${_task.name}`);
-      if (output) console.error(`       ${output.slice(0, 120)}`);
-    };
-
-    const shutdown = async () => {
-      console.error("\nShutting down cron daemon...");
-      await engine.stop();
-      process.exit(0);
-    };
-    process.on("SIGINT", shutdown);
-    process.on("SIGTERM", shutdown);
-
-    await new Promise(() => {});
+    console.error("`oracle schedule watch` now runs the full Runtime daemon. Prefer `oracle daemon run`.");
+    await runDaemonForeground("127.0.0.1", 4777);
   });
 
 // ── swarm ───────────────────────────────────────────────────────

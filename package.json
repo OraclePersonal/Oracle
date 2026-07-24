@@ -1,6 +1,6 @@
 {
   "name": "@oraclepersonal/oracle",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Oracle Assistant — an MCP-powered AI assistant with persistent memory, a knowledge base, web access, and an inter-agent message bus for Claude Code, opencode, and other coding agents.",
   "keywords": [
     "oracle-assistant",
@@ -31,6 +31,7 @@
   },
   "bin": {
     "oracle": "./dist/cli.js",
+    "oracle-daemon": "./dist/daemon.js",
     "oracle-mcp": "./dist/mcp.js",
     "oracle-msg-mcp": "./dist/mcp-messaging.js"
   },
@@ -46,12 +47,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
+    "daemon": "tsx src/daemon.ts",
     "mcp": "tsx src/mcp.ts",
     "mcp:messaging": "tsx src/mcp-messaging.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run src",
     "test:cli": "node scripts/smoke-cli.mjs",
-    "verify": "npm run build && npm run test && npm run test:cli",
+    "test:runtime": "node scripts/smoke-runtime.mjs",
+    "verify": "npm run build && npm run test && npm run test:cli && npm run test:runtime",
     "prepublishOnly": "npm run verify"
   },
   "dependencies": {
@@ -65,10 +68,12 @@
     "node-cron": "^3.0.3",
     "openai": "^6.45.0",
     "readdown": "^0.2.5",
+    "ws": "^8.21.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.23.0",
     "typescript": "^6.0.0",
     "vitest": "^4.1.0"

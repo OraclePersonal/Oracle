@@ -127,10 +127,12 @@ All Oracle data stored locally:
 ├─ tasks/             # Task tracker (work assignments + verification)
 ├─ agents/            # Presence registry (who's online)
 ├─ memory/            # Persistent knowledge base (facts + entity graph)
+├─ runtime/           # SQLite scheduler/events + daemon state/log
 └─ .sessions/         # Consultation history (optional)
 ```
 
-**Zero external services.** All file-backed, atomic JSON writes.
+**Zero external services.** Coordination stores use atomic local files;
+Runtime uses a local SQLite database.
 
 ---
 

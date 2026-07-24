@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-24
+
+### Added
+- Persistent `oracle-daemon` process with background and foreground lifecycle commands
+- SQLite runtime backend using WAL mode for scheduler tasks, run history, metadata, and events
+- Scheduler service owned by the daemon, with idempotent import of legacy JSON tasks
+- Token-authenticated loopback HTTP API for scheduler and daemon operations
+- WebSocket event stream with SQLite-backed cursor replay
+- `oracle daemon start|run|status|stop|events`
+- `oracle schedule update` with live rescheduling through the daemon API
+- Runtime integration and smoke tests covering API, WebSocket, SQLite, and process lifecycle
+
+### Changed
+- Package version advanced to Runtime 0.2.0
+- Scheduler CLI commands use the daemon API when available and the same SQLite backend when offline
+- `oracle schedule watch` is now a compatibility alias for foreground Runtime
+
+### Security
+- Runtime rejects non-loopback bind addresses
+- Daemon API credentials are owner-only and redacted from status output
+
 ## [0.1.0] - 2026-07-24
 
 ### Added

@@ -161,14 +161,31 @@ delivery.
 
 ### oracle schedule
 
-Cron task scheduler.
+Runtime-backed cron task scheduler.
 
 ```bash
 oracle schedule list
-oracle schedule add --name "daily-backup" --expr "0 2 * * *" --cmd "tar czf /tmp/backup.tgz src/"
+oracle schedule add "daily-backup" "0 2 * * *" "tar czf /tmp/backup.tgz src/"
+oracle schedule update <id> --cron "*/10 * * * *"
+oracle schedule update <id> --status paused
 oracle schedule run <id>            # run once immediately
-oracle schedule watch               # start persistent daemon
+oracle schedule watch               # foreground Runtime compatibility alias
 oracle schedule remove <id>
+```
+
+---
+
+### oracle daemon
+
+Persistent local Runtime with SQLite, Scheduler, HTTP API, and WebSocket
+events.
+
+```bash
+oracle daemon start [--port 4777]
+oracle daemon status [--json]
+oracle daemon events [--after <event-id>]
+oracle daemon stop
+oracle daemon run                    # foreground mode
 ```
 
 ---
