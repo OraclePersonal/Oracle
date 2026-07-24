@@ -70,6 +70,7 @@ Session B: Claude Code → Oracle
 | 🛠️ **Act** | Autonomous agent with bash tool + file R/W + plan mode + self-review + resume. **Sandbox: shell + filesystem, confined to workspace.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X" --plan --review`. Agent loops until done; logs all file changes. |
 | 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
 | ✅ **Verify** | Task tracker on top of the message bus: create + assign work with a checklist, log progress notes, and submit for review — which **blocks** if any checklist item is unchecked and auto-reports to the task creator. Reviewer approves (done) or rejects with a note (bounces back). | MCP: `oracle_task_*`. CLI: `oracle task create/update/check/submit/close/list`. |
+| ⏰ **Schedule** | Persistent cron task system — define, list, run, and watch scheduled tasks. Tasks survive restarts and run via `oracle schedule watch` daemon. | MCP: `oracle_schedule_*`. CLI: `oracle schedule list/add/remove/run/watch`. |
 
 ---
 
@@ -280,7 +281,7 @@ assigned tasks to a larger Lead-created TODO.
 
 ---
 
-## MCP Tools (60 Total)
+## MCP Tools (49 Total)
 
 ### Memory (18 tools)
 `oracle_memory_*` — remember, search, scored_search, list, update, clear, consolidate,
@@ -290,8 +291,8 @@ query/path/prune/stats.
 ### Consultation & Agent (5 tools)
 `oracle_ask`, `oracle_agent`, `oracle_sessions`, `oracle_session_get`, `oracle_doctor`
 
-### Messaging & Coordination (6 tools)
-`oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`
+### Messaging & Coordination (8 tools)
+`oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`, `oracle_msg_search`, `oracle_msg_heartbeat`
 
 ### Task Planning & Tracking (8 tools)
 `oracle_task_create`, `oracle_task_board`, `oracle_task_list`, `oracle_task_get`, `oracle_task_update`,
@@ -299,10 +300,6 @@ query/path/prune/stats.
 
 ### Identity & Config (3 tools)
 `oracle_identity_setup`, `oracle_identity_show`, `oracle_persona_set`
-
-### GitHub Integration (11 tools)
-PR/issue listing & get, diff viewing, file listing, review + review-submit,
-comments, search, API passthrough.
 
 ### Docs & Web (7 tools)
 Doc indexing (add/list/remove/search), web search, web fetch, structured web extraction.
@@ -317,7 +314,10 @@ Read-only; results are historical records, not instructions.
 ### Oracle Profiles & Skills (3 tools)
 `oracle_oracle_list`, `oracle_oracle_register`, `oracle_skills`
 
-See [**MESSAGING.md**](MESSAGING.md) for the full messaging + task-tracking
+### Scheduler (6 tools)
+`oracle_schedule_list`, `oracle_schedule_add`, `oracle_schedule_remove`, `oracle_schedule_run`, `oracle_schedule_watch`, `oracle_schedule_once`
+
+See [**MESSAGING.md**](docs/MESSAGING.md) for the full messaging + task-tracking
 reference; [**docs/**](docs/) for deeper architecture.
 
 ---
@@ -358,7 +358,9 @@ Oracle MCP Server (src/mcp/)
 ├─ Task Tracker (src/tasks/)
 │  └─ File-backed store: plan/assign/verify/report, layered on messaging
 ├─ Agent Sandbox (src/agent/)
-│  └─ File R/W, bash tool, audit trail, looping until done
+│  └─ File R/W, bash tool, audit trail, plan mode, self-review, resume, checkpoints
+├─ Scheduler (src/scheduler/)
+│  └─ CronEngine + taskStore, node-cron backed, atomic JSON storage
 ├─ Observability (src/observability/)
 │  └─ Structured JSON logging to stderr
 ├─ Identity & Personas (src/identity/)
@@ -367,8 +369,9 @@ Oracle MCP Server (src/mcp/)
    └─ Reusable skill registry + custom oracle profiles
 
 CLI (src/cli.ts)
-├─ oracle ask, agent, agent-checkpoints, memory, msg, task, identity, ...
+├─ oracle ask, agent, agent-checkpoints, memory, msg, task, identity, schedule, ...
 ├─ oracle agent: --plan, --review, --resume, --json, --read-only, --yes
+├─ oracle schedule: list, add, remove, run, watch (cron daemon)
 ├─ same bus as MCP (shared ~/.oracle/)
 └─ designed for scripting & local use
 
@@ -383,6 +386,7 @@ Standalone Coordination Server (src/mcp-messaging.ts)
 ~/.oracle/
 ├─ messages/              # Inter-agent message store (atomic JSON per message)
 ├─ tasks/                 # Task tracker (atomic JSON per task, one file each)
+├─ scheduler/             # Cron tasks (atomic JSON per task)
 ├─ agents/                # Presence registry (one JSON per registered agent)
 ├─ memory/                # Persistent memory (facts, insights, wiki, graph)
 ├─ skills/                # Local skill definitions
@@ -469,7 +473,7 @@ npm run test            # watch mode: vitest
 
 ## Learn More
 
-- [**Messaging Flow & Setup**](MESSAGING.md) — How agents coordinate, wake-up tiers, CLI reference, troubleshooting.
+- [**Messaging Flow & Setup**](docs/MESSAGING.md) — How agents coordinate, wake-up tiers, CLI reference, troubleshooting.
 - [**Skill System**](.claude/skills/oracle-messaging/SKILL.md) — Portable SKILL.md that teaches any agent how to use the bus.
 - [**Architecture Deep-Dive**](docs/architecture.md) — System design, data flow, threat model.
 - [**Agent & Autonomy**](docs/AGENT.md) — How the sandbox works, audit trail, limitations.

@@ -38,26 +38,36 @@ npx -p @oraclepersonal/oracle oracle ask "review this" -f "src/**/*.ts"
 | 🛠️ **Act** | An autonomous agent that reads/writes/edits files and runs shell commands to complete a task. **Shell + filesystem** — confined to the workspace, fully audited (every mutation and command hashed and logged). |
 | 📨 **Coordinate** | A file-backed inter-agent message bus. Agents send, receive, reply in threads, broadcast, and track presence — with self-onboarding via MCP server instructions, so no one has to be told how to use it. |
 | ✅ **Verify** | A task tracker on top of the bus: assign work with a checklist, log progress, and submit for review — which **blocks** until every checklist item is actually checked off. The task creator is notified automatically. |
+| ⏰ **Schedule** | Persistent cron task system — schedule shell commands to run at specific times or intervals. Tasks survive restarts and run via `oracle schedule watch` daemon. |
 
 ## Documentation
 
-| Doc | Description |
-|-----|-------------|
-| [Architecture](architecture.md) | System components, storage layout, provider routing |
-| [Getting Started](getting-started.md) | Install, configure, and run |
-| [Agent & Sandbox](AGENT.md) | The autonomous agent, its constraints, and the audit trail |
-| [MCP Standards](MCP-STANDARDS.md) | Conventions for the MCP tool surface |
+| # | Doc | Description |
+|---|-----|-------------|
+| 1 | [Getting Started](getting-started.md) | Install, configure, and verify your setup |
+| 2 | [Quick Start](ORACLE_QUICKSTART.md) | Step-by-step MCP setup and first tools |
+| 3 | [CLI Reference](cli-reference.md) | Every `oracle` subcommand and flag |
+| 4 | [Architecture](architecture.md) | System components, storage layout, provider routing |
+| 5 | [Agent & Sandbox](AGENT.md) | The autonomous agent, its constraints, and the audit trail |
+| 6 | [MCP Standards](MCP-STANDARDS.md) | Conventions for the MCP tool surface |
+| 7 | [Claude Code Usage](CLAUDE_CODE_USAGE.md) | Using Oracle MCP tools within Claude Code |
+| 8 | [Setup Checklist](SETUP_CHECKLIST.md) | Verification checklist for MCP setup |
+| 9 | [Setup Complete](SETUP_COMPLETE.md) | What was configured and how to test it |
+| 10 | [Messaging & Task Tracking](MESSAGING.md) | Inter-agent messaging, wake-up tiers, task workflow |
+| 11 | [Scheduler](scheduler.md) | Cron task commands and expressions |
+| 12 | [Troubleshooting](troubleshooting.md) | Common issues and how to resolve them |
+| 13 | [Superpowers / Specs](superpowers/specs/) | Architecture design specs |
+| 14 | [Changelog](/CHANGELOG.md) | Release notes and version history |
+| 15 | [Init](getting-started.md#initialize-the-workspace) | Bootstrap `.oracle/` for a new project |
 
-## MCP Tools (60)
+## MCP Tools (49)
 
-Memory (18) · GitHub integration (11) · Docs & web (7) · Task tracking (7) ·
-Messaging & coordination (6) · Consultation & agent (5) · Identity & config (3)
-· Oracle profiles & skills (3).
+Memory (18) · Docs & web (7) · Task tracking (8) · Messaging (8) ·
+Consultation & agent (5) · Identity & config (3) · Oracle profiles & skills (4) ·
+Session & history (6) · Util (1) · Scheduler (6).
 
-Full tool-by-tool breakdown, CLI reference, and the messaging/task-tracking
-onboarding flow live in
-[MESSAGING.md](https://github.com/OraclePersonal/Oracle/blob/main/MESSAGING.md)
-and the main [README](https://github.com/OraclePersonal/Oracle#readme).
+Full tool-by-tool breakdown and the messaging/task-tracking onboarding flow
+live in [MESSAGING.md](MESSAGING.md).
 
 ## Storage Layout
 
@@ -65,6 +75,7 @@ and the main [README](https://github.com/OraclePersonal/Oracle#readme).
 ~/.oracle/
 ├── messages/    # inter-agent message store (atomic JSON per message)
 ├── tasks/       # task tracker (atomic JSON per task)
+├── scheduler/   # cron tasks (atomic JSON per task)
 ├── agents/      # presence registry
 ├── memory/      # persistent memory: facts, insights, wiki, entity graph
 ├── skills/      # local skill definitions

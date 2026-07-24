@@ -67,6 +67,17 @@ oracle ask "how does auth work here?" --include-docs
 oracle ask "review this code" --soul engineer
 ```
 
+## Initialize the workspace
+
+```bash
+oracle init workspace
+```
+
+Creates `.oracle/` in the current directory with `policy.json` (zero-trust
+rules for the autonomous agent), `config.json` (provider/model/project scope),
+`docs/` (knowledge base), and `skills/` (local skill definitions). Use
+`--force` to overwrite existing files.
+
 ## Run the autonomous agent
 
 ```bash
@@ -86,7 +97,7 @@ oracle task create --title "Add rate limiting" --created-by lead --assignee buil
   --checklist "implement limiter" "add tests"
 ```
 
-See [MESSAGING.md](https://github.com/OraclePersonal/Oracle/blob/main/MESSAGING.md)
+See [MESSAGING.md](MESSAGING.md)
 for the full messaging + task-tracking flow, including wake-up hooks for idle
 agent sessions.
 
@@ -121,3 +132,7 @@ the lighter `oracle-msg-mcp` binary instead:
   }
 }
 ```
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

@@ -37,7 +37,7 @@
   "files": [
     "dist",
     "README.md",
-    "MESSAGING.md",
+    "CHANGELOG.md",
     "docs"
   ],
   "publishConfig": {
@@ -55,10 +55,12 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node-cron": "^3.0.11",
     "chokidar": "^5.0.0",
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "fast-glob": "^3.3.3",
+    "node-cron": "^3.0.3",
     "openai": "^6.45.0",
     "readdown": "^0.2.5",
     "zod": "^4.4.3"

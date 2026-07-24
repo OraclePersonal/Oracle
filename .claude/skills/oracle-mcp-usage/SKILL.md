@@ -278,7 +278,6 @@ oracle_task_close {
 | Tasks (8) | `oracle_task_create`, `oracle_task_list`, `oracle_task_get`, `oracle_task_update`, `oracle_task_checklist`, `oracle_task_submit`, `oracle_task_close`, `oracle_task_board` |
 | Agents | `oracle_agent` (autonomous sandbox) |
 | Docs & Web | `oracle_docs_*`, `oracle_web_search`, `oracle_web_fetch`, `oracle_web_extract` |
-| GitHub | `oracle_github_pr_*`, `oracle_github_issue_*`, `oracle_github_comment`, `oracle_github_search` |
 | Identity & System | `oracle_identity_*`, `oracle_persona_set`, `oracle_doctor`, `oracle_skills`, `oracle_oracle_*` |
 
 ---

@@ -2,7 +2,7 @@
 
 Oracle can act as an autonomous coding agent: you give it a task, and it
 reads, writes, and edits files and searches the codebase in a **tool-use
-loop** until the task is complete. it has a **bash tool** for running shell commands — confined to the workspace, with timeout and audit trail
+loop** until the task is complete. It has a **bash** tool for running shell commands — confined to the workspace, with timeout and audit trail
 feature (see [Safety boundaries](#safety-boundaries)). This document
 explains how it works, the toolset, safety boundaries, and how to use it
 from the CLI and MCP.
@@ -28,17 +28,32 @@ task ──► [ provider.runAgentTurn ] ──► assistant text + tool calls
 The loop itself (`src/agent/loop.ts`) is **provider-agnostic**. Each provider
 translates the neutral transcript to/from its own wire format:
 
-- **Anthropic** — native `tool_use` / `tool_result` blocks (`src/providers/anthropic.ts`)
-- **opencode** (OpenAI-compatible) — chat-completion function calling (`src/providers/openai.ts`)
+- **Anthropic** — native `tool_use` / `tool_result` blocks (`src/providers/anthropicProvider.ts`)
+- **opencode** (OpenAI-compatible) — chat-completion function calling (`src/providers/openaiProvider.ts`)
+- **codex** — uses the Codex CLI process (non-agentic; no tool-use loop)
 
-`codex` and the `openai` responses provider do **not** support the agentic loop
-today; the agent requires `anthropic` or `opencode`.
+`oracle_agent` requires an agent-capable provider (`anthropic` or `opencode`);
+otherwise it returns `ORACLE_AGENT_UNAVAILABLE`.
+
+## CLI flags
+
+| Flag | Purpose |
+|---|---|
+| `--plan` | Read-only investigation pass first; shows the plan and asks for confirmation before executing |
+| `--review` | After completion, runs a self-review pass checking for bugs, missing error handling, and edge cases |
+| `--resume <id>` | Resume from a saved checkpoint after a crash or max-steps hit |
+| `--json` | Structured output: `finalText`, `turns`, `steps`, `checkpointId`, `usage` |
+| `--read-only` | Drops all mutating tools (write/edit/bash); investigation only |
+| `--max-steps <n>` | Cap the loop (default 20, max 50) |
+| `--provider <name>` | Override provider for this run |
+| `--model <name>` | Override model for this run |
 
 ## Toolset
 
-All tools live in `src/agent/tools.ts`. Filesystem access is confined to the
-workspace root — a single trust boundary (`resolveInWorkspace`) rejects any
-path that escapes it. The agent also has a **bash** tool for running shell commands (disabled in readOnly mode).
+All tools live in `src/agent/loop.ts` and `src/agent/service.ts`. Filesystem
+access is confined to the workspace root — a single trust boundary
+(`resolveInWorkspace`) rejects any path that escapes it. The agent also has a
+**bash** tool for running shell commands (disabled in readOnly mode).
 
 | Tool | Mutating | Purpose |
 |---|---|---|
@@ -50,74 +65,29 @@ path that escapes it. The agent also has a **bash** tool for running shell comma
 | `read_video` | no | Read a video file for a vision-capable model |
 | `write_file` | yes | Create/overwrite a file (makes parent dirs); audited |
 | `edit_file` | yes | Replace an exact, unique string in a file; audited |
-| `bash` | yes | Run a shell command in the workspace root (timeout, audited, disabled in readOnly) |
+| `bash` | yes | Run a shell command in the workspace root (respects `$SHELL`, timeout, audited, disabled in readOnly) |
 
 ## Safety boundaries
 
-- **Shell confined** — the `bash` tool runs in the workspace root with a timeout; it is disabled in readOnly mode. Every command is logged to the audit trail.
+- **Shell confined** — the `bash` tool runs in the workspace root with a timeout; it is disabled in readOnly mode. Every command is logged to the audit trail. On Windows, `$SHELL` is respected (e.g. Git Bash); on Unix, the user's shell is used.
 - **Workspace confinement** — every path is resolved against the workspace root;
   traversal outside it (`../`) is rejected before any I/O happens.
 - **Read-only mode** — pass `readOnly` (MCP) or `--read-only` (CLI) to drop
-  both mutating tools (`write_file`, `edit_file`) entirely, so the agent can
+  both mutating tools (`write_file`, `edit_file`, `bash`) entirely, so the agent can
   investigate without changing anything.
-- **Step cap** — `maxSteps` (default 20) bounds the loop so it can't run forever.
+- **Plan mode** — `--plan` runs a read-only investigation pass first, presents the plan, and asks for confirmation before any mutation.
+- **Step cap** — `maxSteps` (default 20, max 50) bounds the loop so it can't run forever.
 - **Output cap** — each tool truncates its output (30k chars) so a huge file
   can't blow up the context.
-- **Audit trail** — every `write_file`/`edit_file` call is recorded (path,
-  size, SHA-256 content hash) so mutations can be reviewed or replayed after
+- **Audit trail** — every `write_file`/`edit_file`/`bash` call is recorded (path,
+  size, SHA-256 content hash, diff summary) so mutations can be reviewed or replayed after
   the run; see `src/agent/audit.ts`.
 
 The agent operates on the user's own workspace intentionally; it does not redact
 file contents (the model needs real code to edit). Use `readOnly` when you only
 want analysis.
 
-## CLI usage
-
-```bash
-# Implement something (writes files, runs tests)
-oracle agent "add a --verbose flag to the CLI and update the README"
-
-# Investigate without touching anything
-oracle agent "explain how sessions are persisted" --read-only
-
-# Pick provider/model and bound the loop
-oracle agent "fix the failing test in src/foo.test.ts" \
-  --provider anthropic --model auto --max-steps 30
-```
-
-Progress is printed to stderr per turn (`[turn 3] → read_file, edit_file`); the
-final answer goes to stdout.
-
-## MCP usage
-
-The `oracle_agent` tool exposes the same capability to any MCP client:
-
-```jsonc
-{
-  "name": "oracle_agent",
-  "arguments": {
-    "prompt": "add input validation to the config loader and a test for it",
-    "readOnly": false,         // optional; true = investigate only
-    "maxSteps": 20,            // optional; 1..50
-    "resumeId": "cp-..."       // optional; resume from a checkpoint
-  }
-}
-```
-
-Structured result:
-
-```jsonc
-{
-  "finalText": "Added zod validation … and a passing test.",
-  "turns": 6,
-  "stoppedOnLimit": false,
-  "steps": [ { "turn": 1, "text": "...", "toolsUsed": ["read_file"] }, ... ],
-  "usage": { "inputTokens": 12000, "outputTokens": 3400 },
-  "checkpointId": "cp-20260722-a1b2c3d4"   // save this to resume later
-}
-```
-
-### Checkpoint & Resume
+## Checkpoint & Resume
 
 If the agent process crashes mid-run (network blip, OOM, accidental kill), the
 work is **not lost**. The agent loop saves a checkpoint after every tool-calling
@@ -153,12 +123,81 @@ Two supporting MCP tools:
 Checkpoint files live in `~/.oracle/checkpoints/`. They are automatically
 deleted on successful completion.
 
+Long runs emit MCP progress notifications (one per turn) when the client passes
+a progress token.
+
+## Self-review
+
+When `--review` is passed, after the main task loop finishes, a second
+read-only pass runs with the same model. It checks for:
+- Correctness bugs introduced during the task
+- Missing error handling
+- Security issues
+- Edge cases not covered
+
+The review result is included in the structured output alongside the main
+result.
+
+## CLI usage
+
+```bash
+# Implement something (writes files, runs tests)
+oracle agent "add a --verbose flag to the CLI and update the README"
+
+# Investigate without touching anything
+oracle agent "explain how sessions are persisted" --read-only
+
+# Plan first, then confirm and execute
+oracle agent "refactor the auth module" --plan
+
+# Execute with self-review
+oracle agent "fix the login bug" --review
+
+# Get structured JSON output
+oracle agent "add input validation" --json
+
+# Resume from a checkpoint
+oracle agent "finish the task" --resume cp-20260723-...
+
+# List saved checkpoints
+oracle agent-checkpoints
+```
+
+Progress is printed to stderr per turn (`[turn 3] → read_file, edit_file`); the
+final answer goes to stdout.
+
+## MCP usage
+
+The `oracle_agent` tool exposes the same capability to any MCP client:
+
+```jsonc
+{
+  "name": "oracle_agent",
+  "arguments": {
+    "prompt": "add input validation to the config loader and a test for it",
+    "readOnly": false,         // optional; true = investigate only
+    "maxSteps": 20,            // optional; 1..50
+    "resumeId": "cp-..."       // optional; resume from a checkpoint
+  }
+}
+```
+
+Structured result:
+
+```jsonc
+{
+  "finalText": "Added zod validation … and a passing test.",
+  "turns": 6,
+  "stoppedOnLimit": false,
+  "steps": [ { "turn": 1, "text": "...", "toolsUsed": ["read_file"] }, ... ],
+  "usage": { "inputTokens": 12000, "outputTokens": 3400 },
+  "checkpointId": "cp-20260722-a1b2c3d4"   // save this to resume later
+}
+```
+
 If the configured provider can't run the agent, `oracle_agent` returns an
 `ORACLE_AGENT_UNAVAILABLE` error explaining that you need `anthropic` or
 `opencode` (set it in `.oracle/config.json` or via `--provider`).
-
-Long runs emit MCP progress notifications (one per turn) when the client passes
-a progress token.
 
 ## Configuration
 
@@ -173,18 +212,23 @@ Set the provider in `.oracle/config.json`:
 
 - `anthropic` — uses `ANTHROPIC_API_KEY` or an OAuth session (`oracle login --provider anthropic`). `model: "auto"` picks the best model for your subscription tier.
 - `opencode` — any OpenAI-compatible endpoint via `OPENCODE_API_KEY` / `OPENCODE_API_BASE` / `OPENCODE_MODEL`.
+- `codex` — uses the local Codex CLI process; does not support the agentic tool-use loop.
 
 ## Source map
 
 | File | Responsibility |
 |---|---|
 | `src/agent/types.ts` | Neutral types (`AgentMessage`, `ToolCall`, `AgentTool`, `AgentProvider`) |
-| `src/agent/tools.ts` | The 8 tool executors + workspace confinement |
-| `src/agent/audit.ts` | Audit trail: records every file mutation with a content hash |
 | `src/agent/loop.ts` | Provider-agnostic tool-use loop + checkpoint save/resume |
 | `src/agent/checkpoint.ts` | Disk-backed checkpoint store for crash recovery |
+| `src/agent/policy.ts` | Safety policy: workspace confinement, read-only mode, bash allowlist |
+| `src/agent/audit.ts` | Audit trail: records every file mutation with a content hash |
 | `src/agent/service.ts` | `AgentService` — wires tools + provider, runs the loop |
-| `src/providers/anthropic.ts` | `runAgentTurn` via native tool use |
-| `src/providers/openai.ts` | `runAgentTurn` via OpenAI function calling (opencode) |
-| `src/mcp/server.ts` | `oracle_agent` + `oracle_agent_checkpoints` + `oracle_agent_checkpoint_delete` MCP tools |
-| `src/cli.ts` | `oracle agent` command |
+| `src/providers/anthropicProvider.ts` | `runAgentTurn` via native tool use |
+| `src/providers/openaiProvider.ts` | `runAgentTurn` via OpenAI function calling (opencode) |
+| `src/mcp/tools/agent.ts` | `oracle_agent` + `oracle_agent_checkpoints` + `oracle_agent_checkpoint_delete` MCP tools |
+| `src/cli.ts` | `oracle agent` and `oracle agent-checkpoints` commands |
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

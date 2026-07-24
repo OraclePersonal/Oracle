@@ -480,3 +480,7 @@ Oracle + Claude Code enables:
 All stored locally in `~/.oracle/` — no external services, no network, full control.
 
 **Start with:** Pick one tool above, try it in Claude Code, and expand from there!
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

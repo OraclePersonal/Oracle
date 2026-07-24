@@ -67,7 +67,7 @@ before starting work — no human has to explain the flow.
 `oracle_task_submit` (and its CLI equivalent) refuses to move a task to
 `review` if any checklist item created with the task is still unchecked. This
 turns "I'm done" from a claim into something that's actually been verified
-before the task creator is notified — see [MESSAGING.md](https://github.com/OraclePersonal/Oracle/blob/main/MESSAGING.md#task-planning--tracking-built-on-top-of-messaging)
+before the task creator is notified — see [MESSAGING.md](MESSAGING.md#task-planning--tracking-built-on-top-of-messaging)
 for the full lifecycle.
 
 ## Provider routing
@@ -109,3 +109,7 @@ audited or reverted after the fact. The bash tool is disabled in readOnly mode.
 The message bus and task store are plain local JSON files with no
 encryption — suitable for single-machine multi-agent coordination, not for
 sending messages across a network.
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

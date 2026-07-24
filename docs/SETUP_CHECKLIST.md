@@ -295,3 +295,7 @@ See `ORACLE_QUICKSTART.md` for:
 - How to use `oracle_ask` for consultation
 - How to build your own multi-agent workflows
 - How to persist knowledge across sessions
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

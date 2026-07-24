@@ -314,3 +314,7 @@ oracle_task_submit { ... }
 - `MESSAGING.md` — Messaging flow, wake-up hooks, troubleshooting
 - `docs/architecture.md` — System design, data flow, threat model
 - `.claude/skills/oracle-mcp-usage/SKILL.md` — Tool reference
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

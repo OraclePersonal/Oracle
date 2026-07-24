@@ -315,3 +315,7 @@ You'll know Oracle is fully working when:
 - **Architecture?** Read `docs/architecture.md`
 
 **Let's build something amazing with Oracle! 🚀**
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

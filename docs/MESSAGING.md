@@ -283,3 +283,7 @@ oracle_task_get { id: "T1" }              → see the checked-off checklist + fu
 oracle_task_close { id: "T1", agent: "lead", approved: true }
 → builder is auto-messaged "approved"; status is now "done"
 ```
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*

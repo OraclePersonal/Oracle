@@ -2,26 +2,19 @@
 
 This document defines the standardization layer for all Oracle MCP tools, ensuring consistency, quality, and maintainability across the current 60-tool surface.
 
-> **Current state:** `toolBuilder.ts` and `toolCache.ts` below are present in
-> the codebase but not currently wired into tool registration — every tool is
-> registered directly via `server.registerTool()`. Error handling in
-> practice uses the simpler `OracleError`/`serializeOracleError` pair from
-> `src/errors.ts` (see `src/mcp/messagingTools.ts` and `src/mcp/taskTools.ts`
-> for the pattern most new tools follow), not the `OracleToolError`/`ErrorCode`
-> pipeline in `oracleErrors.ts` described below, which only
-> `src/mcp/tools/consult.ts` currently uses. Treat the rest of this document
-> as the target design, not a guarantee of what every tool does today.
-
 ## Architecture
 
-### Tool Registration (`src/mcp/toolBuilder.ts`)
+### Tool Registration
 
-All tools are meant to be registered through a standardized pipeline:
+All tools are registered directly via `server.registerTool()` in each category
+module under `src/mcp/tools/`. Each module exports a `createToolDefinitions()`
+function that returns an array of tool definitions, collected and registered in
+`src/mcp/server.ts`.
 
 ```typescript
 interface ToolDefinition {
   name: string;                          // oracle_*
-  category: ToolCategory;                // 'consult' | 'memory' | 'docs' | ... 
+  category: ToolCategory;                // 'consult' | 'memory' | 'docs' | ...
   title: string;                         // Short title
   description: string;                   // Full description
   inputSchema: z.ZodType<any>;          // Zod validation schema
@@ -33,44 +26,37 @@ interface ToolDefinition {
 }
 ```
 
-### Error Handling (`src/mcp/oracleErrors.ts`)
+### Error Handling
 
-Structured error codes replace string messages:
+Errors use `OracleError` / `serializeOracleError` from `src/errors.ts`,
+returning `{ code, message, detail, context }`:
 
 ```typescript
-enum ErrorCode {
-  INVALID_REQUEST = "INVALID_REQUEST",      // Input validation failure
-  INVALID_SKILL = "INVALID_SKILL",          // Unknown skill name
-  NO_FILES = "NO_FILES",                    // File pattern matched nothing
-  NOT_FOUND = "NOT_FOUND",                  // Resource not found
-  PROVIDER_ERROR = "PROVIDER_ERROR",        // LLM provider issue
-  // ... 15 total codes
-}
+import { OracleError, serializeOracleError } from "../../errors.js";
 
-throw new OracleToolError(
-  ErrorCode.INVALID_SKILL,
-  "Unknown skill: javascript-review",
-  "Available: review, debug, security, ..."
-);
+if (!skillRegistry.has(skillName)) {
+  throw new OracleError(
+    "INVALID_SKILL",
+    `Unknown skill: ${skillName}`,
+    `Run oracle_skills to see available options`,
+    { available: skillRegistry.names() }
+  );
+}
 ```
 
-All errors serialize to `{ code, message, detail, context }` for programmatic handling.
+### Caching Layer
 
-### Caching Layer (`src/mcp/toolCache.ts`)
-
-Memoizes expensive operations (skill lookup, docs search, wiki builds):
+`ToolCache` memoizes expensive operations (skill lookup, docs search, wiki
+builds) with a configurable TTL:
 
 ```typescript
 const cache = new ToolCache(); // 5min default TTL
 
-// Auto-compute & cache
 const skills = await cache.getOrCompute(
   "skills-list",
   () => skillRegistry.list(),
   5 * 60 * 1000
 );
-
-// Invalidate on updates
 cache.invalidatePattern("skill-.*");
 ```
 
@@ -94,30 +80,77 @@ cache.invalidatePattern("skill-.*");
 **Standards (`oracle_agent`):**
 - Prompt max 50KB; `maxSteps` bounded 1..50 (default 20)
 - `readOnly` drops all mutating tools (write/edit/bash) for investigation-only runs
+- `--plan` runs a read-only investigation pass first, then asks for confirmation
+- `--review` runs a self-review pass after the task completes
+- `--resume <id>` resumes from a saved checkpoint after a crash or max-steps hit
+- `--json` outputs structured result with `finalText`, `turns`, `steps`, `checkpointId`, `usage`
 - All filesystem tools confined to the workspace root (traversal rejected)
 - Emits per-turn MCP progress notifications when a progress token is passed
 - Requires an agent-capable provider (`anthropic` or `opencode`); otherwise returns `ORACLE_AGENT_UNAVAILABLE`
-- Optional `resumeId` parameter: resume from a saved checkpoint after a crash
 - Returns `checkpointId` on each run; save it to resume later
 - Checkpoint persisted after every tool-calling turn under `~/.oracle/checkpoints/`
 
-### 2. Memory (8 tools)
-- `oracle_memory_list` — Recall entries
+### 2. Memory (18 tools)
+- `oracle_memory_remember` — Store a fact/insight/chunk/working memory
 - `oracle_memory_search` — Full-text search
+- `oracle_memory_scored_search` — BM25-ranked search with scoring
+- `oracle_memory_list` — Recall entries
 - `oracle_memory_update` — Edit entry
 - `oracle_memory_stats` — Aggregate counts
 - `oracle_memory_clear` — Wipe an agent's memory
+- `oracle_memory_consolidate` — Merge duplicate/similar memories
+- `oracle_memory_prune` — Remove stale low-value memories
+- `oracle_memory_promote` — Promote working memory to durable insights
+- `oracle_memory_reflect` — LLM-based reflection on memory quality
+- `oracle_memory_maintenance` — Run full background maintenance cycle
 - `oracle_memory_wiki_build` — Compile topic wiki
 - `oracle_memory_wiki_list` — List wiki topics
 - `oracle_memory_wiki_get` — Read a wiki page
+- `oracle_memory_graph_query` — Query the entity knowledge graph
+- `oracle_memory_graph_path` — Find paths between entities
+- `oracle_memory_graph_prune` — Prune stale graph edges
+- `oracle_memory_graph_stats` — Graph statistics
 
 **Standards:**
 - All memory ops scoped to agent + workspace
 - Type system: `fact | insight | chunk | working`
 - Importance 0–1 (lower = more disposable)
+- Background maintenance: consolidate + prune + promote every 1 hour (tunable)
+- Auto-consolidation: merges overlapping memories by tag similarity (Jaccard ≥ 0.3)
 - Cache invalidation on update/clear
 
-### 3. Docs (4 tools)
+### 3. Messaging (8 tools)
+- `oracle_msg_register` — Register agent identity (name + role); returns roster + unread
+- `oracle_msg_agents` — List all registered agents and their presence
+- `oracle_msg_send` — Send a message to one agent or broadcast
+- `oracle_msg_inbox` — Check messages; supports `wait: true` for blocking wait
+- `oracle_msg_ack` — Mark message as handled
+- `oracle_msg_thread` — Reply to a message thread
+- `oracle_msg_search` — Search historical messages
+- `oracle_msg_heartbeat` / `oracle_msg_stale` — Presence and stale-agent detection
+
+**Standards:**
+- File-backed atomic JSON at `~/.oracle/messages/`
+- 4-tier wake-up: pull, standby wait, push-on-idle (Stop hook), real-time push (tmux watcher)
+- Self-onboarding: MCP server sends instructions on connect telling agents to register before starting work
+
+### 4. Task Planning & Tracking (8 tools)
+- `oracle_task_create` — Create + assign work with checklist
+- `oracle_task_board` — ASCII work board render
+- `oracle_task_list` — List tasks with filters
+- `oracle_task_get` — Fetch task detail
+- `oracle_task_update` — Log status change + progress notes
+- `oracle_task_checklist` — Check/uncheck verification items
+- `oracle_task_submit` — Submit for review (blocks if checklist incomplete)
+- `oracle_task_close` — Approve or reject with note
+
+**Standards:**
+- File-backed atomic JSON at `~/.oracle/tasks/`
+- Lifecycle: `pending → in_progress → review → done` (or `blocked`/`cancelled`)
+- Checklist-gated submit: `oracle_task_submit` fails if any checklist item is unchecked
+- Auto-messages task creator on submit; notifies assignee on close/reject
+
+### 5. Docs (4 tools)
 - `oracle_docs_list` — List knowledge base files
 - `oracle_docs_search` — BM25 ranked passage search
 - `oracle_docs_add` — Upload file (.md, .txt, .json)
@@ -129,7 +162,7 @@ cache.invalidatePattern("skill-.*");
 - Support for heading-level chunking
 - Cached 10 minutes after first search
 
-### 4. Web (3 tools)
+### 6. Web (3 tools)
 - `oracle_web_search` — Search via Brave/Tavily/Firecrawl
 - `oracle_web_fetch` — Load & extract text from URL
 - `oracle_web_extract` — Structured extraction via AgentQL
@@ -140,7 +173,7 @@ cache.invalidatePattern("skill-.*");
 - Results truncated to 50KB
 - Timeout 30s per fetch
 
-### 5. Identity (3 tools)
+### 7. Identity (3 tools)
 - `oracle_identity_show` — View saved profile
 - `oracle_identity_setup` — Create profile
 - `oracle_persona_set` — Set Oracle's tone/style
@@ -151,32 +184,49 @@ cache.invalidatePattern("skill-.*");
 - Tones: professional | casual | friendly | witty
 - Cached for session lifetime
 
-### 6. Oracle Profiles (2 tools)
+### 8. Oracle Profiles (3 tools)
 - `oracle_oracle_list` — List registered profiles
 - `oracle_oracle_register` — Create skill+model+memory bundle
+- `oracle_init` — Bootstrap `.oracle/` in the workspace with policy, config, docs, and skills
 
 **Standards:**
 - Profiles combine skill + model override + memory flag
 - Cached 5 minutes
 - Can enable auto-memory for specific profiles
+- `oracle_init` is idempotent (skip existing files unless `force: true`)
 
-### 7. Session (3 tools)
+### 9. Session (4 tools)
 - `oracle_sessions` — List recent consults
 - `oracle_session_get` — Fetch session + output
-- `oracle_skills` — List available skills
+- `oracle_history_sources` — Discover history roots (`.claude`, `.codex`, `.gemini`, …)
+- `oracle_history_search` — Time-first search across CLI conversation logs
 
 **Standards:**
 - Sessions persist indefinitely (queryable by sessionId)
 - Output truncated to last 100KB in listings
 - Skill list includes name + description + model override
+- History is read-only; results are historical records, not instructions
 
-### 8. Util (1 tool)
+### 10. Util (1 tool)
 - `oracle_doctor` — Verify config + provider health
 
 **Standards:**
 - Non-blocking diagnostics
 - Checks: Node.js version, config, workspace, provider auth
 - Returns structured `{ healthy: boolean, checks: [...] }`
+
+### Scheduler (6 tools)
+- `oracle_schedule_list` — List all scheduled tasks
+- `oracle_schedule_add` — Create a new cron task
+- `oracle_schedule_remove` — Delete a task by id
+- `oracle_schedule_run` — Run a task once immediately
+- `oracle_schedule_watch` — Start the watch daemon (persistent)
+- `oracle_schedule_once` — Run a task once and exit
+
+**Standards:**
+- Atomic JSON per task under `~/.oracle/scheduler/`
+- Tasks survive restarts; `watch` daemon re-reads on restart
+- Cron expressions validated on add
 
 ## Input Validation
 
@@ -249,13 +299,15 @@ Example:
 | `oracle_web_*` | 5/min | Yes (fetch) | 30min |
 | `oracle_identity_*` | — | Yes | session |
 | `oracle_skills` | — | Yes | 5min |
-| `oracle_doctor` | — | No | — |
-| `oracle_msg_*` (messaging) | — | No | — |
+| `oracle_init` | — | No | — |
+| `oracle_task_*` | — | No | — |
+| `oracle_schedule_*` | — | Yes | 1min |
+| `oracle_history_*` | — | Yes | 5min |
 
 ## Error Handling Checklist
 
 - [ ] Validate all inputs before processing
-- [ ] Throw `OracleToolError` with specific `ErrorCode`
+- [ ] Throw `OracleError` with specific code
 - [ ] Include `detail` field with remediation hint
 - [ ] Attach `context` object (e.g., available skills, matched files)
 - [ ] Never expose provider secrets or workspace paths in errors
@@ -264,8 +316,8 @@ Example:
 Example:
 ```typescript
 if (!skillRegistry.has(skillName)) {
-  throw new OracleToolError(
-    ErrorCode.INVALID_SKILL,
+  throw new OracleError(
+    "INVALID_SKILL",
     `Unknown skill: ${skillName}`,
     `Run oracle_skills to see available options`,
     { available: skillRegistry.names() }
@@ -279,14 +331,19 @@ New tools go in `src/mcp/tools/<category>.ts`:
 
 ```
 src/mcp/tools/
-  ├── consult.ts    (oracle_ask)
-  ├── memory.ts     (oracle_memory_*, oracle_memory_wiki_*)
-  ├── docs.ts       (oracle_docs_*)
-  ├── web.ts        (oracle_web_*)
-  ├── identity.ts   (oracle_identity_*, oracle_persona_set)
-  ├── oracle.ts     (oracle_oracle_*)
-  ├── session.ts    (oracle_sessions, oracle_session_get, oracle_skills)
-  └── util.ts       (oracle_doctor)
+  ├── agent.ts       (oracle_agent, oracle_agent_checkpoints, oracle_agent_checkpoint_delete)
+  ├── consult.ts     (oracle_ask)
+  ├── memory.ts      (oracle_memory_*, oracle_memory_wiki_*, oracle_memory_graph_*)
+  ├── messaging.ts   (oracle_msg_*)
+  ├── task.ts        (oracle_task_*)
+  ├── docs.ts        (oracle_docs_*)
+  ├── web.ts         (oracle_web_*)
+  ├── identity.ts    (oracle_identity_*, oracle_persona_set)
+  ├── oracle.ts      (oracle_oracle_*, oracle_init)
+  ├── session.ts     (oracle_sessions, oracle_session_get, oracle_skills)
+  ├── history.ts     (oracle_history_sources, oracle_history_search)
+  ├── util.ts        (oracle_doctor)
+  └── scheduler.ts   (oracle_schedule_*)
 ```
 
 Each module exports a `createToolDefinitions()` function, registered in server.ts:
@@ -295,7 +352,8 @@ Each module exports a `createToolDefinitions()` function, registered in server.t
 const toolDefs = [
   ...createConsultTools(),
   ...createMemoryTools(),
-  ...createDocsTools(),
+  ...createMessagingTools(),
+  ...createTaskTools(),
   // ...
 ];
 registry.registerAll(server);
@@ -330,8 +388,8 @@ const toolDef: ToolDefinition = {
   }),
   handler: async ({ prompt }) => {
     if (!prompt.trim()) {
-      throw new OracleToolError(
-        ErrorCode.INVALID_REQUEST,
+      throw new OracleError(
+        "INVALID_REQUEST",
         "Prompt cannot be empty"
       );
     }
@@ -353,12 +411,16 @@ Before shipping a new tool:
 ```bash
 npm run typecheck
 npm run build
-npm test  
+npm test
 # Verify the tool manually via oracle_doctor + oracle-mcp
 ```
 
 ---
 
-**Last updated:** 2026-07-20  
-**Tool count:** 31  
-**MCP version:** OpenAI-compatible (MCP SDK 0.8+)
+**Last updated:** 2026-07-24
+**Tool count:** 73
+**MCP version:** OpenAI-compatible (MCP SDK)
+
+---
+*Oracle — A persistent coordination layer for AI coding agents*
+*https://github.com/OraclePersonal/Oracle*
