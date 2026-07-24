@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 200" width="1200" height="200">
+  <defs>
+    <linearGradient id="bgBar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0a0a1a"/>
+      <stop offset="50%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#0a0a1a"/>
+    </linearGradient>
+    <linearGradient id="glowBar" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00ffc8"/>
+      <stop offset="50%" stop-color="#00b8ff"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <filter id="neonBar">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="200" rx="24" fill="url(#bgBar)"/>
+
+  <!-- Grid lines -->
+  <g stroke="#00ffc8" stroke-opacity="0.04" stroke-width="0.5">
+    <line x1="0" y1="50" x2="1200" y2="50"/>
+    <line x1="0" y1="100" x2="1200" y2="100"/>
+    <line x1="0" y1="150" x2="1200" y2="150"/>
+    <line x1="200" y1="0" x2="200" y2="200"/>
+    <line x1="400" y1="0" x2="400" y2="200"/>
+    <line x1="600" y1="0" x2="600" y2="200"/>
+    <line x1="800" y1="0" x2="800" y2="200"/>
+    <line x1="1000" y1="0" x2="1000" y2="200"/>
+  </g>
+
+  <!-- Diamond icon -->
+  <g filter="url(#neonBar)" transform="translate(80, 30)">
+    <polygon points="50,10 90,70 50,130 10,70" fill="none" stroke="url(#glowBar)" stroke-width="3" stroke-linejoin="round"/>
+    <polygon points="50,30 75,70 50,110 25,70" fill="none" stroke="#00ffc8" stroke-width="1.5" stroke-linejoin="round" opacity="0.7"/>
+    <circle cx="50" cy="70" r="6" fill="#00ffc8"/>
+    <circle cx="50" cy="70" r="2.5" fill="#fff"/>
+  </g>
+
+  <!-- Vertical divider -->
+  <line x1="180" y1="30" x2="180" y2="170" stroke="url(#glowBar)" stroke-width="1" opacity="0.5"/>
+
+  <!-- ORACLE text -->
+  <g filter="url(#neonBar)">
+    <text x="210" y="100" font-family="'Courier New', Consolas, monospace" font-size="58" font-weight="bold" fill="url(#glowBar)" dominant-baseline="middle" letter-spacing="10">ORACLE</text>
+  </g>
+
+  <!-- Subtitle -->
+  <text x="210" y="140" font-family="'Courier New', Consolas, monospace" font-size="14" fill="#00ffc8" opacity="0.6" letter-spacing="6">AUTONOMOUS AI COORDINATION LAYER</text>
+
+  <!-- Right side: features -->
+  <g transform="translate(700, 0)">
+    <line x1="0" y1="30" x2="0" y2="170" stroke="url(#glowBar)" stroke-width="1" opacity="0.3"/>
+
+    <g font-family="'Courier New', Consolas, monospace" font-size="11" fill="#00ffc8" opacity="0.5" letter-spacing="2">
+      <text x="30" y="55">MEMORY</text>
+      <text x="30" y="80">AGENT</text>
+      <text x="30" y="105">MESSAGING</text>
+      <text x="30" y="130">SCHEDULER</text>
+      <text x="30" y="155">TRACKER</text>
+    </g>
+
+    <!-- Status dots -->
+    <circle cx="15" cy="50" r="2.5" fill="#00ffc8"/>
+    <circle cx="15" cy="75" r="2.5" fill="#00b8ff"/>
+    <circle cx="15" cy="100" r="2.5" fill="#7c3aed"/>
+    <circle cx="15" cy="125" r="2.5" fill="#00ffc8"/>
+    <circle cx="15" cy="150" r="2.5" fill="#00b8ff"/>
+  </g>
+</svg>
