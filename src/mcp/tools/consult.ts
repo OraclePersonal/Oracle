@@ -37,7 +37,7 @@ export function registerConsultTool(
     "oracle_ask",
     {
       title: "Ask Oracle",
-      description: "Ask Oracle anything — a question, or 'look at these files and tell me X'. One entry point: pass `files` when the answer needs actual code, omit it for a plain conversation. Pass `conversationId` across calls in the same exchange so Oracle remembers what it already told you.",
+      description: "Ask anything. Pass `files` to read code, `conversationId` for multi-turn recall.",
       inputSchema: {
         question: z.string().min(1).describe("Your question or what you're stuck on"),
         soul: z.string().optional().describe("Soul prompt name (e.g. 'engineer', 'philosopher'). Defaults to 'default'"),

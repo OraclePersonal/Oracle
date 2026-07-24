@@ -227,7 +227,7 @@ export async function runAgentLoop(params: RunAgentLoopParams): Promise<AgentRun
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      await checkpointStore.save(checkpoint).catch((err) => {
+      await checkpointStore.save(checkpoint).catch((err: unknown) => {
         logAgent("checkpoint-error", { checkpointId, error: String(err) });
       });
     }

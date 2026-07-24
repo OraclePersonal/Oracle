@@ -21,7 +21,7 @@ export function registerDocsTools(server: McpServer, workspaceRoot: string): voi
     "oracle_docs_list",
     {
       title: "List Docs",
-      description: "List available documentation files in .oracle/docs/.",
+      description: "List .oracle/docs/ files.",
       inputSchema: {}
     },
     async () => {
@@ -37,7 +37,7 @@ export function registerDocsTools(server: McpServer, workspaceRoot: string): voi
     "oracle_docs_search",
     {
       title: "Search Docs",
-      description: "BM25-ranked passage search over .oracle/docs/ — chunked by heading, not whole files.",
+      description: "BM25 search over .oracle/docs/ chunked by heading.",
       inputSchema: {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(20).default(5),
@@ -55,7 +55,7 @@ export function registerDocsTools(server: McpServer, workspaceRoot: string): voi
     "oracle_docs_add",
     {
       title: "Add Doc",
-      description: "Add or overwrite a file in .oracle/docs/ (.md, .txt, .json, .mdx).",
+      description: "Add a file to .oracle/docs/. Supports .md, .txt, .json, .mdx.",
       inputSchema: {
         name: z.string().min(1).describe("Relative filename, e.g. 'auth/oauth.md'"),
         content: z.string()

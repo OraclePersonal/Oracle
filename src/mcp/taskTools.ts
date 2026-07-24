@@ -27,11 +27,11 @@ const STATUS_ENUM = z.enum(["pending", "in_progress", "review", "done", "blocked
  */
 export const TASK_INSTRUCTIONS = [
   "A task tracker sits on top of the message bus for planning and accountability.",
-  "As a lead breaking down work: use oracle_task_create per unit of work, assigned to a specific agent, with a checklist of concrete verification steps if the task has a clear definition of done. This automatically messages the assignee.",
-  "As an assignee: call oracle_task_update to record progress notes and status changes as you go — this is the audit trail, not just an end-of-task summary. Check off each checklist item via oracle_task_checklist as you actually complete it, not preemptively.",
-  "Before reporting a task done: call oracle_task_submit. It BLOCKS if any checklist item is unchecked, and on success automatically notifies the task creator — you do not need to separately message them that you're done.",
-  "As a lead reviewing: oracle_task_get shows the full checklist and note history; oracle_task_close with approved=true finishes it, or approved=false with a note sends it back to in_progress.",
-  "Use oracle_task_list { assignee: <you>, activeOnly: true } to see your open work at a glance. Leads can use oracle_task_board to see an ASCII work board combining the agent roster and all main TODOs."
+  "As a lead: use oracle_task_create per unit of work with a checklist. This auto-messages the assignee.",
+  "As an assignee: use oracle_task_update to log progress as you go. Check off checklist items via oracle_task_checklist as you complete them, not preemptively.",
+  "Before reporting done: call oracle_task_submit. It blocks if any checklist item is unchecked, then auto-notifies the creator.",
+  "As a reviewer: oracle_task_get shows the full checklist and notes; oracle_task_close with approved=true finishes it, or approved=false sends it back.",
+  "Use oracle_task_list to see open work. Leads use oracle_task_board for an ASCII board view."
 ].join(" ");
 
 function formatTask(t: { id: string; title: string; status: TaskStatus; assignee: string; createdBy: string; checklist: { text: string; done: boolean }[] }): string {
@@ -82,7 +82,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     "oracle_task_board",
     {
       title: "Show ASCII Work Board",
-      description: "Render an ASCII board of registered agents (with roles and activity) plus the main TODOs created by a lead. Filter by createdBy to see one lead's work board; activeOnly hides completed and cancelled TODOs.",
+      description: "ASCII work board: agents + main TODOs. Filter by createdBy, hide done with activeOnly.",
       inputSchema: {
         createdBy: z.string().min(1).optional().describe("Optional lead/creator name, e.g. claude-lead"),
         activeOnly: z.boolean().default(true)
@@ -110,7 +110,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     {
       title: "Create and Assign Task",
       description:
-        "Break off a unit of work and assign it to an agent. Optionally attach a verification checklist — the assignee must check off every item before they can submit the task for review. Also sends the assignee a message so they see it in their inbox.",
+        "Create and assign a task with optional checklist. Auto-notifies the assignee.",
       inputSchema: {
         title: z.string().min(1).max(200),
         description: z.string().max(5000).optional(),
@@ -163,7 +163,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     "oracle_task_get",
     {
       title: "Get Task Detail",
-      description: "Full detail for one task: description, checklist, and the complete progress-note history.",
+      description: "Full task detail with checklist and progress-note history.",
       inputSchema: { id: z.string().min(1) }
     },
     async ({ id }) => {
@@ -184,7 +184,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     {
       title: "Update Task Progress",
       description:
-        "Record progress on a task: add a note and/or change its status (pending/in_progress/review/done/blocked/cancelled). Use this liberally while working, not just at the end — it's the audit trail of what happened.",
+        "Record progress: add a note and/or change status. Use liberally — it's the audit trail.",
       inputSchema: {
         id: z.string().min(1),
         agent: z.string().min(1).describe("Your agent name"),
@@ -205,7 +205,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     "oracle_task_checklist",
     {
       title: "Check Off a Verification Item",
-      description: "Mark one checklist item done or not-done, by its 0-based index (see oracle_task_get for indices).",
+      description: "Check or uncheck a checklist item by 0-based index.",
       inputSchema: {
         id: z.string().min(1),
         index: z.number().int().min(0),
@@ -226,7 +226,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     {
       title: "Submit Task for Review",
       description:
-        "Submit a task for review — the verification gate before reporting done. FAILS if any checklist item is still unchecked (check them via oracle_task_checklist first). On success, automatically messages the task creator with your summary so they know to review it — no need to separately notify them.",
+        "Submit for review. Fails if any checklist item is unchecked. Auto-notifies the task creator.",
       inputSchema: {
         id: z.string().min(1),
         agent: z.string().min(1).describe("Your agent name"),
@@ -252,7 +252,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     {
       title: "Close (Approve or Reject) a Task",
       description:
-        "Reviewer's decision on a submitted task. approved=true marks it done. approved=false sends it back to in_progress with your note explaining what's missing — the assignee should address it and submit again.",
+        "Approve (marks done) or reject (sends back to in_progress with note).",
       inputSchema: {
         id: z.string().min(1),
         agent: z.string().min(1).describe("Your agent name (the reviewer)"),
@@ -273,6 +273,38 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
         });
         return success(approved ? `Closed ${id} as done.` : `Sent ${id} back to in_progress.`, {
           task: task as unknown as Record<string, unknown>
+        });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_task_vote",
+    {
+      title: "Cast Vote on Task Proposal",
+      description: "Cast a consensus vote ('approve' | 'reject' | 'abstain') on a task proposal with justification.",
+      inputSchema: {
+        proposalId: z.string().min(1),
+        agentId: z.string().min(1),
+        decision: z.enum(["approve", "reject", "abstain"]),
+        justification: z.string().min(1).max(1000)
+      }
+    },
+    async ({ proposalId, agentId, decision, justification }) => {
+      try {
+        const { ConsensusEngine } = await import("../tasks/consensus.js");
+        const engine = new ConsensusEngine();
+        const updated = engine.castVote(proposalId, agentId, decision, justification ?? "");
+        const activeVotes = updated.votes.filter((v: any) => v.decision !== "abstain").length;
+        const status = updated.status === "approved" ? "APPROVED"
+          : updated.status === "rejected" ? "REJECTED"
+          : `pending (${activeVotes}/${updated.requiredQuorum} voted)`;
+        return success(`Vote recorded: ${agentId} → ${decision} — ${status}`, {
+          proposalId,
+          agentId,
+          decision,
+          status: updated.status,
+          voteCount: updated.votes.length
         });
       } catch (error) { return failure(error); }
     }

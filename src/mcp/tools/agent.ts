@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { AgentService } from "../../agent/service.js";
-import { CheckpointStore } from "../../agent/checkpoint.js";
+import { FileCheckpointStore } from "../../agent/checkpoint.js";
 import type { SkillRegistry } from "../../skills/registry.js";
 import path from "node:path";
 import os from "node:os";
@@ -35,7 +35,7 @@ export function registerAgentTools(
     "oracle_agent",
     {
       title: "Run Oracle Agent",
-      description: "Autonomously carry out a coding task in the workspace with a tool-use loop.",
+      description: "Autonomous coding loop — reads/writes files and runs shell commands.",
       inputSchema: {
         prompt: z.string().min(1).max(50000),
         readOnly: z.boolean().optional(),
@@ -73,22 +73,21 @@ export function registerAgentTools(
   // ── Checkpoint management tools ──────────────────────────────────
 
   const oracleDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
-  const checkpointStore = new CheckpointStore(oracleDir);
+  const checkpointStore = new FileCheckpointStore(oracleDir);
 
   server.registerTool(
     "oracle_agent_checkpoints",
     {
       title: "List Agent Checkpoints",
       description:
-        "List saved agent loop checkpoints. A checkpoint is created after every tool-calling turn when oracle_agent runs. " +
-        "If an agent run was interrupted (process crash, timeout), pass the checkpoint id as resumeId to oracle_agent to continue from where it left off.",
+        "List saved agent loop checkpoints. Pass a checkpoint id to oracle_agent as resumeId to continue an interrupted run.",
       inputSchema: {}
     },
     async () => {
       try {
         const list = await checkpointStore.list();
         const lines = list.length
-          ? list.map((c) => `${c.id} (${c.updatedAt})`).join("\n")
+          ? list.map((c: { id: string; updatedAt: string }) => `${c.id} (${c.updatedAt})`).join("\n")
           : "No checkpoints found.";
         return success(lines, { count: list.length, checkpoints: list });
       } catch (error) { return failure(error); }
@@ -99,13 +98,13 @@ export function registerAgentTools(
     "oracle_agent_checkpoint_delete",
     {
       title: "Delete Agent Checkpoint",
-      description: "Delete a saved checkpoint by id. Use when a checkpoint is no longer needed.",
+      description: "Delete a saved checkpoint by id.",
       inputSchema: { id: z.string().min(1) }
     },
     async ({ id }) => {
       try {
-        const removed = await checkpointStore.delete(id);
-        return success(removed ? `Deleted checkpoint ${id}.` : `Checkpoint not found: ${id}.`, { removed });
+        await checkpointStore.delete(id);
+        return success(`Deleted checkpoint ${id}.`, { removed: true });
       } catch (error) { return failure(error); }
     }
   );

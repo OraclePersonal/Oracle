@@ -1,5 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { serializeOracleError } from "../../errors.js";
 import type { OracleRegistry } from "../../oracles/registry.js";
 
@@ -57,6 +59,60 @@ export function registerOracleProfileTools(server: McpServer, oracles: OracleReg
           memory: params.memory
         });
         return success(`Registered oracle: ${params.name}`, { name: params.name });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_init",
+    {
+      title: "Initialize Workspace",
+      description: "Bootstrap .oracle/ with policy, config, docs, and skills.",
+      inputSchema: {
+        force: z.boolean().optional().default(false),
+      }
+    },
+    async ({ force }) => {
+      try {
+        const workspaceRoot = process.cwd();
+        const oracleDir = path.join(workspaceRoot, ".oracle");
+        await fs.mkdir(oracleDir, { recursive: true });
+        await fs.mkdir(path.join(oracleDir, "docs"), { recursive: true });
+        await fs.mkdir(path.join(oracleDir, "skills"), { recursive: true });
+
+        const defaultPolicy = {
+          forbiddenGlobs: [".env", ".env.", "id_rsa", "id_ed25519", ".pem", "credentials.json", ".oracle/policy.json"],
+          forbiddenCommands: ["rm -rf /", "rm -rf c:", "rm -rf c:\\", "mkfs", "dd if=", ":(){ :|:& };:"],
+          maxMutationsPerSession: 50,
+        };
+        const defaultConfig = {
+          provider: "codex",
+          model: "gpt-5.4",
+          include: ["src/**/*", "README.md", "package.json"],
+          exclude: ["**/*.test.ts", "**/node_modules/**", "**/dist/**", "**/build/**"],
+          maxFileSizeBytes: 1000000,
+          maxInputBytes: 5000000,
+        };
+
+        const created: string[] = [];
+
+        const writeIf = async (p: string, data: Record<string, unknown>, label: string) => {
+          try {
+            await fs.readFile(p, "utf8");
+            if (force) { await fs.writeFile(p, `${JSON.stringify(data, null, 2)}\n`, "utf8"); created.push(label + " (overwritten)"); }
+            else created.push(label + " (exists)");
+          } catch {
+            await fs.writeFile(p, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+            created.push(label);
+          }
+        };
+
+        await writeIf(path.join(oracleDir, "policy.json"), defaultPolicy, "policy.json");
+        await writeIf(path.join(oracleDir, "config.json"), defaultConfig, "config.json");
+        created.push("docs/");
+        created.push("skills/");
+
+        return success(`Initialized .oracle/ in ${workspaceRoot}`, { created, workspaceRoot });
       } catch (error) { return failure(error); }
     }
   );

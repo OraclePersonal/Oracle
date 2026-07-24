@@ -4,16 +4,16 @@ import type { AgentProvider, AgentTool } from "./types.js";
 import { McpClientManager } from "../orchestrator/mcp-client-manager.js";
 import { loadProjectConfig } from "../config/project.js";
 import { SkillRegistry } from "../skills/registry.js";
-import { CheckpointStore } from "./checkpoint.js";
+import { FileCheckpointStore } from "./checkpoint.js";
+import { loadPolicy } from "./policy.js";
 import os from "node:os";
 import path from "node:path";
 
 const DEFAULT_AGENT_SYSTEM = [
-  "You are Oracle, an autonomous coding agent operating directly inside the user's project.",
-  "You can read and write files, search the codebase, and run shell commands via the provided tools.",
-  "The bash tool runs commands inside the workspace root. Work in small, verifiable steps:",
-  "inspect before you change, make focused edits. Prefer editing existing files over rewriting them.",
-  "When the task is complete, stop calling tools and give a concise summary of what you changed and why.",
+  "You are Oracle, an autonomous coding agent operating inside the user's project.",
+  "You can read/write files, search the codebase, and run shell commands.",
+  "Work in small verifiable steps: inspect before you change, use focused edits.",
+  "When done, stop calling tools and summarize what you changed and why.",
   "Never touch paths outside the workspace. Do not print secrets.",
 ].join(" ");
 
@@ -84,7 +84,14 @@ export class AgentService {
     }
 
     const oracleDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
-    const checkpointStore = new CheckpointStore(oracleDir);
+    const checkpointStore = new FileCheckpointStore(oracleDir);
+
+    let policy;
+    try {
+      policy = await loadPolicy(request.workspaceRoot);
+    } catch {
+      policy = undefined; // non-fatal: run without policy if config is unreadable
+    }
 
     return runAgentLoop({
       provider: this.provider,
@@ -92,7 +99,7 @@ export class AgentService {
       system,
       prompt: request.prompt,
       tools,
-      context: { workspaceRoot: request.workspaceRoot, readOnly },
+      context: { workspaceRoot: request.workspaceRoot, readOnly, policy },
       maxSteps: request.maxSteps,
       onStep: request.onStep,
       checkpointStore,

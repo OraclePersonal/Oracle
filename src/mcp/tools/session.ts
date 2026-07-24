@@ -21,7 +21,7 @@ export function registerSessionTools(server: McpServer, service: ConsultService)
     "oracle_sessions",
     {
       title: "List Oracle Sessions",
-      description: "List recent consultations without bundled source content.",
+      description: "List recent consultations without full source content.",
       inputSchema: { limit: z.number().int().min(1).max(100).default(20) }
     },
     async ({ limit }) => {
@@ -49,7 +49,7 @@ export function registerSessionTools(server: McpServer, service: ConsultService)
     "oracle_session_get",
     {
       title: "Get Oracle Session",
-      description: "Read persisted session metadata and model output.",
+      description: "Get a session's metadata and model output.",
       inputSchema: { sessionId: z.string().regex(/^[a-z0-9-]+-[a-f0-9]{8}$/) }
     },
     async ({ sessionId }) => {

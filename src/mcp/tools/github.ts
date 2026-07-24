@@ -32,7 +32,7 @@ export function registerGitHubTools(
     "oracle_github_pr_get",
     {
       title: "Get PR Details",
-      description: "Get details of a GitHub pull request.",
+      description: "Get PR details.",
       inputSchema: {
         number: z.number().int().positive(),
         repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
@@ -51,7 +51,7 @@ export function registerGitHubTools(
     "oracle_github_pr_list",
     {
       title: "List PRs",
-      description: "List GitHub pull requests with filters.",
+      description: "List pull requests with filters.",
       inputSchema: {
         repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote"),
         state: z.enum(["open", "closed", "merged", "all"]).default("open"),
@@ -75,7 +75,7 @@ export function registerGitHubTools(
     "oracle_github_pr_diff",
     {
       title: "Get PR Diff",
-      description: "Get the full diff for a pull request.",
+      description: "Get the full PR diff.",
       inputSchema: {
         number: z.number().int().positive(),
         repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
@@ -94,7 +94,7 @@ export function registerGitHubTools(
     "oracle_github_pr_files",
     {
       title: "Get PR Files",
-      description: "Get the list of changed files in a pull request.",
+      description: "List changed files in a PR.",
       inputSchema: {
         number: z.number().int().positive(),
         repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
@@ -113,7 +113,7 @@ export function registerGitHubTools(
     "oracle_github_pr_review",
     {
       title: "Review PR",
-      description: "Review a pull request using Oracle's consult engine. Returns AI analysis. Does NOT post the review to GitHub — use oracle_github_pr_review_submit to post.",
+      description: "Review a PR (analysis only — use oracle_github_pr_review_submit to post).",
       inputSchema: {
         number: z.number().int().positive(),
         repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
@@ -168,7 +168,7 @@ export function registerGitHubTools(
     "oracle_github_pr_review_submit",
     {
       title: "Submit PR Review",
-      description: "Submit a review on a pull request (APPROVE, REQUEST_CHANGES, or COMMENT).",
+      description: "Submit a PR review (APPROVE, REQUEST_CHANGES, or COMMENT).",
       inputSchema: {
         number: z.number().int().positive(),
         body: z.string().describe("Review body text"),
@@ -189,7 +189,7 @@ export function registerGitHubTools(
     "oracle_github_issue_get",
     {
       title: "Get Issue",
-      description: "Get details of a GitHub issue.",
+      description: "Get issue details.",
       inputSchema: {
         number: z.number().int().positive(),
         repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote")
@@ -208,7 +208,7 @@ export function registerGitHubTools(
     "oracle_github_issue_list",
     {
       title: "List Issues",
-      description: "List GitHub issues with filters.",
+      description: "List issues with filters.",
       inputSchema: {
         repo: z.string().optional().describe("owner/repo, defaults to inferred from git remote"),
         state: z.enum(["open", "closed", "all"]).default("open"),
@@ -230,7 +230,7 @@ export function registerGitHubTools(
     "oracle_github_comment",
     {
       title: "Create GitHub Comment",
-      description: "Create a comment on a GitHub issue or pull request.",
+      description: "Comment on an issue or PR.",
       inputSchema: {
         number: z.number().int().positive(),
         body: z.string().min(1),
@@ -250,7 +250,7 @@ export function registerGitHubTools(
     "oracle_github_search",
     {
       title: "Search GitHub Code",
-      description: "Search code across GitHub repositories.",
+      description: "Search code across GitHub repos.",
       inputSchema: {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(50).default(10)

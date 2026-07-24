@@ -136,7 +136,7 @@ Standby workers see it within seconds; reply threads use `replyTo`.
 
 ## See also
 
-- `MESSAGING.md` — the four wake-up tiers and when to use which
+- `docs/MESSAGING.md` — the four wake-up tiers and when to use which
 - `scripts/oracle-tmux-launch.sh` / `scripts/oracle-tmux-push-watcher.mjs`
 - `examples/workflow-dashboard.mjs` — scripted (non-interactive) version of
   the same coordination flow

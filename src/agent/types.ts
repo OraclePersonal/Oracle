@@ -51,6 +51,8 @@ export interface AgentContext {
   readOnly: boolean;
   /** Optional audit trail to record file mutations. */
   audit?: any; // AuditTrail type, avoid circular import
+  /** Optional zero-trust policy; when absent, no policy checks are enforced. */
+  policy?: import("./policy.js").OraclePolicy;
 }
 
 /** A tool the agent can call: its schema (for the model) + executor. */

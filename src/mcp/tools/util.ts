@@ -34,7 +34,7 @@ export function registerUtilTool(
     "oracle_doctor",
     {
       title: "Check Oracle",
-      description: "Check project configuration and provider readiness.",
+      description: "Check project config, provider health, and workspace setup.",
       inputSchema: {}
     },
     async () => {

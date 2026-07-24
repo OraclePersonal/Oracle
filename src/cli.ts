@@ -220,8 +220,8 @@ program
   .option("--cwd <path>", "Working directory", process.cwd())
   .action(async (options) => {
     const oracleDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
-    const { CheckpointStore } = await import("./agent/checkpoint.js");
-    const store = new CheckpointStore(oracleDir);
+    const { FileCheckpointStore } = await import("./agent/checkpoint.js");
+    const store = new FileCheckpointStore(oracleDir);
     const list = await store.list();
     if (!list.length) { console.log("No checkpoints found."); return; }
     if (options.json) { console.log(JSON.stringify(list, null, 2)); return; }
@@ -866,6 +866,296 @@ taskCmd
         : `Task ${task.id} needs more work: ${options.note ?? "see notes"}`
     });
     console.log(approved ? `Closed ${id} as done.` : `Sent ${id} back to in_progress.`);
+  });
+
+// ── schedule ────────────────────────────────────────────
+const schedCmd = program.command("schedule").description("Manage scheduled cron tasks");
+
+async function makeScheduler(): Promise<import("./scheduler/cronEngine.js").CronEngine> {
+  const { CronEngine } = await import("./scheduler/cronEngine.js");
+  return new CronEngine({ homeDir: homeDir() });
+}
+
+function printCronTask(t: import("./scheduler/taskStore.js").CronTask): void {
+  const statusIcon = t.status === "active" ? "\x1b[32m●\x1b[0m" : t.status === "paused" ? "\x1b[33m○\x1b[0m" : "\x1b[31m●\x1b[0m";
+  console.log(`${statusIcon} ${t.id}  ${t.name.padEnd(24)} ${t.cron.padEnd(20)} ${t.command}`);
+  if (t.description) console.log(`       ${t.description}`);
+  if (t.lastRunAt) {
+    const icon = t.lastResult === "success" ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
+    console.log(`       last: ${icon} ${t.lastRunAt.slice(0, 19)}  ${(t.lastOutput ?? "").slice(0, 80)}`);
+  }
+}
+
+schedCmd
+  .command("list")
+  .description("List all scheduled tasks")
+  .action(async () => {
+    const engine = await makeScheduler();
+    const tasks = await engine.listTasks();
+    if (!tasks.length) { console.log("No scheduled tasks. Use `oracle schedule add` to create one."); return; }
+    for (const t of tasks) printCronTask(t);
+  });
+
+schedCmd
+  .command("add")
+  .description("Add a scheduled cron task")
+  .argument("<name>", "Task name")
+  .argument("<cron>", "Cron expression (e.g. '*/5 * * * *' for every 5 minutes)")
+  .argument("<command>", "Shell command to run")
+  .option("-d, --description <text>", "Task description")
+  .action(async (name: string, cronExpr: string, command: string, options: { description?: string }) => {
+    const engine = await makeScheduler();
+    const task = await engine.addTask({ name, cron: cronExpr, command, description: options.description });
+    console.log(`Scheduled task created: ${task.id}  (${task.cron})`);
+  });
+
+schedCmd
+  .command("remove")
+  .description("Remove a scheduled task")
+  .argument("<id>", "Task id")
+  .action(async (id) => {
+    const engine = await makeScheduler();
+    const removed = await engine.removeTask(id);
+    if (!removed) { console.error(`Task not found: ${id}`); process.exitCode = 1; return; }
+    console.log(`Removed task ${id}.`);
+  });
+
+schedCmd
+  .command("run")
+  .description("Run a scheduled task immediately")
+  .argument("<id>", "Task id")
+  .action(async (id) => {
+    const engine = await makeScheduler();
+    const result = await engine.runOnce(id);
+    if (result.output) console.log(result.output);
+    process.exitCode = result.result === "success" ? 0 : 1;
+  });
+
+schedCmd
+  .command("watch")
+  .description("Start the cron daemon — runs all active tasks on schedule")
+  .option("--once", "Run active tasks once then exit", false)
+  .action(async (options) => {
+    const engine = await makeScheduler();
+    await engine.start();
+    const tasks = await engine.listTasks();
+    const active = tasks.filter((t) => t.status === "active");
+    console.error(`Cron daemon started — ${active.length} active task(s).`);
+    for (const t of active) {
+      console.error(`  ${t.id} ${t.cron}  ${t.name}`);
+    }
+
+    if (options.once) {
+      console.error("Running once and exiting...");
+      for (const t of active) {
+        const { result, output } = await engine.runOnce(t.id);
+        if (output) console.log(output);
+        console.error(`[${result}] ${t.name}`);
+      }
+      await engine.stop();
+      return;
+    }
+
+    engine.onTaskComplete = (_task, result, output) => {
+      const icon = result === "success" ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
+      console.error(`[${icon}] ${_task.name}`);
+      if (output) console.error(`       ${output.slice(0, 120)}`);
+    };
+
+    const shutdown = async () => {
+      console.error("\nShutting down cron daemon...");
+      await engine.stop();
+      process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+
+    await new Promise(() => {});
+  });
+
+// ── swarm ───────────────────────────────────────────────────────
+const swarmCmd = program.command("swarm").description("Autonomous multi-agent swarm workflow");
+const activeSwarmWorkflows: Record<string, import("../src/orchestrator/swarm.js").SwarmWorkflow> = {};
+
+swarmCmd
+  .command("create")
+  .description("Create a new swarm workflow with named agent roles")
+  .argument("<title>", "Workflow title")
+  .requiredOption("-a, --architect <id>", "Architect agent id")
+  .requiredOption("-c, --coder <id>", "Coder agent id")
+  .requiredOption("-r, --reviewer <id>", "Reviewer agent id")
+  .requiredOption("-q, --qa <id>", "QA agent id")
+  .action(async (title: string, options) => {
+    const { SwarmOrchestrator } = await import("../src/orchestrator/swarm.js");
+    const orch = new SwarmOrchestrator();
+    const workflow = orch.createSwarmWorkflow(title, [
+      { id: options.architect, name: options.architect, role: "architect", capabilities: [] },
+      { id: options.coder, name: options.coder, role: "coder", capabilities: [] },
+      { id: options.reviewer, name: options.reviewer, role: "reviewer", capabilities: [] },
+      { id: options.qa, name: options.qa, role: "qa", capabilities: [] },
+    ]);
+    activeSwarmWorkflows[workflow.id] = workflow;
+    console.log(`Swarm workflow created: ${workflow.id}`);
+    console.log(`  title:    ${title}`);
+    console.log(`  architect: ${options.architect}`);
+    console.log(`  coder:    ${options.coder}`);
+    console.log(`  reviewer:  ${options.reviewer}`);
+    console.log(`  qa:       ${options.qa}`);
+  });
+
+swarmCmd
+  .command("propose")
+  .description("Submit a proposal for swarm review")
+  .argument("<workflow-id>", "Swarm workflow id")
+  .argument("<agent-id>", "Proposing agent id")
+  .argument("<action>", "Proposed action description")
+  .action(async (workflowId: string, agentId: string, action: string) => {
+    const wf = activeSwarmWorkflows[workflowId];
+    if (!wf) { console.error(`Workflow not found: ${workflowId}`); process.exitCode = 1; return; }
+    const { SwarmOrchestrator } = await import("../src/orchestrator/swarm.js");
+    const orch = new SwarmOrchestrator();
+    const proposal = orch.initiateProposal(wf, workflowId, agentId, action);
+    wf.proposals.push(proposal);
+    console.log(`Proposal submitted: ${proposal.id}`);
+    console.log(`  proposer:  ${agentId}`);
+    console.log(`  action:    ${action}`);
+    console.log(`  status:    ${proposal.status}`);
+    console.log(`  quorum:    ${proposal.requiredQuorum}`);
+    console.log(`  threshold: ${(proposal.approvalThresholdRatio * 100).toFixed(0)}%`);
+  });
+
+swarmCmd
+  .command("vote")
+  .description("Vote on a swarm proposal")
+  .argument("<proposal-id>", "Proposal id")
+  .argument("<agent-id>", "Reviewer agent id")
+  .argument("<decision>", "approve | reject | abstain")
+  .argument("[justification]", "Optional vote justification")
+  .action(async (proposalId: string, agentId: string, decision: string, justification?: string) => {
+    const { SwarmOrchestrator } = await import("../src/orchestrator/swarm.js");
+    const orch = new SwarmOrchestrator();
+    let proposal: import("../src/tasks/consensus.js").TaskProposal | undefined;
+    for (const wf of Object.values(activeSwarmWorkflows)) {
+      proposal = wf.proposals.find((p) => p.id === proposalId);
+      if (proposal) break;
+    }
+    if (!proposal) { console.error(`Proposal not found: ${proposalId}`); process.exitCode = 1; return; }
+    const updated = orch.reviewProposal(proposal, agentId, decision as any, justification ?? "");
+    console.log(`Vote recorded: ${agentId} → ${decision}`);
+    console.log(`  proposal:  ${proposalId}`);
+    console.log(`  votes:     ${updated.votes.length}`);
+    const summary = updated.votes.map((v) => `    ${v.agentId}: ${v.decision}`).join("\n");
+    console.log(summary);
+    if (updated.status !== "pending") {
+      console.log(`  outcome:   ${updated.status.toUpperCase()}`);
+    }
+  });
+
+swarmCmd
+  .command("status")
+  .description("Show active swarm workflows and their proposals")
+  .action(async () => {
+    const workflows = Object.values(activeSwarmWorkflows);
+    if (!workflows.length) { console.log("No active swarm workflows."); return; }
+    for (const wf of workflows) {
+      console.log(`\nWorkflow: ${wf.id}  (${wf.title})`);
+      console.log(`  roles: ${Object.entries(wf.assignedRoles).map(([r, a]) => `${r}=${a}`).join(", ")}`);
+      if (!wf.proposals.length) { console.log("  proposals: (none)"); continue; }
+      for (const p of wf.proposals) {
+        const decided = p.votes.filter((v) => v.decision !== "abstain");
+        const approved = decided.filter((v) => v.decision === "approve").length;
+        console.log(`  proposal ${p.id}  [${p.status}]  proposer: ${p.proposerAgentId}`);
+        console.log(`    action: ${p.proposedAction}`);
+        console.log(`    votes: ${approved}/${decided.length} approve  quorum: ${p.requiredQuorum}  threshold: ${(p.approvalThresholdRatio * 100).toFixed(0)}%`);
+      }
+    }
+  });
+
+// ── audit ───────────────────────────────────────────────────────
+const auditCmd = program.command("audit").description("View agent audit trail and policy violations");
+
+auditCmd
+  .command("show")
+  .description("Show audit log entries for a session")
+  .option("-n, --limit <n>", "Max entries to show", "50")
+  .option("--cwd <path>", "Workspace root", process.cwd())
+  .action(async (options: { limit?: string; cwd?: string }) => {
+    const { AuditLogger } = await import("../src/observability/audit.js");
+    const workspaceRoot = options.cwd ?? process.cwd();
+    const logger = new AuditLogger();
+    const records = await logger.readRecords(workspaceRoot, Number(options.limit ?? 50));
+    if (!records.length) { console.log("No audit records found."); return; }
+    for (const r of records) {
+      const icon = r.action === "policy_denied" ? "\x1b[31m✗\x1b[0m" : "\x1b[36m●\x1b[0m";
+      console.log(`${icon} [${r.timestamp.slice(0, 19)}] ${r.agentId ?? "?"}  ${r.action}  ${r.target}`);
+      if (r.details) console.log(`    ${JSON.stringify(r.details).slice(0, 120)}`);
+    }
+  });
+
+auditCmd
+  .command("violations")
+  .description("Show only policy denial events")
+  .option("-n, --limit <n>", "Max entries to show", "50")
+  .option("--cwd <path>", "Workspace root", process.cwd())
+  .action(async (options: { limit?: string; cwd?: string }) => {
+    const { AuditLogger } = await import("../src/observability/audit.js");
+    const workspaceRoot = options.cwd ?? process.cwd();
+    const logger = new AuditLogger();
+    const records = await logger.readRecords(workspaceRoot, Number(options.limit ?? 50));
+    const denials = records.filter((r) => r.action === "policy_denied");
+    if (!denials.length) { console.log("No policy violations recorded."); return; }
+    for (const r of denials) {
+      console.log(`\x1b[31m✗\x1b[0m [${r.timestamp.slice(0, 19)}] ${r.agentId ?? "?"}  ${r.target}`);
+      if (r.details) console.log(`    ${JSON.stringify(r.details).slice(0, 120)}`);
+    }
+  });
+
+// ── init ────────────────────────────────────────────────────────
+const initCmd = program.command("init").description("Initialize .oracle/ in the current workspace");
+
+initCmd
+  .command("workspace")
+  .description("Create .oracle/ with policy.json, config.json, and docs/ directory")
+  .option("--force", "Overwrite existing files", false)
+  .action(async (options: { force?: boolean }) => {
+    const root = process.cwd();
+    const oracleDir = path.join(root, ".oracle");
+    await fs.mkdir(oracleDir, { recursive: true });
+    await fs.mkdir(path.join(oracleDir, "docs"), { recursive: true });
+    await fs.mkdir(path.join(oracleDir, "skills"), { recursive: true });
+
+    const policyPath = path.join(oracleDir, "policy.json");
+    const configPath = path.join(oracleDir, "config.json");
+
+    const defaultPolicy = {
+      forbiddenGlobs: [".env", ".env.", "id_rsa", "id_ed25519", ".pem", "credentials.json", ".oracle/policy.json"],
+      forbiddenCommands: ["rm -rf /", "rm -rf c:", "rm -rf c:\\", "mkfs", "dd if=", ":(){ :|:& };:"],
+      maxMutationsPerSession: 50,
+    };
+    const defaultConfig = {
+      provider: "codex",
+      model: "gpt-5.4",
+      include: ["src/**/*", "README.md", "package.json"],
+      exclude: ["**/*.test.ts", "**/node_modules/**", "**/dist/**", "**/build/**"],
+      maxFileSizeBytes: 1000000,
+      maxInputBytes: 5000000,
+    };
+
+    const writeIf = async (p: string, data: Record<string, unknown>) => {
+      try {
+        await fs.readFile(p, "utf8");
+        if (!options.force) { console.log(`  skip ${path.basename(p)} (already exists)`); return; }
+      } catch { /* file doesn't exist, write it */ }
+      await fs.writeFile(p, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+      console.log(`  created ${path.basename(p)}`);
+    };
+
+    console.log(`Initializing .oracle/ in ${root}`);
+    await writeIf(policyPath, defaultPolicy);
+    await writeIf(configPath, defaultConfig);
+    console.log("  created docs/");
+    console.log("  created skills/");
+    console.log("Done.");
   });
 
 // ── identity ────────────────────────────────────────────────────

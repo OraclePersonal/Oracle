@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { exec } from "node:child_process";
 import type { AgentContext, AgentTool, ContentBlock } from "./types.js";
 import { logSandbox } from "../observability/log.js";
+import { validateCommand, validateFilePath } from "./policy.js";
 
 /** Cap on how much text any single tool returns to the model. */
 const MAX_OUTPUT_CHARS = 30_000;
@@ -79,7 +80,7 @@ export function defaultAgentTools(): AgentTool[] {
   return [
     {
       name: "read_file",
-      description: "Read a UTF-8 text file from the workspace. Returns its full contents (truncated if very large).",
+      description: "Read a UTF-8 file from the workspace.",
       mutating: false,
       inputSchema: {
         type: "object",
@@ -87,14 +88,16 @@ export function defaultAgentTools(): AgentTool[] {
         required: ["path"],
       },
       async execute(input, ctx) {
-        const abs = resolveInWorkspace(ctx, str(input, "path"));
+        const rel = str(input, "path");
+        if (ctx.policy) validateFilePath(rel, ctx.policy);
+        const abs = resolveInWorkspace(ctx, rel);
         const content = await fs.readFile(abs, "utf8");
         return truncate(content);
       },
     },
     {
       name: "write_file",
-      description: "Create or overwrite a file with the given content. Creates parent directories as needed.",
+      description: "Create or overwrite a file. Creates parent dirs.",
       mutating: true,
       inputSchema: {
         type: "object",
@@ -107,6 +110,7 @@ export function defaultAgentTools(): AgentTool[] {
       async execute(input, ctx) {
         assertWritable(ctx, "write_file");
         const rel = str(input, "path");
+        if (ctx.policy) validateFilePath(rel, ctx.policy);
         const abs = resolveInWorkspace(ctx, rel);
         await fs.mkdir(path.dirname(abs), { recursive: true });
         const content = str(input, "content");
@@ -120,7 +124,7 @@ export function defaultAgentTools(): AgentTool[] {
     },
     {
       name: "edit_file",
-      description: "Replace an exact string in a file with a new string. The old string must appear exactly once. Use for targeted edits.",
+      description: "Replace an exact string (must be unique). For targeted edits.",
       mutating: true,
       inputSchema: {
         type: "object",
@@ -134,6 +138,7 @@ export function defaultAgentTools(): AgentTool[] {
       async execute(input, ctx) {
         assertWritable(ctx, "edit_file");
         const rel = str(input, "path");
+        if (ctx.policy) validateFilePath(rel, ctx.policy);
         const abs = resolveInWorkspace(ctx, rel);
         const oldStr = str(input, "old_string");
         const newStr = str(input, "new_string");
@@ -152,7 +157,7 @@ export function defaultAgentTools(): AgentTool[] {
     },
     {
       name: "list_dir",
-      description: "List immediate entries (files and folders) of a workspace directory.",
+      description: "List entries in a workspace directory.",
       mutating: false,
       inputSchema: {
         type: "object",
@@ -170,7 +175,7 @@ export function defaultAgentTools(): AgentTool[] {
     },
     {
       name: "glob",
-      description: "Find files whose workspace-relative path contains the given substring (skips node_modules, .git, dist).",
+      description: "Find files by path substring (skips node_modules, .git, dist).",
       mutating: false,
       inputSchema: {
         type: "object",
@@ -187,7 +192,7 @@ export function defaultAgentTools(): AgentTool[] {
     },
     {
       name: "grep",
-      description: "Search file contents for a substring across the workspace. Returns matching lines with file path and line number.",
+      description: "Search file contents for a substring. Returns path:line matches.",
       mutating: false,
       inputSchema: {
         type: "object",
@@ -225,7 +230,7 @@ export function defaultAgentTools(): AgentTool[] {
     },
     {
       name: "read_image",
-      description: "Read an image file and return it as base64 for the model to see. Supports PNG, JPEG, GIF, WebP.",
+      description: "Read an image as base64. Supports PNG, JPEG, GIF, WebP.",
       mutating: false,
       inputSchema: {
         type: "object",
@@ -235,7 +240,9 @@ export function defaultAgentTools(): AgentTool[] {
         required: ["path"],
       },
       async execute(input, ctx) {
-        const filePath = resolveInWorkspace(ctx, str(input, "path"));
+        const rel = str(input, "path");
+        if (ctx.policy) validateFilePath(rel, ctx.policy);
+        const filePath = resolveInWorkspace(ctx, rel);
         const data = await fs.readFile(filePath);
         const ext = path.extname(filePath).toLowerCase();
         const mimeType = {
@@ -256,7 +263,7 @@ export function defaultAgentTools(): AgentTool[] {
     },
     {
       name: "read_video",
-      description: "Read a video file and return it as base64 for the model to see. Supports MP4, WebM.",
+      description: "Read a video as base64. Supports MP4, WebM.",
       mutating: false,
       inputSchema: {
         type: "object",
@@ -266,7 +273,9 @@ export function defaultAgentTools(): AgentTool[] {
         required: ["path"],
       },
       async execute(input, ctx) {
-        const filePath = resolveInWorkspace(ctx, str(input, "path"));
+        const rel = str(input, "path");
+        if (ctx.policy) validateFilePath(rel, ctx.policy);
+        const filePath = resolveInWorkspace(ctx, rel);
         const data = await fs.readFile(filePath);
         const ext = path.extname(filePath).toLowerCase();
         const mimeType = {
@@ -286,7 +295,7 @@ export function defaultAgentTools(): AgentTool[] {
     {
       name: "bash",
       description:
-        "Run a shell command in the workspace root directory. Use for running tests, git operations, build tools, linters, etc. Commands timeout after 60 seconds (configurable via the timeout param in ms).",
+        "Run a shell command in the workspace root. Use for tests, git, build tools. Timeout 60s (configurable via timeout ms).",
       mutating: true,
       inputSchema: {
         type: "object",
@@ -302,6 +311,7 @@ export function defaultAgentTools(): AgentTool[] {
       async execute(input, ctx) {
         assertWritable(ctx, "bash");
         const command = str(input, "command");
+        if (ctx.policy) validateCommand(command, ctx.policy);
         const timeout = Math.min(Math.max(Number(input.timeout) || 60000, 1000), 300000);
         const shell = process.env.SHELL || undefined; // respect user's shell when set
         const stdout = await new Promise<string>((resolve, reject) => {

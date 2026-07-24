@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import crypto from "node:crypto";
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
 import type { AgentMessage } from "./types.js";
 
-/**
- * Checkpoint state for the agent loop. Saved after every tool-calling turn so
- * a crashed agent can resume from where it left off instead of starting over.
- *
- * Only the transcript is persisted — tool implementations are reconstructed
- * from the current environment on resume (they can't be serialized).
- */
+const execAsync = promisify(exec);
 
-export interface AgentCheckpoint {
+export interface ShadowGitCheckpoint {
+  id: string;
+  timestamp: string;
+  label?: string;
+  stashRef?: string;
+  filesModified: string[];
+}
+
+export interface CheckpointRecord {
   id: string;
   system: string;
   model: string;
@@ -24,66 +27,160 @@ export interface AgentCheckpoint {
   updatedAt: string;
 }
 
-export class CheckpointStore {
-  constructor(private readonly homeDir: string) {}
+export type AgentCheckpoint = CheckpointRecord;
 
-  private dir(): string {
-    return path.join(this.homeDir, "checkpoints");
-  }
+export interface CheckpointStoreInterface {
+  load(id: string): Promise<CheckpointRecord | null>;
+  save(record: CheckpointRecord): Promise<void>;
+  delete(id: string): Promise<boolean>;
+  list(): Promise<Array<{ id: string; updatedAt: string }>>;
+}
+
+export class FileCheckpointStore implements CheckpointStoreInterface {
+  constructor(private readonly dir: string) {}
 
   private filePath(id: string): string {
-    if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(id)) {
-      throw new Error(`Invalid checkpoint id "${id}".`);
-    }
-    return path.join(this.dir(), `${id}.json`);
+    return path.join(this.dir, `${id}.json`);
   }
 
-  /** Save a checkpoint (atomic write). */
-  async save(checkpoint: AgentCheckpoint): Promise<void> {
-    await fs.mkdir(this.dir(), { recursive: true });
-    const fp = this.filePath(checkpoint.id);
-    const tmp = `${fp}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(checkpoint, null, 2), "utf8");
-    await fs.rename(tmp, fp);
+  private isValidId(id: string): boolean {
+    return Boolean(id) && !id.includes("..") && !id.includes("/") && !id.includes("\\");
   }
 
-  /** Load a checkpoint by id. Returns null if not found. */
-  async load(id: string): Promise<AgentCheckpoint | null> {
+  async load(id: string): Promise<CheckpointRecord | null> {
+    if (!this.isValidId(id)) return null;
     try {
-      return JSON.parse(await fs.readFile(this.filePath(id), "utf8")) as AgentCheckpoint;
+      const raw = await fs.readFile(this.filePath(id), "utf8");
+      return JSON.parse(raw) as CheckpointRecord;
     } catch {
       return null;
     }
   }
 
-  /** Delete a checkpoint (called on successful completion). */
+  async save(record: CheckpointRecord): Promise<void> {
+    if (!this.isValidId(record.id)) {
+      throw new Error(`Invalid checkpoint id: ${record.id}`);
+    }
+    await fs.mkdir(this.dir, { recursive: true });
+    const tmp = `${this.filePath(record.id)}.tmp`;
+    await fs.writeFile(tmp, JSON.stringify(record, null, 2), "utf8");
+    await fs.rename(tmp, this.filePath(record.id));
+  }
+
   async delete(id: string): Promise<boolean> {
+    if (!this.isValidId(id)) return false;
     try {
-      await fs.rm(this.filePath(id));
+      await fs.unlink(this.filePath(id));
       return true;
     } catch {
       return false;
     }
   }
 
-  /** List all checkpoint IDs with timestamps. */
-  async list(): Promise<{ id: string; updatedAt: string }[]> {
-    let entries: string[];
+  async list(): Promise<Array<{ id: string; updatedAt: string }>> {
     try {
-      entries = await fs.readdir(this.dir());
+      const files = await fs.readdir(this.dir);
+      const list: Array<{ id: string; updatedAt: string }> = [];
+      for (const f of files) {
+        if (!f.endsWith(".json")) continue;
+        try {
+          const raw = await fs.readFile(path.join(this.dir, f), "utf8");
+          const cp = JSON.parse(raw) as CheckpointRecord;
+          list.push({ id: cp.id, updatedAt: cp.updatedAt });
+        } catch { /* skip */ }
+      }
+      return list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     } catch {
       return [];
     }
-    const result: { id: string; updatedAt: string }[] = [];
-    for (const name of entries) {
-      if (!name.endsWith(".json")) continue;
-      const id = name.slice(0, -".json".length);
-      if (!/^[a-z0-9][a-z0-9-]{0,63}$/i.test(id)) continue;
-      try {
-        const cp = await this.load(id);
-        if (cp) result.push({ id, updatedAt: cp.updatedAt });
-      } catch { /* skip corrupt */ }
+  }
+}
+
+export { FileCheckpointStore as CheckpointStore };
+
+export class ShadowGitEngine {
+  private checkpointsDir(workspaceRoot: string): string {
+    return path.join(workspaceRoot, ".oracle", "checkpoints");
+  }
+
+  private async ensureDir(workspaceRoot: string): Promise<void> {
+    await fs.mkdir(this.checkpointsDir(workspaceRoot), { recursive: true });
+  }
+
+  /**
+   * Create a shadow checkpoint before mutating workspace files.
+   */
+  async createCheckpoint(workspaceRoot: string, label?: string): Promise<ShadowGitCheckpoint> {
+    await this.ensureDir(workspaceRoot);
+    const id = `cp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const timestamp = new Date().toISOString();
+
+    let stashRef: string | undefined;
+    let filesModified: string[] = [];
+
+    try {
+      const { stdout: status } = await execAsync("git status --porcelain", { cwd: workspaceRoot });
+      filesModified = status
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.slice(3).trim());
+
+      const { stdout: stashOut } = await execAsync(`git stash create "oracle_checkpoint_${id}"`, { cwd: workspaceRoot });
+      stashRef = stashOut.trim() || undefined;
+    } catch {
+      // Fallback
     }
-    return result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+
+    const checkpoint: ShadowGitCheckpoint = {
+      id,
+      timestamp,
+      label,
+      stashRef,
+      filesModified,
+    };
+
+    const filePath = path.join(this.checkpointsDir(workspaceRoot), `${id}.json`);
+    await fs.writeFile(filePath, JSON.stringify(checkpoint, null, 2), "utf8");
+    return checkpoint;
+  }
+
+  /**
+   * Rollback workspace state to a target checkpoint.
+   */
+  async revertCheckpoint(workspaceRoot: string, checkpointId: string): Promise<{ restoredFiles: string[] }> {
+    const filePath = path.join(this.checkpointsDir(workspaceRoot), `${checkpointId}.json`);
+    const raw = await fs.readFile(filePath, "utf8");
+    const checkpoint = JSON.parse(raw) as ShadowGitCheckpoint;
+
+    if (checkpoint.stashRef) {
+      try {
+        await execAsync(`git stash apply ${checkpoint.stashRef}`, { cwd: workspaceRoot });
+      } catch {
+        // Stash apply fallback
+      }
+    }
+
+    return { restoredFiles: checkpoint.filesModified };
+  }
+
+  /**
+   * List all stored checkpoints.
+   */
+  async listCheckpoints(workspaceRoot: string): Promise<ShadowGitCheckpoint[]> {
+    try {
+      const dir = this.checkpointsDir(workspaceRoot);
+      const files = await fs.readdir(dir);
+      const list: ShadowGitCheckpoint[] = [];
+      for (const f of files) {
+        if (!f.endsWith(".json")) continue;
+        try {
+          const raw = await fs.readFile(path.join(dir, f), "utf8");
+          list.push(JSON.parse(raw) as ShadowGitCheckpoint);
+        } catch { /* skip */ }
+      }
+      return list.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    } catch {
+      return [];
+    }
   }
 }

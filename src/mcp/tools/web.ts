@@ -24,7 +24,7 @@ export function registerWebTools(server: McpServer): void {
     "oracle_web_search",
     {
       title: "Web Search",
-      description: "Search the web via Brave, Tavily, or Firecrawl. Defaults to the first provider with a configured API key.",
+      description: "Web search via Brave, Tavily, or Firecrawl.",
       inputSchema: {
         query: z.string().min(1),
         limit: z.number().int().min(1).max(20).default(5),
@@ -48,7 +48,7 @@ export function registerWebTools(server: McpServer): void {
     "oracle_web_fetch",
     {
       title: "Fetch URL",
-      description: "Fetch a URL and return its readable text. 'native' strips HTML itself (SSRF-guarded); 'firecrawl' uses Firecrawl's JS-rendering scraper (requires FIRECRAWL_API_KEY).",
+      description: "Fetch URL as readable text. 'native' (SSRF-guarded) strips HTML; 'firecrawl' uses JS rendering.",
       inputSchema: {
         url: z.string().min(1),
         provider: z.enum(FETCH_PROVIDERS as [string, ...string[]]).default("native")
@@ -66,7 +66,7 @@ export function registerWebTools(server: McpServer): void {
     "oracle_web_extract",
     {
       title: "Extract Structured Data",
-      description: "Extract structured data from a URL via TinyFish's AgentQL API given a natural-language description of the fields to pull out. Requires AGENTQL_API_KEY.",
+      description: "Extract structured data from a URL via AgentQL. Requires AGENTQL_API_KEY.",
       inputSchema: {
         url: z.string().min(1),
         prompt: z.string().min(1).describe("What to extract, e.g. 'the product name, price, and in-stock status'")

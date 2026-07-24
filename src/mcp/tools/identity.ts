@@ -35,7 +35,7 @@ export function registerIdentityTools(server: McpServer, profile: ProfileStore):
     "oracle_identity_show",
     {
       title: "Show Identity",
-      description: "Show your identity profile and Oracle's persona.",
+      description: "Show identity profile and Oracle's persona.",
       inputSchema: {}
     },
     async () => {
