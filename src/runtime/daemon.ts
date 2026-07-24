@@ -1,4 +1,5 @@
 import path from "node:path";
+import { ControlCenterService } from "../control/service.js";
 import { VERSION } from "../version.js";
 import { LocalApiServer } from "./api.js";
 import { RuntimeDatabase } from "./database.js";
@@ -19,6 +20,7 @@ export interface OracleDaemonOptions {
   port?: number;
   token?: string;
   databasePath?: string;
+  workspaceRoot?: string;
   onShutdown?: () => void;
 }
 
@@ -26,6 +28,7 @@ export class OracleDaemon {
   private database?: RuntimeDatabase;
   private events?: RuntimeEventBus;
   private scheduler?: SchedulerService;
+  private control?: ControlCenterService;
   private api?: LocalApiServer;
   private state?: DaemonState;
   private stopPromise?: Promise<void>;
@@ -61,12 +64,23 @@ export class OracleDaemon {
     );
     this.events = new RuntimeEventBus(this.database);
     this.scheduler = new SchedulerService(this.database, this.events);
+    const workspaceRoot = path.resolve(this.options.workspaceRoot ?? process.cwd());
+    this.control = new ControlCenterService(
+      this.database,
+      this.events,
+      this.scheduler,
+      {
+        homeDir: this.options.homeDir,
+        workspaceRoot
+      }
+    );
 
     const provisional = createDaemonState({
       host,
       port: requestedPort,
       token: this.options.token,
-      databasePath: this.database.filePath
+      databasePath: this.database.filePath,
+      workspaceRoot
     });
     this.api = new LocalApiServer({
       host,
@@ -74,6 +88,7 @@ export class OracleDaemon {
       token: provisional.token,
       version: VERSION,
       scheduler: this.scheduler,
+      control: this.control,
       events: this.events,
       onShutdown: () => {
         void this.stop().then(() => this.options.onShutdown?.());
@@ -100,6 +115,7 @@ export class OracleDaemon {
       this.database.close();
       this.api = undefined;
       this.scheduler = undefined;
+      this.control = undefined;
       this.events = undefined;
       this.database = undefined;
       throw error;
@@ -123,6 +139,7 @@ export class OracleDaemon {
     this.state = undefined;
     this.api = undefined;
     this.scheduler = undefined;
+    this.control = undefined;
     this.events = undefined;
     this.database = undefined;
   }

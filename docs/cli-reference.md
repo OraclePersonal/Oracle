@@ -190,6 +190,38 @@ oracle daemon run                    # foreground mode
 
 ---
 
+### oracle control
+
+Control Center TUI and local web dashboard.
+
+```bash
+oracle control                       # interactive TUI
+oracle control --once                # render once and exit
+oracle control --actor lead          # record TUI decisions as lead
+oracle control url                   # print authenticated dashboard URL
+oracle control snapshot              # JSON projection
+```
+
+---
+
+### oracle approval
+
+Persistent human approval inbox.
+
+```bash
+oracle approval list [--status pending]
+oracle approval show <id>
+oracle approval request --title "Deploy" --requested-by builder \
+  --assigned-to lead --kind command --risk high
+oracle approval approve <id> --by lead --note "verified"
+oracle approval reject <id> --by lead --note "needs changes"
+```
+
+Tasks submitted for review appear automatically. Their decisions reuse the
+existing TaskStore and CoordinationService transition.
+
+---
+
 ### oracle swarm
 
 Autonomous multi-agent swarm workflow.

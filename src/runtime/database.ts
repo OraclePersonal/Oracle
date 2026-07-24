@@ -128,9 +128,38 @@ export class RuntimeDatabase {
         created_at TEXT NOT NULL
       ) STRICT;
 
+      CREATE TABLE IF NOT EXISTS approval_requests (
+        id TEXT PRIMARY KEY,
+        source_key TEXT UNIQUE,
+        kind TEXT NOT NULL CHECK (kind IN ('task_review', 'command', 'policy', 'custom')),
+        title TEXT NOT NULL,
+        description TEXT,
+        requested_by TEXT NOT NULL,
+        assigned_to TEXT NOT NULL,
+        risk TEXT NOT NULL CHECK (risk IN ('low', 'medium', 'high')),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+        task_id TEXT,
+        message_id TEXT,
+        workflow_id TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT,
+        decision_note TEXT,
+        notified_at TEXT
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS approval_requests_status_idx
+        ON approval_requests(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS approval_requests_task_idx
+        ON approval_requests(task_id);
+
       INSERT INTO runtime_metadata (key, value, updated_at)
-      VALUES ('schema_version', '1', datetime('now'))
-      ON CONFLICT(key) DO NOTHING;
+      VALUES ('schema_version', '2', datetime('now'))
+      ON CONFLICT(key) DO UPDATE SET
+        value = excluded.value,
+        updated_at = excluded.updated_at;
     `);
   }
 }

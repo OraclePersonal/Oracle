@@ -20,6 +20,14 @@ an available port. The daemon writes state to
 `~/.oracle/runtime/daemon.json`, logs to `~/.oracle/runtime/daemon.log`, and
 SQLite data to `~/.oracle/runtime/oracle.db`.
 
+Runtime also serves Control Center 0.3.0 for the workspace from which the
+daemon was started:
+
+```bash
+oracle control
+oracle control url
+```
+
 `oracle schedule watch` remains as a foreground alias for
 `oracle daemon run`. Other `oracle schedule` commands automatically use the
 daemon API while it is available and fall back to the same SQLite database
@@ -63,6 +71,11 @@ DELETE /v1/schedules/:id
 POST   /v1/schedules/:id/run
 GET    /v1/events?after=<event-id>&limit=<n>
 POST   /v1/daemon/stop
+GET    /v1/control/snapshot
+GET    /v1/control/approvals
+POST   /v1/control/approvals
+GET    /v1/control/approvals/:id
+POST   /v1/control/approvals/:id/decision
 ```
 
 The CLI reads the token internally. `oracle daemon status --json` deliberately
@@ -80,6 +93,8 @@ Event types include:
 - `scheduler.task.created`, `scheduler.task.updated`,
   `scheduler.task.removed`
 - `scheduler.run.started`, `scheduler.run.completed`
+- `approval.requested`, `approval.approved`, `approval.rejected`
+- `approval.notification.failed`
 
 Use `oracle daemon events --after <id>` instead of handling the token
 directly.
@@ -93,12 +108,19 @@ are written with owner-only permissions.
 Do not expose Runtime through an SSH tunnel or reverse proxy unless that
 proxy adds its own authentication, authorization, and transport security.
 
+The `/control` HTML shell is non-sensitive, but every data request and
+decision still requires the Runtime token. `oracle control url` passes that
+token in a URL fragment so it is not included in the initial HTTP request.
+
 ## Environment
 
 ```text
 ORACLE_HOME_DIR       Runtime root (default ~/.oracle)
 ORACLE_RUNTIME_HOST   Loopback bind host (default 127.0.0.1)
 ORACLE_RUNTIME_PORT   API port (default 4777)
+ORACLE_WORKSPACE_ROOT Fixed Control Center project root (default startup cwd)
+ORACLE_TELEGRAM_BOT_TOKEN Optional approval notification bot
+ORACLE_TELEGRAM_CHAT_ID   Optional approval notification destination
 ```
 
 ---

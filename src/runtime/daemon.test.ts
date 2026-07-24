@@ -23,6 +23,7 @@ describe("OracleDaemon", () => {
   test("serves scheduler API from SQLite and removes state on stop", async () => {
     daemon = new OracleDaemon({
       homeDir: home,
+      workspaceRoot: home,
       host: "127.0.0.1",
       port: 0,
       token: "test-token"
@@ -34,11 +35,33 @@ describe("OracleDaemon", () => {
     expect(client).not.toBeNull();
     const unauthorized = await fetch(`http://${state.host}:${state.port}/v1/schedules`);
     expect(unauthorized.status).toBe(401);
+    const controlPage = await fetch(`http://${state.host}:${state.port}/control`);
+    expect(controlPage.status).toBe(200);
+    expect(await controlPage.text()).toContain("Oracle Control Center");
+    const unauthorizedControl = await fetch(`http://${state.host}:${state.port}/v1/control/snapshot`);
+    expect(unauthorizedControl.status).toBe(401);
     expect(await client!.health()).toMatchObject({
       status: "ok",
       schedulerRunning: true,
       storage: "sqlite"
     });
+    expect(await client!.getControlSnapshot()).toMatchObject({
+      version: "0.3.0",
+      workspaceRoot: home,
+      approvals: { pending: 0 }
+    });
+
+    const approval = await client!.createApproval({
+      title: "Runtime approval",
+      requestedBy: "worker",
+      assignedTo: "lead",
+      risk: "low"
+    });
+    expect(await client!.listApprovals("pending")).toHaveLength(1);
+    expect(await client!.decideApproval(approval.id, {
+      decision: "approve",
+      decidedBy: "lead"
+    })).toMatchObject({ status: "approved" });
 
     const task = await client!.createSchedule({
       name: "API task",
@@ -63,6 +86,7 @@ describe("OracleDaemon", () => {
   test("streams persisted scheduler events over WebSocket", async () => {
     daemon = new OracleDaemon({
       homeDir: home,
+      workspaceRoot: home,
       host: "127.0.0.1",
       port: 0,
       token: "test-token"

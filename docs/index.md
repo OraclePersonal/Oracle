@@ -29,7 +29,7 @@ Or without installing:
 npx -p @oraclepersonal/oracle oracle ask "review this" -f "src/**/*.ts"
 ```
 
-## The Five Pillars
+## Core Pillars
 
 | Pillar | What it does |
 |---|---|
@@ -38,7 +38,8 @@ npx -p @oraclepersonal/oracle oracle ask "review this" -f "src/**/*.ts"
 | 🛠️ **Act** | An autonomous agent that reads/writes/edits files and runs shell commands to complete a task. **Shell + filesystem** — confined to the workspace, fully audited (every mutation and command hashed and logged). |
 | 📨 **Coordinate** | A file-backed inter-agent message bus. Agents send, receive, reply in threads, broadcast, and track presence — with self-onboarding via MCP server instructions, so no one has to be told how to use it. |
 | ✅ **Verify** | A task tracker on top of the bus: assign work with a checklist, log progress, and submit for review — which **blocks** until every checklist item is actually checked off. The task creator is notified automatically. |
-| ⏰ **Schedule** | Persistent cron task system — schedule shell commands to run at specific times or intervals. Tasks survive restarts and run via `oracle schedule watch` daemon. |
+| ⏰ **Runtime** | Persistent local daemon for scheduling, SQLite state, an authenticated loopback API, and WebSocket events. |
+| 🖥️ **Control** | Blue web dashboard and interactive TUI for approval inbox, task workflow, memory distribution, and audit activity. |
 
 ## Documentation
 
@@ -56,10 +57,11 @@ npx -p @oraclepersonal/oracle oracle ask "review this" -f "src/**/*.ts"
 | 10 | [Messaging & Task Tracking](MESSAGING.md) | Inter-agent messaging, wake-up tiers, task workflow |
 | 11 | [Scheduler](scheduler.md) | Runtime-backed cron task commands and expressions |
 | 12 | [Runtime](runtime.md) | Daemon, SQLite, local API, WebSocket events, security |
-| 13 | [Troubleshooting](troubleshooting.md) | Common issues and how to resolve them |
-| 14 | [Superpowers / Specs](superpowers/specs/) | Architecture design specs |
-| 15 | [Changelog](/CHANGELOG.md) | Release notes and version history |
-| 16 | [Init](getting-started.md#initialize-the-workspace) | Bootstrap `.oracle/` for a new project |
+| 13 | [Control Center](control-center.md) | Dashboard, TUI, approval inbox, Telegram notifications |
+| 14 | [Troubleshooting](troubleshooting.md) | Common issues and how to resolve them |
+| 15 | [Superpowers / Specs](superpowers/specs/) | Architecture design specs |
+| 16 | [Changelog](/CHANGELOG.md) | Release notes and version history |
+| 17 | [Init](getting-started.md#initialize-the-workspace) | Bootstrap `.oracle/` for a new project |
 
 ## MCP Tools
 
@@ -75,7 +77,7 @@ live in [MESSAGING.md](MESSAGING.md).
 ~/.oracle/
 ├── messages/    # inter-agent message store (atomic JSON per message)
 ├── tasks/       # task tracker (atomic JSON per task)
-├── runtime/     # SQLite database, daemon state, logs
+├── runtime/     # SQLite scheduler/approval state, daemon state, logs
 ├── scheduler/   # legacy cron JSON imported into Runtime
 ├── agents/      # presence registry
 ├── memory/      # persistent memory: facts, insights, wiki, entity graph

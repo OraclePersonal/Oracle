@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-24
+
+### Added
+- Blue, responsive Control Center dashboard served locally at `/control`
+- Dependency-free interactive terminal UI through `oracle control`
+- Persistent SQLite approval inbox with low/medium/high risk classification
+- Automatic task-review approvals linked to the existing TaskStore and CoordinationService
+- Approval CLI for request, list, show, approve, and reject workflows
+- Control Center snapshot API aggregating task, memory, audit, approval, and Runtime state
+- Optional Telegram approval notifications through environment configuration
+- Control Center unit, API, terminal rendering, and daemon smoke coverage
+
+### Changed
+- Package version advanced to Control Center 0.3.0
+- Runtime state records its fixed project workspace for safe visualization
+- SQLite schema advanced to version 2 with persistent approval records
+- Task approval decisions reuse the durable Task-to-Message coordination flow
+
+### Security
+- Dashboard data and mutations remain protected by the owner-only Runtime token
+- Dashboard token is passed in the URL fragment, moved into session storage, and removed from the address bar
+- Telegram is disabled unless both bot token and chat id are explicitly configured
+- Telegram is notification-only; decisions remain inside the authenticated local Control Center
+
 ## [0.2.0] - 2026-07-24
 
 ### Added

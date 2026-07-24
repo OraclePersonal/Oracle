@@ -15,7 +15,8 @@ you ──▶ oracle ask ──▶ context (memory · docs · web · files) ─�
 Oracle combines an MCP server and CLI with an optional persistent Runtime
 daemon. Coordination and memory remain local stores under `~/.oracle/`;
 Runtime owns long-lived scheduling, SQLite state, and the loopback
-HTTP/WebSocket API.
+HTTP/WebSocket API. Control Center is the human-facing projection over those
+stores and does not replace their existing sources of truth.
 
 ## Components
 
@@ -25,6 +26,7 @@ HTTP/WebSocket API.
 | **MCP Server** | Stdio MCP server exposing Oracle's full tool surface | `src/mcp/server.ts`, `src/mcp/runtime.ts` |
 | **Standalone coordination server** | `oracle-msg-mcp` binary — 21 messaging, task, consensus, and recovery tools without the provider/memory/agent stack | `src/mcp-messaging.ts` |
 | **Runtime daemon** | Long-lived Scheduler owner, SQLite backend, loopback API, WebSocket events | `src/runtime/`, `src/daemon.ts` |
+| **Control Center** | Web dashboard, TUI, approval inbox, task/memory/audit aggregation, optional Telegram notifications | `src/control/` |
 | **ConsultService** | Core loop: load files → build context (memory + docs + web) → call provider → answer | `src/core/consult.ts` |
 | **Provider layer** | Codex CLI, Anthropic, OpenAI, OpenCode | `src/providers/` |
 | **Agent sandbox** | Autonomous file read/write/edit loop with a bash tool for shell commands. Every mutation hashed and logged to an audit trail. | `src/agent/` |
@@ -99,7 +101,7 @@ for the full lifecycle.
 ├── tasks/               # task tracker (atomic JSON per task)
 ├── swarms/              # workflow state + Task/Message/consensus links
 ├── runtime/
-│   ├── oracle.db        # SQLite tasks, run history, metadata, events
+│   ├── oracle.db        # SQLite scheduler state, events, approvals
 │   ├── daemon.json      # pid, loopback endpoint, owner-only token
 │   └── daemon.log       # detached process output
 ├── scheduler/           # legacy JSON tasks imported into SQLite
@@ -113,6 +115,7 @@ for the full lifecycle.
 <project>/
 └── .oracle/
     ├── config.json         # per-project include/exclude, provider, model
+    ├── audit.jsonl         # immutable agent and approval audit events
     ├── docs/                # knowledge base source files
     └── skills/              # project-local skill overrides
 ```

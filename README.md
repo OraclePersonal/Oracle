@@ -13,6 +13,7 @@ When you fire up Claude Code, it has no memory of yesterday's work. If you start
 - **Inter-agent coordination** — multiple agent sessions on one machine can message each other, hand off work, wake each other up when something needs attention
 - **Task planning & verification** — a lead breaks work into assigned tasks with checklists; agents can't report "done" until their declared verification steps are actually checked off, and the lead is auto-notified when work is ready to review
 - **ASCII work board** — a lead can render the live agent roster and its main TODOs in any MCP client with `oracle_task_board`
+- **Control Center** — a blue local dashboard and interactive TUI for approvals, task flow, memory distribution, and the immutable audit trail
 
 **Requires Node.js ≥ 24.** Installs three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), `oracle-msg-mcp` (messaging + task-tracking server for agents that only need to coordinate, not consult or act).
 
@@ -62,7 +63,7 @@ Session B: Claude Code → Oracle
 
 ---
 
-## The Five Pillars
+## Core Pillars
 
 | Pillar | What It Does | How To Use |
 |--------|--------------|-----------|
@@ -72,6 +73,7 @@ Session B: Claude Code → Oracle
 | 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
 | ✅ **Verify** | Durable task/message coordination: lifecycle notifications are persisted before delivery, linked back to their Task and Swarm, and recover safely without duplicates. Checklist submit still **blocks** while verification is incomplete. | MCP: `oracle_task_*`, `oracle_coordination_recover`. CLI: `oracle task ...`, `oracle swarm .../recover`. |
 | ⏰ **Runtime** | Persistent Oracle daemon owning the Scheduler service, SQLite backend, token-authenticated local API, and replayable WebSocket events. | CLI: `oracle daemon start/status/events/stop`, `oracle schedule list/add/update/run/remove`. |
+| 🖥️ **Control** | Human control plane with approval inbox, task workflow, memory distribution, and audit visualization. Task approvals close through the existing durable coordination flow. | TUI: `oracle control`. Web: `oracle control url`. Decisions: `oracle approval ...`. |
 
 ---
 
@@ -89,6 +91,14 @@ git clone https://github.com/OraclePersonal/Oracle.git
 cd Oracle
 npm install && npm run build
 node dist/cli.js doctor
+```
+
+Start the local control plane:
+
+```bash
+oracle daemon start
+oracle control              # interactive terminal UI
+oracle control url          # authenticated local web dashboard
 ```
 
 ### Wire up an MCP client
@@ -339,6 +349,8 @@ ORACLE_WORKSPACE_ROOT      # Project root (default: cwd)
 ORACLE_HOME_DIR            # Memory/agents/messages store (default: ~/.oracle)
 ORACLE_RUNTIME_HOST        # Runtime loopback host (default: 127.0.0.1)
 ORACLE_RUNTIME_PORT        # Runtime local API port (default: 4777)
+ORACLE_TELEGRAM_BOT_TOKEN  # Optional approval notification bot
+ORACLE_TELEGRAM_CHAT_ID    # Optional approval notification destination
 ORACLE_MEMORY_LLM_GRAPH    # Enable LLM-based memory graph reflection (default: off)
 ANTHROPIC_API_KEY          # For Claude models (required if using Anthropic)
 OPENAI_API_KEY             # For GPT (required if using OpenAI)
@@ -376,6 +388,8 @@ Oracle MCP Server (src/mcp/)
 │  └─ CronEngine + repository port, owned by Runtime while active
 ├─ Runtime (src/runtime/)
 │  └─ Daemon + SQLite + Scheduler service + local HTTP/WebSocket API
+├─ Control Center (src/control/)
+│  └─ Dashboard + TUI + approval inbox + task/memory/audit visualization
 ├─ Observability (src/observability/)
 │  └─ Structured JSON logging to stderr
 ├─ Identity & Personas (src/identity/)
@@ -387,6 +401,8 @@ CLI (src/cli.ts)
 ├─ oracle ask, agent, daemon, memory, msg, task, identity, schedule, ...
 ├─ oracle agent: --plan, --review, --resume, --json, --read-only, --yes
 ├─ oracle daemon: start, run, status, stop, events
+├─ oracle control: TUI, url, snapshot
+├─ oracle approval: request, list, show, approve, reject
 ├─ oracle schedule: list, add, update, remove, run, watch
 ├─ same bus as MCP (shared ~/.oracle/)
 └─ designed for scripting & local use
@@ -404,7 +420,7 @@ Standalone Coordination Server (src/mcp-messaging.ts)
 ├─ tasks/                 # Task tracker (atomic JSON per task, one file each)
 ├─ swarms/                # Workflow, task/message links, recovery metadata
 ├─ runtime/
-│  ├─ oracle.db           # SQLite scheduler tasks, runs, metadata, events
+│  ├─ oracle.db           # SQLite scheduler state, events, approvals
 │  ├─ daemon.json         # Local endpoint + owner-only API credential
 │  └─ daemon.log          # Background daemon output
 ├─ scheduler/             # Legacy JSON tasks (import source)

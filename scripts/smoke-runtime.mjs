@@ -36,8 +36,41 @@ try {
   if (!parsedStatus.running || parsedStatus.health?.storage !== "sqlite") {
     throw new Error(`Unexpected daemon status: ${status}`);
   }
+  if (parsedStatus.health?.version !== "0.3.0") {
+    throw new Error(`Unexpected Runtime version: ${status}`);
+  }
   if (JSON.stringify(parsedStatus).includes("token")) {
     throw new Error("Daemon status leaked the API token.");
+  }
+
+  const snapshot = JSON.parse(run(["control", "snapshot"]));
+  if (snapshot.version !== "0.3.0" || snapshot.approvals?.pending !== 0) {
+    throw new Error(`Unexpected Control Center snapshot: ${JSON.stringify(snapshot)}`);
+  }
+  const tui = run(["control", "--once"]);
+  if (!tui.includes("ORACLE CONTROL CENTER") || !tui.includes("APPROVAL INBOX")) {
+    throw new Error(`Control Center TUI did not render:\n${tui}`);
+  }
+  const dashboardUrl = run(["control", "url"]).trim();
+  if (!dashboardUrl.includes("/control#token=")) {
+    throw new Error("Control Center URL did not use a token fragment.");
+  }
+
+  const requested = run([
+    "approval", "request",
+    "--title", "Runtime smoke approval",
+    "--requested-by", "worker",
+    "--assigned-to", "lead",
+    "--risk", "high"
+  ]);
+  const approvalId = requested.match(/approval-[0-9]{17}-[a-f0-9]{8}/)?.[0];
+  if (!approvalId) throw new Error(`Could not parse approval id:\n${requested}`);
+  if (!run(["approval", "list"]).includes(approvalId)) {
+    throw new Error("Approval did not persist in the Runtime inbox.");
+  }
+  const approved = run(["approval", "approve", approvalId, "--by", "lead"]);
+  if (!approved.includes("approved")) {
+    throw new Error(`Approval decision failed:\n${approved}`);
   }
 
   const created = run([

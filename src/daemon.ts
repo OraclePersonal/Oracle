@@ -7,12 +7,14 @@ import { OracleDaemon } from "./runtime/daemon.js";
 const homeDir = process.env.ORACLE_HOME_DIR ?? path.join(os.homedir(), ".oracle");
 const host = process.env.ORACLE_RUNTIME_HOST ?? "127.0.0.1";
 const port = Number(process.env.ORACLE_RUNTIME_PORT ?? "4777");
+const workspaceRoot = process.env.ORACLE_WORKSPACE_ROOT ?? process.cwd();
 
 let exiting = false;
 const daemon = new OracleDaemon({
   homeDir,
   host,
   port,
+  workspaceRoot,
   onShutdown: () => {
     if (!exiting) process.exit(0);
   }

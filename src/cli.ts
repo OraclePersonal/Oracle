@@ -871,6 +871,7 @@ async function runDaemonForeground(host: string, port: number): Promise<void> {
     homeDir: homeDir(),
     host,
     port,
+    workspaceRoot: process.cwd(),
     onShutdown: resolveStopped
   });
   const state = await daemon.start();
@@ -903,7 +904,8 @@ daemonCmd
     const result = await startDaemon({
       homeDir: homeDir(),
       host: options.host,
-      port: Number(options.port)
+      port: Number(options.port),
+      workspaceRoot: process.cwd()
     });
     console.log(result.alreadyRunning ? "Oracle Runtime is already running." : "Oracle Runtime started.");
     console.log(`  pid:     ${result.state.pid}`);
@@ -940,6 +942,7 @@ daemonCmd
     console.log(`  API:       http://${status.state?.host}:${status.state?.port}`);
     console.log(`  scheduler: ${status.health?.schedulerRunning ? "running" : "stopped"}`);
     console.log(`  storage:   ${status.health?.storage} (${status.state?.databasePath})`);
+    console.log(`  workspace: ${status.state?.workspaceRoot ?? "(not recorded)"}`);
   });
 
 daemonCmd
@@ -967,6 +970,207 @@ daemonCmd
       process.once("SIGINT", () => socket.close(1000, "client stopped"));
     });
   });
+
+// ── Control Center & approval inbox ─────────────────────────────
+async function requireRuntimeClient(): Promise<RuntimeClient> {
+  const client = await RuntimeClient.connect(homeDir());
+  if (!client) {
+    throw new Error("Oracle Runtime is not running. Start it with `oracle daemon start`.");
+  }
+  return client;
+}
+
+const controlCmd = program
+  .command("control")
+  .description("Open the Control Center TUI for approvals, tasks, memory, and audit")
+  .option("--once", "Render one snapshot and exit", false)
+  .option("--interval <ms>", "Refresh interval in milliseconds", "2000")
+  .option("--actor <name>", "Approval actor recorded by the TUI", process.env.USER ?? "operator")
+  .action(async (options) => {
+    const client = await requireRuntimeClient();
+    const { renderControlTui } = await import("./control/tui.js");
+    let snapshot = await client.getControlSnapshot();
+    let selected = 0;
+    const render = () => {
+      const screen = renderControlTui(snapshot, selected);
+      if (process.stdout.isTTY && !options.once) process.stdout.write("\x1b[2J\x1b[H");
+      process.stdout.write(`${screen}\n`);
+    };
+    render();
+    if (options.once || !process.stdin.isTTY || !process.stdout.isTTY) return;
+
+    const intervalMs = Number(options.interval);
+    if (!Number.isFinite(intervalMs) || intervalMs < 500) {
+      throw new Error("--interval must be at least 500 milliseconds.");
+    }
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        snapshot = await client.getControlSnapshot();
+        selected = Math.min(selected, Math.max(0, snapshot.approvals.items.length - 1));
+        render();
+      } finally {
+        refreshing = false;
+      }
+    };
+    const timer = setInterval(() => void refresh(), intervalMs);
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding("utf8");
+    let onKey: ((key: string) => void) | undefined;
+    await new Promise<void>((resolve, reject) => {
+      onKey = (key: string) => {
+        if (key === "q" || key === "\u0003") {
+          resolve();
+          return;
+        }
+        if (key === "j" || key === "\u001b[B") {
+          selected = Math.min(selected + 1, Math.max(0, snapshot.approvals.items.length - 1));
+          render();
+          return;
+        }
+        if (key === "k" || key === "\u001b[A") {
+          selected = Math.max(0, selected - 1);
+          render();
+          return;
+        }
+        if (key === "r") {
+          void refresh().catch(reject);
+          return;
+        }
+        if ((key === "a" || key === "x") && snapshot.approvals.items[selected]) {
+          const approval = snapshot.approvals.items[selected];
+          void client.decideApproval(approval.id, {
+            decision: key === "a" ? "approve" : "reject",
+            decidedBy: options.actor,
+            note: key === "x" ? "Rejected from Control Center TUI." : undefined
+          }).then(refresh, reject);
+        }
+      };
+      process.stdin.on("data", onKey);
+    }).finally(() => {
+      clearInterval(timer);
+      if (onKey) process.stdin.off("data", onKey);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+    });
+  });
+
+controlCmd
+  .command("url")
+  .description("Print the authenticated loopback Dashboard URL")
+  .action(async () => {
+    const client = await requireRuntimeClient();
+    console.log(client.controlCenterUrl());
+  });
+
+controlCmd
+  .command("snapshot")
+  .description("Print Control Center data as JSON")
+  .action(async () => {
+    const client = await requireRuntimeClient();
+    console.log(JSON.stringify(await client.getControlSnapshot(), null, 2));
+  });
+
+const approvalCmd = program
+  .command("approval")
+  .description("Manage the persistent Control Center approval inbox");
+
+function printApproval(approval: import("./control/types.js").ApprovalRequest): void {
+  const riskColor = approval.risk === "high"
+    ? "\x1b[31m"
+    : approval.risk === "medium"
+      ? "\x1b[33m"
+      : "\x1b[32m";
+  console.log(
+    `${riskColor}${approval.risk.toUpperCase()}\x1b[0m ${approval.id} | ${approval.status} | ${approval.title}`
+  );
+  console.log(`  ${approval.requestedBy} -> ${approval.assignedTo} | ${approval.kind}`);
+  if (approval.taskId) console.log(`  task: ${approval.taskId}`);
+  if (approval.description) console.log(`  ${approval.description}`);
+  if (approval.decidedBy) {
+    console.log(`  decision: ${approval.decidedBy}${approval.decisionNote ? ` — ${approval.decisionNote}` : ""}`);
+  }
+}
+
+approvalCmd
+  .command("list")
+  .description("List approval requests")
+  .option("--status <status>", "pending | approved | rejected | cancelled", "pending")
+  .action(async (options) => {
+    if (!["pending", "approved", "rejected", "cancelled"].includes(options.status)) {
+      throw new Error("status must be pending, approved, rejected, or cancelled.");
+    }
+    const approvals = await (await requireRuntimeClient()).listApprovals(options.status);
+    if (!approvals.length) {
+      console.log(`No ${options.status} approvals.`);
+      return;
+    }
+    for (const approval of approvals) printApproval(approval);
+  });
+
+approvalCmd
+  .command("show")
+  .description("Show one approval request")
+  .argument("<id>", "Approval id")
+  .action(async (id) => {
+    const approval = await (await requireRuntimeClient()).getApproval(id);
+    if (!approval) {
+      console.error(`Approval not found: ${id}`);
+      process.exitCode = 1;
+      return;
+    }
+    printApproval(approval);
+    console.log(`  metadata: ${JSON.stringify(approval.metadata)}`);
+  });
+
+approvalCmd
+  .command("request")
+  .description("Create a local approval request")
+  .requiredOption("--title <text>", "Approval title")
+  .option("--description <text>", "Decision context")
+  .requiredOption("--requested-by <agent>", "Requesting agent")
+  .requiredOption("--assigned-to <agent>", "Human or agent responsible for the decision")
+  .option("--kind <kind>", "custom | command | policy", "custom")
+  .option("--risk <risk>", "low | medium | high", "medium")
+  .option("--task <id>", "Linked task id")
+  .action(async (options) => {
+    if (!["custom", "command", "policy"].includes(options.kind)) {
+      throw new Error("kind must be custom, command, or policy.");
+    }
+    if (!["low", "medium", "high"].includes(options.risk)) {
+      throw new Error("risk must be low, medium, or high.");
+    }
+    const approval = await (await requireRuntimeClient()).createApproval({
+      kind: options.kind,
+      title: options.title,
+      description: options.description,
+      requestedBy: options.requestedBy,
+      assignedTo: options.assignedTo,
+      risk: options.risk,
+      taskId: options.task
+    });
+    printApproval(approval);
+  });
+
+for (const decision of ["approve", "reject"] as const) {
+  approvalCmd
+    .command(decision)
+    .description(`${decision === "approve" ? "Approve" : "Reject"} a pending request`)
+    .argument("<id>", "Approval id")
+    .requiredOption("--by <actor>", "Decision maker")
+    .option("--note <text>", "Decision note")
+    .action(async (id, options) => {
+      const approval = await (await requireRuntimeClient()).decideApproval(id, {
+        decision,
+        decidedBy: options.by,
+        note: options.note
+      });
+      printApproval(approval);
+    });
+}
 
 // ── schedule ────────────────────────────────────────────
 const schedCmd = program.command("schedule").description("Manage scheduled cron tasks");

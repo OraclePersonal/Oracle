@@ -4,6 +4,13 @@ import http, {
   type ServerResponse
 } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
+import { renderControlCenterDashboard } from "../control/dashboard.js";
+import type { ControlCenterService } from "../control/service.js";
+import type {
+  ApprovalKind,
+  ApprovalRisk,
+  ApprovalStatus
+} from "../control/types.js";
 import type { SchedulerService } from "./schedulerService.js";
 import type { RuntimeEventBus } from "./events.js";
 
@@ -13,6 +20,7 @@ export interface LocalApiServerOptions {
   token: string;
   version: string;
   scheduler: SchedulerService;
+  control: ControlCenterService;
   events: RuntimeEventBus;
   onShutdown: () => void;
 }
@@ -98,6 +106,14 @@ export class LocalApiServer {
         return;
       }
 
+      if (
+        request.method === "GET"
+        && (url.pathname === "/control" || url.pathname === "/control/")
+      ) {
+        this.html(response, 200, renderControlCenterDashboard());
+        return;
+      }
+
       if (!this.authorized(request, url)) {
         this.json(response, 401, { error: "Unauthorized" });
         return;
@@ -114,6 +130,67 @@ export class LocalApiServer {
         this.json(response, 202, { stopping: true });
         setImmediate(this.options.onShutdown);
         return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/control/snapshot") {
+        this.json(response, 200, await this.options.control.snapshot());
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/control/approvals") {
+        const status = this.approvalStatus(url.searchParams.get("status"));
+        this.json(response, 200, {
+          approvals: await this.options.control.listApprovals(status)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/control/approvals") {
+        const body = await this.body(request);
+        const approval = await this.options.control.createApproval({
+          kind: this.approvalKind(body.kind),
+          title: this.requiredString(body.title, "title"),
+          description: this.optionalString(body.description, "description"),
+          requestedBy: this.requiredString(body.requestedBy, "requestedBy"),
+          assignedTo: this.requiredString(body.assignedTo, "assignedTo"),
+          risk: this.approvalRisk(body.risk),
+          taskId: this.optionalString(body.taskId, "taskId"),
+          messageId: this.optionalString(body.messageId, "messageId"),
+          workflowId: this.optionalString(body.workflowId, "workflowId"),
+          metadata: this.optionalRecord(body.metadata, "metadata")
+        });
+        this.json(response, 201, { approval });
+        return;
+      }
+
+      const approvalMatch = url.pathname.match(
+        /^\/v1\/control\/approvals\/(approval-[a-z0-9-]+)(?:\/(decision))?$/i
+      );
+      if (approvalMatch) {
+        const approvalId = approvalMatch[1];
+        if (request.method === "GET" && !approvalMatch[2]) {
+          const approval = this.options.control.getApproval(approvalId);
+          this.json(
+            response,
+            approval ? 200 : 404,
+            approval ? { approval } : { error: "Approval not found" }
+          );
+          return;
+        }
+        if (request.method === "POST" && approvalMatch[2] === "decision") {
+          const body = await this.body(request);
+          const decision = body.decision;
+          if (decision !== "approve" && decision !== "reject") {
+            throw new Error("decision must be approve or reject.");
+          }
+          const approval = await this.options.control.decide(approvalId, {
+            decision,
+            decidedBy: this.requiredString(body.decidedBy, "decidedBy"),
+            note: this.optionalString(body.note, "note")
+          });
+          this.json(response, 200, { approval });
+          return;
+        }
       }
 
       if (request.method === "GET" && url.pathname === "/v1/schedules") {
@@ -218,6 +295,36 @@ export class LocalApiServer {
     throw new Error("status must be active, paused, or deleted.");
   }
 
+  private approvalKind(value: unknown): ApprovalKind | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (value === "task_review" || value === "command" || value === "policy" || value === "custom") {
+      return value;
+    }
+    throw new Error("kind must be task_review, command, policy, or custom.");
+  }
+
+  private approvalRisk(value: unknown): ApprovalRisk | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (value === "low" || value === "medium" || value === "high") return value;
+    throw new Error("risk must be low, medium, or high.");
+  }
+
+  private approvalStatus(value: string | null): ApprovalStatus | undefined {
+    if (value === null || value === "") return undefined;
+    if (value === "pending" || value === "approved" || value === "rejected" || value === "cancelled") {
+      return value;
+    }
+    throw new Error("status must be pending, approved, rejected, or cancelled.");
+  }
+
+  private optionalRecord(value: unknown, field: string): Record<string, unknown> | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${field} must be an object.`);
+    }
+    return value as Record<string, unknown>;
+  }
+
   private integer(value: string | null, fallback: number): number {
     if (value === null) return fallback;
     const parsed = Number(value);
@@ -232,5 +339,26 @@ export class LocalApiServer {
       "cache-control": "no-store"
     });
     response.end(encoded);
+  }
+
+  private html(response: ServerResponse, status: number, content: string): void {
+    response.writeHead(status, {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": Buffer.byteLength(content),
+      "cache-control": "no-store",
+      "content-security-policy": [
+        "default-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "script-src 'self' 'unsafe-inline'",
+        "connect-src 'self' ws: wss:",
+        "img-src 'self' data:",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'"
+      ].join("; "),
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff"
+    });
+    response.end(content);
   }
 }

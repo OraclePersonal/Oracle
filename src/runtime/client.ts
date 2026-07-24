@@ -1,4 +1,11 @@
 import type { CreateTaskInput, CronTask, UpdateTaskInput } from "../scheduler/taskStore.js";
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+  ApprovalStatus,
+  ControlCenterSnapshot,
+  CreateApprovalInput
+} from "../control/types.js";
 import { readDaemonState, type DaemonState } from "./state.js";
 
 export interface RuntimeHealth {
@@ -70,6 +77,57 @@ export class RuntimeClient {
 
   requestStop(): Promise<{ stopping: boolean }> {
     return this.request("POST", "/v1/daemon/stop");
+  }
+
+  getControlSnapshot(): Promise<ControlCenterSnapshot> {
+    return this.request("GET", "/v1/control/snapshot", undefined, true, 10_000);
+  }
+
+  async listApprovals(status?: ApprovalStatus): Promise<ApprovalRequest[]> {
+    const query = status ? `?status=${encodeURIComponent(status)}` : "";
+    return (await this.request<{ approvals: ApprovalRequest[] }>(
+      "GET",
+      `/v1/control/approvals${query}`,
+      undefined,
+      true,
+      10_000
+    )).approvals;
+  }
+
+  async getApproval(id: string): Promise<ApprovalRequest | null> {
+    try {
+      return (await this.request<{ approval: ApprovalRequest }>(
+        "GET",
+        `/v1/control/approvals/${encodeURIComponent(id)}`
+      )).approval;
+    } catch (error) {
+      if (error instanceof RuntimeApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  async createApproval(input: CreateApprovalInput): Promise<ApprovalRequest> {
+    return (await this.request<{ approval: ApprovalRequest }>(
+      "POST",
+      "/v1/control/approvals",
+      input
+    )).approval;
+  }
+
+  async decideApproval(id: string, decision: ApprovalDecision): Promise<ApprovalRequest> {
+    return (await this.request<{ approval: ApprovalRequest }>(
+      "POST",
+      `/v1/control/approvals/${encodeURIComponent(id)}/decision`,
+      decision,
+      true,
+      10_000
+    )).approval;
+  }
+
+  controlCenterUrl(): string {
+    const url = new URL("/control", this.baseUrl());
+    url.hash = new URLSearchParams({ token: this.state.token }).toString();
+    return url.toString();
   }
 
   webSocketUrl(after = 0): string {

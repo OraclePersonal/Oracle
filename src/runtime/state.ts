@@ -11,6 +11,7 @@ export interface DaemonState {
   startedAt: string;
   version: string;
   databasePath: string;
+  workspaceRoot?: string;
 }
 
 export function daemonStatePath(homeDir: string): string {
@@ -58,6 +59,7 @@ export function createDaemonState(input: {
   host: string;
   port: number;
   databasePath: string;
+  workspaceRoot?: string;
   token?: string;
 }): DaemonState {
   return {
@@ -67,6 +69,7 @@ export function createDaemonState(input: {
     token: input.token ?? crypto.randomBytes(32).toString("hex"),
     startedAt: new Date().toISOString(),
     version: VERSION,
-    databasePath: input.databasePath
+    databasePath: input.databasePath,
+    workspaceRoot: input.workspaceRoot
   };
 }
