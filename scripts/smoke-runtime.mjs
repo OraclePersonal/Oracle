@@ -14,6 +14,7 @@ function run(args, allowFailure = false) {
     env: {
       ...process.env,
       ORACLE_HOME_DIR: temporaryRoot,
+      ORACLE_WORKSPACE_ROOT: temporaryRoot,
       NODE_NO_WARNINGS: "1"
     },
     encoding: "utf8",
@@ -36,7 +37,7 @@ try {
   if (!parsedStatus.running || parsedStatus.health?.storage !== "sqlite") {
     throw new Error(`Unexpected daemon status: ${status}`);
   }
-  if (parsedStatus.health?.version !== "0.3.0") {
+  if (parsedStatus.health?.version !== "0.4.0") {
     throw new Error(`Unexpected Runtime version: ${status}`);
   }
   if (JSON.stringify(parsedStatus).includes("token")) {
@@ -44,7 +45,7 @@ try {
   }
 
   const snapshot = JSON.parse(run(["control", "snapshot"]));
-  if (snapshot.version !== "0.3.0" || snapshot.approvals?.pending !== 0) {
+  if (snapshot.version !== "0.4.0" || snapshot.approvals?.pending !== 0) {
     throw new Error(`Unexpected Control Center snapshot: ${JSON.stringify(snapshot)}`);
   }
   const tui = run(["control", "--once"]);
@@ -71,6 +72,10 @@ try {
   const approved = run(["approval", "approve", approvalId, "--by", "lead"]);
   if (!approved.includes("approved")) {
     throw new Error(`Approval decision failed:\n${approved}`);
+  }
+  const audit = run(["audit", "verify", "--cwd", temporaryRoot, "--json"]);
+  if (JSON.parse(audit).valid !== true) {
+    throw new Error(`Audit chain verification failed:\n${audit}`);
   }
 
   const created = run([

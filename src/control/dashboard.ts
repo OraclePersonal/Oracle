@@ -219,11 +219,21 @@ export function renderControlCenterDashboard(): string {
       }
 
       async function decide(id, decision) {
+        const item = snapshot?.approvals?.items?.find((candidate) => candidate.id === id);
+        if (!item) throw new Error("Approval is no longer in the pending snapshot.");
+        const actor = prompt("Decision maker:", item.assignedTo);
+        if (!actor) return;
         const note = decision === "reject" ? (prompt("Reason for rejection:") || "Rejected from Control Center") : undefined;
         if (!confirm((decision === "approve" ? "Approve " : "Reject ") + id + "?")) return;
         await request("/v1/control/approvals/" + encodeURIComponent(id) + "/decision", {
           method: "POST",
-          body: JSON.stringify({ decision, decidedBy: "control-center", note })
+          body: JSON.stringify({
+            decision,
+            decidedBy: actor,
+            expectedVersion: item.version,
+            channel: "dashboard",
+            note
+          })
         });
         await load();
       }
@@ -238,7 +248,9 @@ export function renderControlCenterDashboard(): string {
         $("memory-count").textContent = data.memory.project.total;
         $("memory-hint").textContent = data.memory.global.total + " global entries";
         $("denial-count").textContent = data.audit.policyDenials;
-        $("audit-hint").textContent = data.audit.total + " recent audit events";
+        $("audit-hint").textContent = data.audit.integrity.valid
+          ? data.audit.integrity.verifiedEntries + " chain entries verified"
+          : "audit integrity failure at " + data.audit.integrity.brokenAt;
         $("approval-badge").textContent = data.approvals.pending + " pending";
         $("task-total").textContent = data.tasks.total + " tasks";
         $("global-memory").textContent = data.memory.global.total + " global";
@@ -247,10 +259,11 @@ export function renderControlCenterDashboard(): string {
         $("approvals").innerHTML = data.approvals.items.length ? data.approvals.items.map((item) => \`
           <article class="approval">
             <div class="approval-top">
-              <div><div class="approval-title">\${esc(item.title)}</div><div class="approval-meta">\${esc(item.requestedBy)} → \${esc(item.assignedTo)} · \${esc(item.kind)} · \${esc(shortTime(item.createdAt))}</div></div>
+              <div><div class="approval-title">\${esc(item.title)}</div><div class="approval-meta">\${esc(item.requestedBy)} → \${esc(item.assignedTo)} · \${esc(item.kind)} · quorum \${item.approvalCount}/\${item.requiredApprovals} · v\${item.version}</div></div>
               <span class="badge \${esc(item.risk)}">\${esc(item.risk)}</span>
             </div>
             \${item.description ? '<div class="approval-meta">' + esc(item.description) + '</div>' : ''}
+            \${item.expiresAt ? '<div class="approval-meta">Expires ' + esc(shortTime(item.expiresAt)) + '</div>' : ''}
             <div class="approval-actions">
               <button class="button primary" data-decision="approve" data-id="\${esc(item.id)}">Approve</button>
               <button class="button danger" data-decision="reject" data-id="\${esc(item.id)}">Reject</button>

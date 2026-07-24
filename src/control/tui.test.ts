@@ -4,7 +4,7 @@ import { renderControlTui } from "./tui.js";
 
 const snapshot: ControlCenterSnapshot = {
   generatedAt: new Date().toISOString(),
-  version: "0.3.0",
+  version: "0.4.0",
   workspaceRoot: "/workspace/oracle",
   runtime: {
     pid: 123,
@@ -12,6 +12,8 @@ const snapshot: ControlCenterSnapshot = {
     schedulerRunning: true,
     scheduledTasks: 2
   },
+  agents: { total: 0, active: 0, items: [] },
+  schedules: [],
   approvals: {
     pending: 1,
     byRisk: { low: 0, medium: 1, high: 0 },
@@ -21,8 +23,14 @@ const snapshot: ControlCenterSnapshot = {
       title: "Review dashboard\u001b[31m",
       requestedBy: "worker",
       assignedTo: "lead",
+      authorizedReviewers: ["lead"],
       risk: "medium",
       status: "pending",
+      version: 1,
+      requiredApprovals: 1,
+      approvalCount: 0,
+      localOnly: false,
+      votes: [],
       metadata: {},
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -49,7 +57,13 @@ const snapshot: ControlCenterSnapshot = {
     total: 1,
     policyDenials: 0,
     byAction: { tool: 1 },
-    recent: []
+    recent: [],
+    integrity: {
+      valid: true,
+      entries: 0,
+      verifiedEntries: 0,
+      legacyEntries: 0
+    }
   }
 };
 

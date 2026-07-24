@@ -92,7 +92,18 @@ export class RuntimeDatabase {
         value TEXT NOT NULL,
         updated_at TEXT NOT NULL
       ) STRICT;
+    `);
 
+    const row = this.connection.prepare(
+      "SELECT value FROM runtime_metadata WHERE key = 'schema_version'"
+    ).get() as { value: string } | undefined;
+    let version = Number(row?.value ?? 0);
+    if (!Number.isInteger(version) || version < 0) {
+      throw new Error(`Invalid Runtime database schema version: ${row?.value}`);
+    }
+
+    if (version < 1) {
+      this.applyMigration(1, `
       CREATE TABLE IF NOT EXISTS scheduler_tasks (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -127,7 +138,12 @@ export class RuntimeDatabase {
         payload_json TEXT NOT NULL,
         created_at TEXT NOT NULL
       ) STRICT;
+      `);
+      version = 1;
+    }
 
+    if (version < 2) {
+      this.applyMigration(2, `
       CREATE TABLE IF NOT EXISTS approval_requests (
         id TEXT PRIMARY KEY,
         source_key TEXT UNIQUE,
@@ -154,13 +170,119 @@ export class RuntimeDatabase {
         ON approval_requests(status, created_at DESC);
       CREATE INDEX IF NOT EXISTS approval_requests_task_idx
         ON approval_requests(task_id);
+      `);
+      version = 2;
+    }
 
-      INSERT INTO runtime_metadata (key, value, updated_at)
-      VALUES ('schema_version', '2', datetime('now'))
-      ON CONFLICT(key) DO UPDATE SET
-        value = excluded.value,
-        updated_at = excluded.updated_at;
-    `);
+    if (version < 3) {
+      this.applyMigration(3, `
+        ALTER TABLE approval_requests RENAME TO approval_requests_v2;
+
+        CREATE TABLE approval_requests (
+          id TEXT PRIMARY KEY,
+          source_key TEXT UNIQUE,
+          kind TEXT NOT NULL CHECK (kind IN ('task_review', 'command', 'policy', 'custom')),
+          title TEXT NOT NULL,
+          description TEXT,
+          requested_by TEXT NOT NULL,
+          assigned_to TEXT NOT NULL,
+          authorized_reviewers_json TEXT NOT NULL DEFAULT '[]',
+          risk TEXT NOT NULL CHECK (risk IN ('low', 'medium', 'high')),
+          status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled', 'expired')),
+          version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
+          required_approvals INTEGER NOT NULL DEFAULT 1 CHECK (required_approvals > 0),
+          task_id TEXT,
+          message_id TEXT,
+          workflow_id TEXT,
+          expires_at TEXT,
+          payload_hash TEXT,
+          action_type TEXT,
+          action_payload_json TEXT,
+          checkpoint_id TEXT,
+          local_only INTEGER NOT NULL DEFAULT 0 CHECK (local_only IN (0, 1)),
+          telegram_token TEXT UNIQUE,
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          decided_at TEXT,
+          decided_by TEXT,
+          decision_note TEXT,
+          notified_at TEXT
+        ) STRICT;
+
+        INSERT INTO approval_requests (
+          id, source_key, kind, title, description, requested_by, assigned_to,
+          authorized_reviewers_json, risk, status, version, required_approvals,
+          task_id, message_id, workflow_id, local_only, metadata_json, created_at,
+          updated_at, decided_at, decided_by, decision_note, notified_at
+        )
+        SELECT
+          id, source_key, kind, title, description, requested_by, assigned_to,
+          json_array(assigned_to), risk, status, 1, 1,
+          task_id, message_id, workflow_id, 0, metadata_json, created_at,
+          updated_at, decided_at, decided_by, decision_note, notified_at
+        FROM approval_requests_v2;
+
+        DROP TABLE approval_requests_v2;
+
+        CREATE INDEX approval_requests_status_idx
+          ON approval_requests(status, created_at DESC);
+        CREATE INDEX approval_requests_task_idx
+          ON approval_requests(task_id);
+        CREATE INDEX approval_requests_expiry_idx
+          ON approval_requests(status, expires_at);
+        CREATE INDEX approval_requests_checkpoint_idx
+          ON approval_requests(checkpoint_id);
+
+        CREATE TABLE approval_votes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          approval_id TEXT NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+          actor TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('approve', 'reject')),
+          channel TEXT NOT NULL CHECK (channel IN ('api', 'cli', 'tui', 'dashboard', 'telegram', 'recovery')),
+          note TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE (approval_id, actor)
+        ) STRICT;
+
+        CREATE INDEX approval_votes_approval_idx
+          ON approval_votes(approval_id, id ASC);
+
+        CREATE TABLE approval_executions (
+          id TEXT PRIMARY KEY,
+          approval_id TEXT NOT NULL UNIQUE REFERENCES approval_requests(id) ON DELETE CASCADE,
+          payload_hash TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+          claimed_by TEXT NOT NULL,
+          claimed_at TEXT NOT NULL,
+          completed_at TEXT,
+          result_json TEXT
+        ) STRICT;
+      `);
+      version = 3;
+    }
+
+    if (version > 3) {
+      throw new Error(`Runtime database schema ${version} is newer than supported schema 3.`);
+    }
+  }
+
+  private applyMigration(version: number, sql: string): void {
+    this.connection.exec("BEGIN IMMEDIATE");
+    try {
+      this.connection.exec(sql);
+      this.connection.prepare(`
+        INSERT INTO runtime_metadata (key, value, updated_at)
+        VALUES ('schema_version', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+      `).run(String(version), new Date().toISOString());
+      this.connection.exec("COMMIT");
+    } catch (error) {
+      this.connection.exec("ROLLBACK");
+      throw error;
+    }
   }
 }
 

@@ -6,6 +6,7 @@ import { loadProjectConfig } from "../config/project.js";
 import { SkillRegistry } from "../skills/registry.js";
 import { FileCheckpointStore } from "./checkpoint.js";
 import { loadPolicy } from "./policy.js";
+import { RuntimeAgentApprovalGate } from "./approvalGate.js";
 import os from "node:os";
 import path from "node:path";
 
@@ -33,6 +34,8 @@ export interface AgentRequest {
   tools?: AgentTool[];
   /** Resume from a previous checkpoint id. Saves a new checkpoint each turn. */
   resumeId?: string;
+  /** Override .oracle/policy.json approval mode for this run. */
+  approvalMode?: "off" | "risky" | "all-mutations";
 }
 
 /**
@@ -88,7 +91,16 @@ export class AgentService {
 
     // Policy loading is fail-closed: an invalid policy must never silently
     // disable the workspace's security boundary.
-    const policy = await loadPolicy(request.workspaceRoot);
+    const loadedPolicy = await loadPolicy(request.workspaceRoot);
+    const policy = request.approvalMode
+      ? {
+          ...loadedPolicy,
+          approval: { ...loadedPolicy.approval, mode: request.approvalMode }
+        }
+      : loadedPolicy;
+    const approvalGate = policy.approval.mode === "off"
+      ? undefined
+      : new RuntimeAgentApprovalGate(oracleDir, policy);
 
     return runAgentLoop({
       provider: this.provider,
@@ -101,6 +113,7 @@ export class AgentService {
       onStep: request.onStep,
       checkpointStore,
       resumeCheckpointId: request.resumeId,
+      approvalGate
     });
   }
 }

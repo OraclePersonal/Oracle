@@ -3,8 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { runAgentLoop } from "./loop.js";
+import { CheckpointStore } from "./checkpoint.js";
 import { defaultAgentTools } from "./tools.js";
-import type { AgentProvider, AgentTurn } from "./types.js";
+import type { AgentApprovalGate } from "./approvalGate.js";
+import { approvalPayloadHash } from "../control/payload.js";
+import type { ApprovalRequest } from "../control/types.js";
+import type { AgentProvider, AgentTool, AgentTurn } from "./types.js";
 
 let root: string;
 
@@ -196,5 +200,184 @@ describe("runAgentLoop", () => {
         details: expect.objectContaining({ rule: "max_mutations_per_session" })
       })
     ]));
+  });
+
+  test("pauses a risky tool, resumes after approval, and claims execution once", async () => {
+    let toolExecutions = 0;
+    let claims = 0;
+    let completions = 0;
+    let approval: ApprovalRequest | undefined;
+    const dangerousTool: AgentTool = {
+      name: "bash",
+      description: "test command",
+      mutating: true,
+      inputSchema: { type: "object" },
+      async execute() {
+        toolExecutions++;
+        return "pushed";
+      }
+    };
+    const gate: AgentApprovalGate = {
+      assess: () => ({ risk: "high", reason: "publishes commits" }),
+      async request(input) {
+        const action = {
+          type: "agent.tool",
+          payload: {
+            toolName: input.call.name,
+            input: input.call.input,
+            workspaceRoot: input.workspaceRoot
+          }
+        };
+        approval = {
+          id: "approval-test",
+          kind: "command",
+          title: "Push",
+          requestedBy: "scripted",
+          assignedTo: "lead",
+          authorizedReviewers: ["lead"],
+          risk: "high",
+          status: "pending",
+          version: 1,
+          requiredApprovals: 1,
+          approvalCount: 0,
+          payloadHash: approvalPayloadHash(action),
+          action,
+          checkpointId: input.checkpointId,
+          localOnly: true,
+          votes: [],
+          metadata: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        return approval;
+      },
+      async get() {
+        return approval ?? null;
+      },
+      async claim(current) {
+        claims++;
+        return {
+          approval: current,
+          execution: {
+            id: "execution-test",
+            approvalId: current.id,
+            payloadHash: current.payloadHash!,
+            status: "claimed",
+            claimedBy: "scripted",
+            claimedAt: new Date().toISOString()
+          }
+        };
+      },
+      async complete() {
+        completions++;
+      }
+    };
+    const provider = scriptedProvider([
+      {
+        message: {
+          role: "assistant",
+          text: "Ready to push.",
+          toolCalls: [{
+            id: "danger-1",
+            name: "bash",
+            input: { command: "git push origin main" }
+          }]
+        }
+      },
+      {
+        message: {
+          role: "assistant",
+          text: "Push completed.",
+          toolCalls: []
+        }
+      }
+    ]);
+    const checkpoints = new CheckpointStore(path.join(root, "checkpoints"));
+    const first = await runAgentLoop({
+      provider,
+      model: "test",
+      system: "sys",
+      prompt: "push",
+      tools: [dangerousTool],
+      context: { workspaceRoot: root, readOnly: false },
+      checkpointStore: checkpoints,
+      approvalGate: gate
+    });
+
+    expect(first.waitingForApproval).toMatchObject({
+      approvalId: "approval-test",
+      risk: "high"
+    });
+    expect(toolExecutions).toBe(0);
+    expect(provider.calls).toBe(1);
+
+    approval = {
+      ...approval!,
+      status: "approved",
+      version: 2,
+      approvalCount: 1,
+      decidedAt: new Date().toISOString(),
+      decidedBy: "lead"
+    };
+    const resumed = await runAgentLoop({
+      provider,
+      model: "test",
+      system: "sys",
+      prompt: "push",
+      tools: [dangerousTool],
+      context: { workspaceRoot: root, readOnly: false },
+      checkpointStore: checkpoints,
+      resumeCheckpointId: first.checkpointId,
+      approvalGate: gate
+    });
+
+    expect(resumed.finalText).toBe("Push completed.");
+    expect(resumed.waitingForApproval).toBeUndefined();
+    expect(toolExecutions).toBe(1);
+    expect(claims).toBe(1);
+    expect(completions).toBe(1);
+  });
+
+  test("fails closed when an approval gate is used without checkpoint persistence", async () => {
+    let executed = false;
+    const tool: AgentTool = {
+      name: "bash",
+      description: "dangerous",
+      mutating: true,
+      inputSchema: { type: "object" },
+      async execute() {
+        executed = true;
+        return "unexpected";
+      }
+    };
+    const gate: AgentApprovalGate = {
+      assess: () => ({ risk: "high", reason: "dangerous" }),
+      async request() { throw new Error("should not request"); },
+      async get() { return null; },
+      async claim() { throw new Error("should not claim"); },
+      async complete() {}
+    };
+    const provider = scriptedProvider([{
+      message: {
+        role: "assistant",
+        text: "",
+        toolCalls: [{
+          id: "danger-no-checkpoint",
+          name: "bash",
+          input: { command: "git push" }
+        }]
+      }
+    }]);
+
+    await expect(runAgentLoop({
+      provider,
+      model: "test",
+      system: "sys",
+      prompt: "push",
+      tools: [tool],
+      context: { workspaceRoot: root, readOnly: false },
+      approvalGate: gate
+    })).rejects.toThrow(/without checkpoint persistence/);
+    expect(executed).toBe(false);
   });
 });

@@ -33,6 +33,7 @@ describe("ApprovalStore", () => {
     expect(store.decide(approval.id, {
       decision: "approve",
       decidedBy: "lead",
+      expectedVersion: approval.version,
       note: "Verified"
     })).toMatchObject({
       status: "approved",
@@ -65,7 +66,11 @@ describe("ApprovalStore", () => {
       requestedBy: "worker",
       assignedTo: "lead"
     });
-    store.decide(first.approval.id, { decision: "reject", decidedBy: "lead" });
+    store.decide(first.approval.id, {
+      decision: "reject",
+      decidedBy: "lead",
+      expectedVersion: first.approval.version
+    });
     const secondCycle = store.ensureTaskReview({
       taskId: "task-1",
       reviewKey: "2026-07-24T02:00:00.000Z",
@@ -78,5 +83,74 @@ describe("ApprovalStore", () => {
     expect(duplicate.created).toBe(false);
     expect(secondCycle.created).toBe(true);
     expect(secondCycle.approval.id).not.toBe(first.approval.id);
+  });
+
+  test("enforces reviewer authorization, quorum, version locks, expiry, and execute-once claims", () => {
+    const store = new ApprovalStore(database);
+    const approval = store.create({
+      kind: "command",
+      title: "Push production release",
+      requestedBy: "agent",
+      assignedTo: "lead",
+      authorizedReviewers: ["lead", "security"],
+      requiredApprovals: 2,
+      risk: "high",
+      expiresInMinutes: 15,
+      action: {
+        type: "agent.tool",
+        payload: {
+          toolName: "bash",
+          input: { command: "git push origin main" },
+          workspaceRoot: "/workspace"
+        }
+      }
+    });
+
+    expect(() => store.decide(approval.id, {
+      decision: "approve",
+      decidedBy: "intruder",
+      expectedVersion: approval.version
+    })).toThrow(/not authorized/);
+
+    const firstVote = store.decide(approval.id, {
+      decision: "approve",
+      decidedBy: "lead",
+      expectedVersion: approval.version
+    });
+    expect(firstVote).toMatchObject({
+      status: "pending",
+      approvalCount: 1,
+      requiredApprovals: 2,
+      version: 2
+    });
+    expect(() => store.decide(approval.id, {
+      decision: "approve",
+      decidedBy: "security",
+      expectedVersion: approval.version
+    })).toThrow(/changed/);
+
+    const approved = store.decide(approval.id, {
+      decision: "approve",
+      decidedBy: "security",
+      expectedVersion: firstVote.version
+    });
+    expect(approved.status).toBe("approved");
+    const execution = store.claimExecution(approval.id, approved.payloadHash!, "agent");
+    expect(execution.status).toBe("claimed");
+    expect(() => store.claimExecution(approval.id, approved.payloadHash!, "agent")).toThrow(/already/);
+    expect(store.completeExecution({
+      executionId: execution.id,
+      status: "completed",
+      result: { ok: true }
+    })).toMatchObject({ status: "completed", result: { ok: true } });
+
+    const expiring = store.create({
+      title: "Short request",
+      requestedBy: "agent",
+      assignedTo: "lead",
+      expiresInMinutes: 1
+    });
+    store.expireDue(new Date(Date.now() + 61_000));
+    expect(store.get(expiring.id)?.status).toBe("expired");
   });
 });

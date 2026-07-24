@@ -6,6 +6,10 @@ import http, {
 import { WebSocket, WebSocketServer } from "ws";
 import { renderControlCenterDashboard } from "../control/dashboard.js";
 import type { ControlCenterService } from "../control/service.js";
+import {
+  ApprovalAuthorizationError,
+  ApprovalConflictError
+} from "../control/approvalStore.js";
 import type {
   ApprovalKind,
   ApprovalRisk,
@@ -153,13 +157,59 @@ export class LocalApiServer {
           description: this.optionalString(body.description, "description"),
           requestedBy: this.requiredString(body.requestedBy, "requestedBy"),
           assignedTo: this.requiredString(body.assignedTo, "assignedTo"),
+          authorizedReviewers: this.optionalStringArray(
+            body.authorizedReviewers,
+            "authorizedReviewers"
+          ),
+          requiredApprovals: this.optionalPositiveInteger(
+            body.requiredApprovals,
+            "requiredApprovals"
+          ),
           risk: this.approvalRisk(body.risk),
           taskId: this.optionalString(body.taskId, "taskId"),
           messageId: this.optionalString(body.messageId, "messageId"),
           workflowId: this.optionalString(body.workflowId, "workflowId"),
+          expiresAt: this.optionalString(body.expiresAt, "expiresAt"),
+          expiresInMinutes: this.optionalPositiveNumber(
+            body.expiresInMinutes,
+            "expiresInMinutes"
+          ),
+          action: this.optionalAction(body.action),
+          checkpointId: this.optionalString(body.checkpointId, "checkpointId"),
+          localOnly: this.optionalBoolean(body.localOnly, "localOnly"),
           metadata: this.optionalRecord(body.metadata, "metadata")
         });
         this.json(response, 201, { approval });
+        return;
+      }
+
+      const executionClaimMatch = url.pathname.match(
+        /^\/v1\/control\/approvals\/(approval-[a-z0-9-]+)\/execution\/claim$/i
+      );
+      if (request.method === "POST" && executionClaimMatch) {
+        const body = await this.body(request);
+        const execution = await this.options.control.claimExecution(executionClaimMatch[1], {
+          payloadHash: this.requiredString(body.payloadHash, "payloadHash"),
+          claimedBy: this.requiredString(body.claimedBy, "claimedBy")
+        });
+        this.json(response, 201, { execution });
+        return;
+      }
+
+      const executionCompleteMatch = url.pathname.match(
+        /^\/v1\/control\/executions\/(execution-[a-z0-9-]+)\/complete$/i
+      );
+      if (request.method === "POST" && executionCompleteMatch) {
+        const body = await this.body(request);
+        if (body.status !== "completed" && body.status !== "failed") {
+          throw new Error("status must be completed or failed.");
+        }
+        const execution = await this.options.control.completeExecution({
+          executionId: executionCompleteMatch[1],
+          status: body.status,
+          result: this.optionalRecord(body.result, "result")
+        });
+        this.json(response, 200, { execution });
         return;
       }
 
@@ -186,6 +236,11 @@ export class LocalApiServer {
           const approval = await this.options.control.decide(approvalId, {
             decision,
             decidedBy: this.requiredString(body.decidedBy, "decidedBy"),
+            expectedVersion: this.requiredPositiveInteger(
+              body.expectedVersion,
+              "expectedVersion"
+            ),
+            channel: this.approvalDecisionChannel(body.channel),
             note: this.optionalString(body.note, "note")
           });
           this.json(response, 200, { approval });
@@ -250,7 +305,13 @@ export class LocalApiServer {
       this.json(response, 404, { error: "Not found" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const status = /not found/i.test(message) ? 404 : 400;
+      const status = error instanceof ApprovalConflictError
+        ? 409
+        : error instanceof ApprovalAuthorizationError
+          ? 403
+          : /not found/i.test(message)
+            ? 404
+            : 400;
       this.json(response, status, { error: message });
     }
   }
@@ -311,10 +372,31 @@ export class LocalApiServer {
 
   private approvalStatus(value: string | null): ApprovalStatus | undefined {
     if (value === null || value === "") return undefined;
-    if (value === "pending" || value === "approved" || value === "rejected" || value === "cancelled") {
+    if (
+      value === "pending"
+      || value === "approved"
+      || value === "rejected"
+      || value === "cancelled"
+      || value === "expired"
+    ) {
       return value;
     }
-    throw new Error("status must be pending, approved, rejected, or cancelled.");
+    throw new Error("status must be pending, approved, rejected, cancelled, or expired.");
+  }
+
+  private approvalDecisionChannel(
+    value: unknown
+  ): "api" | "cli" | "tui" | "dashboard" | "telegram" | "recovery" | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (
+      value === "api"
+      || value === "cli"
+      || value === "tui"
+      || value === "dashboard"
+      || value === "telegram"
+      || value === "recovery"
+    ) return value;
+    throw new Error("channel is invalid.");
   }
 
   private optionalRecord(value: unknown, field: string): Record<string, unknown> | undefined {
@@ -323,6 +405,52 @@ export class LocalApiServer {
       throw new Error(`${field} must be an object.`);
     }
     return value as Record<string, unknown>;
+  }
+
+  private optionalStringArray(value: unknown, field: string): string[] | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
+      throw new Error(`${field} must be an array of non-empty strings.`);
+    }
+    return value;
+  }
+
+  private requiredPositiveInteger(value: unknown, field: string): number {
+    if (!Number.isInteger(value) || Number(value) < 1) {
+      throw new Error(`${field} must be a positive integer.`);
+    }
+    return Number(value);
+  }
+
+  private optionalPositiveInteger(value: unknown, field: string): number | undefined {
+    if (value === undefined || value === null) return undefined;
+    return this.requiredPositiveInteger(value, field);
+  }
+
+  private optionalPositiveNumber(value: unknown, field: string): number | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+      throw new Error(`${field} must be greater than zero.`);
+    }
+    return value;
+  }
+
+  private optionalBoolean(value: unknown, field: string): boolean | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "boolean") throw new Error(`${field} must be a boolean.`);
+    return value;
+  }
+
+  private optionalAction(value: unknown): { type: string; payload: Record<string, unknown> } | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("action must be an object.");
+    }
+    const action = value as Record<string, unknown>;
+    return {
+      type: this.requiredString(action.type, "action.type"),
+      payload: this.optionalRecord(action.payload, "action.payload") ?? {}
+    };
   }
 
   private integer(value: string | null, fallback: number): number {

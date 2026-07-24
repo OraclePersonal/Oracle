@@ -46,7 +46,7 @@ describe("OracleDaemon", () => {
       storage: "sqlite"
     });
     expect(await client!.getControlSnapshot()).toMatchObject({
-      version: "0.3.0",
+      version: "0.4.0",
       workspaceRoot: home,
       approvals: { pending: 0 }
     });
@@ -60,7 +60,8 @@ describe("OracleDaemon", () => {
     expect(await client!.listApprovals("pending")).toHaveLength(1);
     expect(await client!.decideApproval(approval.id, {
       decision: "approve",
-      decidedBy: "lead"
+      decidedBy: "lead",
+      expectedVersion: approval.version
     })).toMatchObject({ status: "approved" });
 
     const task = await client!.createSchedule({

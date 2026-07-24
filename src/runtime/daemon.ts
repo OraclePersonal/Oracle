@@ -97,6 +97,7 @@ export class OracleDaemon {
 
     try {
       const schedulerStart = await this.scheduler.start(this.options.homeDir);
+      this.control.start();
       const address = await this.api.start();
       this.state = { ...provisional, port: address.port };
       await writeDaemonState(this.options.homeDir, this.state);
@@ -112,6 +113,7 @@ export class OracleDaemon {
     } catch (error) {
       await this.api.stop().catch(() => undefined);
       await this.scheduler.stop().catch(() => undefined);
+      this.control.stop();
       this.database.close();
       this.api = undefined;
       this.scheduler = undefined;
@@ -132,6 +134,7 @@ export class OracleDaemon {
     const state = this.state;
     if (!state) return;
     this.events?.publish("daemon.stopping", { pid: state.pid });
+    this.control?.stop();
     await this.scheduler?.stop();
     await this.api?.stop();
     this.database?.close();

@@ -60,6 +60,7 @@ describe("ControlCenterService", () => {
     const decided = await service.decide(snapshot.approvals.items[0].id, {
       decision: "approve",
       decidedBy: "lead",
+      expectedVersion: snapshot.approvals.items[0].version,
       note: "Looks good"
     });
     expect(decided.status).toBe("approved");

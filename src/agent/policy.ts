@@ -2,6 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { logSandbox } from "../observability/log.js";
 
+export interface OracleApprovalPolicy {
+  mode: "off" | "risky" | "all-mutations";
+  reviewers?: string[];
+  highRiskQuorum?: number;
+  expiryMinutes: number;
+  allowTelegramHighRisk: boolean;
+}
+
 export interface OraclePolicy {
   /** Glob patterns or path substrings forbidden from being read, written, or edited by agents. */
   forbiddenGlobs: string[];
@@ -11,9 +19,11 @@ export interface OraclePolicy {
   forbiddenCommands: string[];
   /** Maximum file mutations allowed in a single agent session (default: 50). */
   maxMutationsPerSession: number;
+  /** Human approval settings for mutating or high-risk tools. */
+  approval: OracleApprovalPolicy;
 }
 
-export const DEFAULT_POLICY: Readonly<OraclePolicy> = Object.freeze({
+export const DEFAULT_POLICY: Readonly<OraclePolicy> = Object.freeze<OraclePolicy>({
   forbiddenGlobs: [
     ".env",
     ".env.",
@@ -32,6 +42,11 @@ export const DEFAULT_POLICY: Readonly<OraclePolicy> = Object.freeze({
     ":(){ :|:& };:",
   ],
   maxMutationsPerSession: 50,
+  approval: {
+    mode: "risky",
+    expiryMinutes: 30,
+    allowTelegramHighRisk: false
+  }
 });
 
 export class PolicyViolationError extends Error {
@@ -47,15 +62,43 @@ export class PolicyViolationError extends Error {
 export async function loadPolicy(workspaceRoot: string): Promise<OraclePolicy> {
   const policyFile = path.join(workspaceRoot, ".oracle", "policy.json");
   try {
-    const raw = JSON.parse(await fs.readFile(policyFile, "utf8")) as Partial<OraclePolicy>;
+    const raw = JSON.parse(await fs.readFile(policyFile, "utf8")) as
+      Omit<Partial<OraclePolicy>, "approval"> & { approval?: Partial<OracleApprovalPolicy> };
+    const rawApproval = raw.approval ?? {};
+    const mode = rawApproval.mode ?? DEFAULT_POLICY.approval.mode;
+    if (!["off", "risky", "all-mutations"].includes(mode)) {
+      throw new Error("approval.mode must be off, risky, or all-mutations.");
+    }
+    const reviewers = rawApproval.reviewers?.map((reviewer) => reviewer.trim()).filter(Boolean);
+    const highRiskQuorum = rawApproval.highRiskQuorum;
+    if (highRiskQuorum !== undefined && (!Number.isInteger(highRiskQuorum) || highRiskQuorum < 1)) {
+      throw new Error("approval.highRiskQuorum must be a positive integer.");
+    }
+    const expiryMinutes = rawApproval.expiryMinutes ?? DEFAULT_POLICY.approval.expiryMinutes;
+    if (!Number.isFinite(expiryMinutes) || expiryMinutes <= 0) {
+      throw new Error("approval.expiryMinutes must be greater than zero.");
+    }
     return {
       forbiddenGlobs: [...DEFAULT_POLICY.forbiddenGlobs, ...(raw.forbiddenGlobs ?? [])],
       allowedCommands: raw.allowedCommands,
       forbiddenCommands: [...DEFAULT_POLICY.forbiddenCommands, ...(raw.forbiddenCommands ?? [])],
       maxMutationsPerSession: raw.maxMutationsPerSession ?? DEFAULT_POLICY.maxMutationsPerSession,
+      approval: {
+        mode,
+        reviewers,
+        highRiskQuorum,
+        expiryMinutes,
+        allowTelegramHighRisk: rawApproval.allowTelegramHighRisk
+          ?? DEFAULT_POLICY.approval.allowTelegramHighRisk
+      }
     };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULT_POLICY };
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        ...DEFAULT_POLICY,
+        approval: { ...DEFAULT_POLICY.approval }
+      };
+    }
     throw new Error(
       `Invalid Oracle policy at ${policyFile}: ${error instanceof Error ? error.message : String(error)}`
     );

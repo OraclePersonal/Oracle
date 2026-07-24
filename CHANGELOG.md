@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-24
+
+### Added
+- Human approval execution gate with pause, persistent checkpoint, payload verification, resume, and execute-once claim
+- Authorized reviewers, multi-reviewer quorum, immutable votes, expiry, and optimistic-lock versions
+- Canonical SHA-256 action payload hashes and SQLite-backed execution records
+- Tamper-evident audit hash chain with cross-process writer locking and `oracle audit verify`
+- Ink Control Center TUI with overview, approval, task, memory, audit, agent, and scheduler tabs
+- Approval filtering, detail inspection, rejection reasons, and confirmation prompts in the TUI
+- Optional Telegram callback decisions with chat/user allowlists, expiring versioned callbacks, and replay protection
+- Runtime API and WebSocket events for votes, expiry, and guarded action execution
+- SQLite v2-to-v3 migration coverage and end-to-end human-control-plane tests
+
+### Changed
+- Package version advanced to Human Control Plane 0.4.0
+- `oracle control` uses Ink in interactive terminals; `--plain` keeps the dependency-free ANSI renderer
+- Agent checkpoints expose waiting-approval state, approval id, and pending tool
+- Control snapshots now include agent presence, scheduler records, and audit-chain integrity
+- High-risk Telegram decisions are local-only by default
+
+### Security
+- Guarded tools do not run before an authorized quorum approves the exact hashed payload
+- SQLite uniqueness prevents more than one execution claim for an approval
+- Stale approval decisions return conflicts instead of overwriting newer state
+- Telegram callbacks validate chat, user allowlist, reviewer identity, version, and local-only policy
+
 ## [0.3.0] - 2026-07-24
 
 ### Added

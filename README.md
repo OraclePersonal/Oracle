@@ -13,7 +13,7 @@ When you fire up Claude Code, it has no memory of yesterday's work. If you start
 - **Inter-agent coordination** — multiple agent sessions on one machine can message each other, hand off work, wake each other up when something needs attention
 - **Task planning & verification** — a lead breaks work into assigned tasks with checklists; agents can't report "done" until their declared verification steps are actually checked off, and the lead is auto-notified when work is ready to review
 - **ASCII work board** — a lead can render the live agent roster and its main TODOs in any MCP client with `oracle_task_board`
-- **Control Center** — a blue local dashboard and interactive TUI for approvals, task flow, memory distribution, and the immutable audit trail
+- **Control Center** — a blue local dashboard and Ink TUI for authorized approvals, task flow, memory, and the tamper-evident audit chain
 
 **Requires Node.js ≥ 24.** Installs three binaries: `oracle` (CLI), `oracle-mcp` (full MCP server), `oracle-msg-mcp` (messaging + task-tracking server for agents that only need to coordinate, not consult or act).
 
@@ -179,10 +179,11 @@ oracle ask "what's in our latest PR?" --include-gh
 
 `oracle agent` is an **agentic tool-use loop** that reads/writes files and runs shell commands to complete a task autonomously. It:
 
-- **Has a bash tool.** Runs shell commands via `exec()` respecting `$SHELL` (Git Bash on Windows, user's shell on Unix). Confined to the workspace root with configurable timeout and full audit trail.
+- **Has a bash tool.** Runs shell commands via `exec()` respecting `$SHELL`, with the workspace as its working directory, policy checks, approval gates for risky commands, configurable timeout, and a full audit trail. Use an OS/container sandbox when host-level isolation is required.
 - **Can plan before acting** (`--plan`). Runs a read-only investigation pass first, shows you the plan, then asks for confirmation before executing. Skip confirmation with `--yes`.
 - **Self-reviews its own work** (`--review`). After the task completes, runs a second pass to check for correctness bugs, missing error handling, security issues, and edge cases.
 - **Can resume from a checkpoint** (`--resume <id>`). If the loop hits `--max-steps` or crashes mid-way, it saves a checkpoint every turn. Resume where it left off without starting over. List checkpoints with `oracle agent-checkpoints`.
+- **Pauses before risky actions.** The Human Control Plane stores the pending tool batch, requests an authorized quorum, verifies its payload hash, claims execution once, and resumes from the same checkpoint.
 - **Outputs structured JSON** (`--json`). Get `finalText`, `steps`, `checkpointId`, and full audit trail of mutations.
 - **Is fully audited.** Every file write is logged with timestamp, agent name, SHA256 hash, and diff summary. Audit can be replayed or reviewed.
 - **Runs until done.** Loops — reads files, learns from test failures, edits, runs again — until it declares success or hits `--max-steps`.
@@ -194,6 +195,7 @@ oracle agent "refactor the auth module" --plan               # plan → confirm 
 oracle agent "fix the login bug" --review                     # execute → self-review
 oracle agent "add input validation" --json                    # JSON output
 oracle agent "finish the task" --resume cp-20260723-...       # resume from checkpoint
+oracle agent "deploy" --approval-mode all-mutations           # gate every mutation
 oracle agent --read-only "investigate the codebase" --json    # read-only + JSON
 oracle agent-checkpoints                                      # list checkpoints
 oracle agent-checkpoints --json                               # checkpoints as JSON
@@ -351,6 +353,7 @@ ORACLE_RUNTIME_HOST        # Runtime loopback host (default: 127.0.0.1)
 ORACLE_RUNTIME_PORT        # Runtime local API port (default: 4777)
 ORACLE_TELEGRAM_BOT_TOKEN  # Optional approval notification bot
 ORACLE_TELEGRAM_CHAT_ID    # Optional approval notification destination
+ORACLE_TELEGRAM_ALLOWED_USER_IDS # Optional comma-separated callback allowlist
 ORACLE_MEMORY_LLM_GRAPH    # Enable LLM-based memory graph reflection (default: off)
 ANTHROPIC_API_KEY          # For Claude models (required if using Anthropic)
 OPENAI_API_KEY             # For GPT (required if using OpenAI)
@@ -383,13 +386,13 @@ Oracle MCP Server (src/mcp/)
 ├─ Coordination Service (src/coordination/)
 │  └─ Links Task ↔ Message ↔ Swarm, reconciles consensus, recovers workflows
 ├─ Agent Sandbox (src/agent/)
-│  └─ File R/W, bash tool, audit trail, plan mode, self-review, resume, checkpoints
+│  └─ File R/W, bash, approval gate, tamper-evident audit, resume, checkpoints
 ├─ Scheduler (src/scheduler/)
 │  └─ CronEngine + repository port, owned by Runtime while active
 ├─ Runtime (src/runtime/)
 │  └─ Daemon + SQLite + Scheduler service + local HTTP/WebSocket API
 ├─ Control Center (src/control/)
-│  └─ Dashboard + TUI + approval inbox + task/memory/audit visualization
+│  └─ Ink TUI + dashboard + quorum/expiry/execute-once approvals
 ├─ Observability (src/observability/)
 │  └─ Structured JSON logging to stderr
 ├─ Identity & Personas (src/identity/)
@@ -399,7 +402,7 @@ Oracle MCP Server (src/mcp/)
 
 CLI (src/cli.ts)
 ├─ oracle ask, agent, daemon, memory, msg, task, identity, schedule, ...
-├─ oracle agent: --plan, --review, --resume, --json, --read-only, --yes
+├─ oracle agent: --plan, --review, --resume, --approval-mode, --json, --read-only
 ├─ oracle daemon: start, run, status, stop, events
 ├─ oracle control: TUI, url, snapshot
 ├─ oracle approval: request, list, show, approve, reject

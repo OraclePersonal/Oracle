@@ -85,8 +85,9 @@ oracle agent "add error handling to src/handler.ts and add a test"
 ```
 
 The agent reads/writes/edits files and runs shell commands to complete the task. Shell
-commands are confined to the workspace root with a timeout and audit trail, and disabled
-in readOnly mode.
+commands start in the workspace with policy checks, approval gates, a timeout and audit
+trail, and are disabled in readOnly mode. Use OS or container isolation when host-level
+shell confinement is required.
 
 ## Coordinate multiple agent sessions
 

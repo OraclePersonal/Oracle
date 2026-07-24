@@ -131,6 +131,7 @@ program
   .option("--max-steps <n>", "Max agent turns before stopping", "20")
   .option("--cwd <path>", "Working directory", process.cwd())
   .option("--resume <id>", "Resume from a checkpoint id")
+  .option("--approval-mode <mode>", "off | risky | all-mutations")
   .option("--json", "Output result as JSON (includes finalText, steps, mutations)")
   .option("--plan", "Plan first (read-only), show the plan, then ask before executing")
   .option("--review", "Run a self-review pass after the task completes")
@@ -143,6 +144,12 @@ program
     if (failedCheck) throw new Error(`${failedCheck.name}: ${failedCheck.detail}`);
     const provider = createAgentProvider(parsedProvider);
     const agent = new AgentService(provider);
+    if (
+      options.approvalMode
+      && !["off", "risky", "all-mutations"].includes(options.approvalMode)
+    ) {
+      throw new Error("--approval-mode must be off, risky, or all-mutations.");
+    }
 
     // ── Plan mode: read-only pass first ───────────────────────────
     if (options.plan && !options.resume) {
@@ -181,6 +188,7 @@ program
       readOnly: Boolean(options.readOnly),
       maxSteps: Number(options.maxSteps),
       resumeId: options.resume || undefined,
+      approvalMode: options.approvalMode,
       onStep: (step) => console.error(`[turn ${step.turn}] ${step.toolsUsed.join(", ") || "done"}`),
     });
 
@@ -191,6 +199,7 @@ program
         steps: result.steps.map((s) => ({ turn: s.turn, toolsUsed: s.toolsUsed })),
         stoppedOnLimit: result.stoppedOnLimit,
         checkpointId: result.checkpointId,
+        waitingForApproval: result.waitingForApproval,
       };
       const summary = result.audit.getSummary();
       if (summary.mutations > 0) {
@@ -202,11 +211,22 @@ program
       console.log(result.finalText);
     }
 
+    if (result.waitingForApproval) {
+      const waiting = result.waitingForApproval;
+      console.error(
+        waiting.approvalId
+          ? `[waiting for approval: ${waiting.approvalId}]`
+          : "[waiting for approval: Runtime unavailable]"
+      );
+      console.error(`Risk: ${waiting.risk} — ${waiting.reason}`);
+      if (waiting.error) console.error(waiting.error);
+      console.error(`Resume after the decision: oracle agent "${task}" --resume ${waiting.checkpointId}`);
+    }
     if (result.stoppedOnLimit) console.error(`Stopped after ${options.maxSteps} turns.`);
     if (result.checkpointId) console.error(`[checkpoint: ${result.checkpointId}]`);
 
     // ── Self-review mode ──────────────────────────────────────────
-    if (options.review && result.steps.length > 0) {
+    if (options.review && !result.waitingForApproval && result.steps.length > 0) {
       console.error("\n[review] Reviewing changes...");
       const reviewResult = await agent.run({
         prompt: `Review the changes made in the previous agent run. Check for:\n- Correctness bugs\n- Missing error handling\n- Security issues\n- Edge cases not handled\n- Code quality problems\n\nIf you find issues, list them with file paths and line numbers. If everything looks good, say "No issues found."\n\nTask context: ${task}`,
@@ -234,7 +254,13 @@ program
     const list = await store.list();
     if (!list.length) { console.log("No checkpoints found."); return; }
     if (options.json) { console.log(JSON.stringify(list, null, 2)); return; }
-    for (const cp of list) console.log(`${cp.id.padEnd(50)} ${cp.updatedAt.slice(0, 19)}`);
+    for (const cp of list) {
+      console.log(
+        `${cp.id.padEnd(50)} ${cp.updatedAt.slice(0, 19)}  ${cp.status}`
+        + (cp.toolName ? `  ${cp.toolName}` : "")
+        + (cp.approvalId ? `  ${cp.approvalId}` : "")
+      );
+    }
   });
 
 const oracleCmd = program.command("oracle").description("Manage oracle profiles");
@@ -984,6 +1010,7 @@ const controlCmd = program
   .command("control")
   .description("Open the Control Center TUI for approvals, tasks, memory, and audit")
   .option("--once", "Render one snapshot and exit", false)
+  .option("--plain", "Use the dependency-free ANSI TUI", false)
   .option("--interval <ms>", "Refresh interval in milliseconds", "2000")
   .option("--actor <name>", "Approval actor recorded by the TUI", process.env.USER ?? "operator")
   .action(async (options) => {
@@ -991,6 +1018,20 @@ const controlCmd = program
     const { renderControlTui } = await import("./control/tui.js");
     let snapshot = await client.getControlSnapshot();
     let selected = 0;
+    const intervalMs = Number(options.interval);
+    if (!Number.isFinite(intervalMs) || intervalMs < 500) {
+      throw new Error("--interval must be at least 500 milliseconds.");
+    }
+    if (!options.once && !options.plain && process.stdin.isTTY && process.stdout.isTTY) {
+      const { renderControlInk } = await import("./control/ink-app.js");
+      await renderControlInk({
+        client,
+        initial: snapshot,
+        actor: options.actor,
+        intervalMs
+      });
+      return;
+    }
     const render = () => {
       const screen = renderControlTui(snapshot, selected);
       if (process.stdout.isTTY && !options.once) process.stdout.write("\x1b[2J\x1b[H");
@@ -999,10 +1040,6 @@ const controlCmd = program
     render();
     if (options.once || !process.stdin.isTTY || !process.stdout.isTTY) return;
 
-    const intervalMs = Number(options.interval);
-    if (!Number.isFinite(intervalMs) || intervalMs < 500) {
-      throw new Error("--interval must be at least 500 milliseconds.");
-    }
     let refreshing = false;
     const refresh = async () => {
       if (refreshing) return;
@@ -1045,6 +1082,8 @@ const controlCmd = program
           void client.decideApproval(approval.id, {
             decision: key === "a" ? "approve" : "reject",
             decidedBy: options.actor,
+            expectedVersion: approval.version,
+            channel: "tui",
             note: key === "x" ? "Rejected from Control Center TUI." : undefined
           }).then(refresh, reject);
         }
@@ -1088,8 +1127,17 @@ function printApproval(approval: import("./control/types.js").ApprovalRequest): 
     `${riskColor}${approval.risk.toUpperCase()}\x1b[0m ${approval.id} | ${approval.status} | ${approval.title}`
   );
   console.log(`  ${approval.requestedBy} -> ${approval.assignedTo} | ${approval.kind}`);
+  console.log(
+    `  quorum: ${approval.approvalCount}/${approval.requiredApprovals} | version: ${approval.version}`
+  );
+  console.log(`  reviewers: ${approval.authorizedReviewers.join(", ")}`);
   if (approval.taskId) console.log(`  task: ${approval.taskId}`);
   if (approval.description) console.log(`  ${approval.description}`);
+  if (approval.expiresAt) console.log(`  expires: ${approval.expiresAt}`);
+  if (approval.payloadHash) console.log(`  payload: ${approval.payloadHash}`);
+  for (const vote of approval.votes) {
+    console.log(`  vote: ${vote.actor} ${vote.decision} via ${vote.channel}`);
+  }
   if (approval.decidedBy) {
     console.log(`  decision: ${approval.decidedBy}${approval.decisionNote ? ` — ${approval.decisionNote}` : ""}`);
   }
@@ -1098,10 +1146,10 @@ function printApproval(approval: import("./control/types.js").ApprovalRequest): 
 approvalCmd
   .command("list")
   .description("List approval requests")
-  .option("--status <status>", "pending | approved | rejected | cancelled", "pending")
+  .option("--status <status>", "pending | approved | rejected | cancelled | expired", "pending")
   .action(async (options) => {
-    if (!["pending", "approved", "rejected", "cancelled"].includes(options.status)) {
-      throw new Error("status must be pending, approved, rejected, or cancelled.");
+    if (!["pending", "approved", "rejected", "cancelled", "expired"].includes(options.status)) {
+      throw new Error("status must be pending, approved, rejected, cancelled, or expired.");
     }
     const approvals = await (await requireRuntimeClient()).listApprovals(options.status);
     if (!approvals.length) {
@@ -1133,6 +1181,10 @@ approvalCmd
   .option("--description <text>", "Decision context")
   .requiredOption("--requested-by <agent>", "Requesting agent")
   .requiredOption("--assigned-to <agent>", "Human or agent responsible for the decision")
+  .option("--reviewers <actors>", "Comma-separated authorized reviewer identities")
+  .option("--quorum <n>", "Required approval votes")
+  .option("--expires-in <minutes>", "Minutes before the request expires")
+  .option("--local-only", "Do not allow Telegram callback decisions", false)
   .option("--kind <kind>", "custom | command | policy", "custom")
   .option("--risk <risk>", "low | medium | high", "medium")
   .option("--task <id>", "Linked task id")
@@ -1143,14 +1195,35 @@ approvalCmd
     if (!["low", "medium", "high"].includes(options.risk)) {
       throw new Error("risk must be low, medium, or high.");
     }
+    const reviewers = options.reviewers
+      ? String(options.reviewers).split(",").map((value) => value.trim()).filter(Boolean)
+      : undefined;
+    const requiredApprovals = options.quorum === undefined
+      ? undefined
+      : Number(options.quorum);
+    if (
+      requiredApprovals !== undefined
+      && (!Number.isInteger(requiredApprovals) || requiredApprovals < 1)
+    ) throw new Error("--quorum must be a positive integer.");
+    const expiresInMinutes = options.expiresIn === undefined
+      ? undefined
+      : Number(options.expiresIn);
+    if (
+      expiresInMinutes !== undefined
+      && (!Number.isFinite(expiresInMinutes) || expiresInMinutes <= 0)
+    ) throw new Error("--expires-in must be greater than zero.");
     const approval = await (await requireRuntimeClient()).createApproval({
       kind: options.kind,
       title: options.title,
       description: options.description,
       requestedBy: options.requestedBy,
       assignedTo: options.assignedTo,
+      authorizedReviewers: reviewers,
+      requiredApprovals,
       risk: options.risk,
-      taskId: options.task
+      taskId: options.task,
+      expiresInMinutes,
+      localOnly: Boolean(options.localOnly)
     });
     printApproval(approval);
   });
@@ -1163,9 +1236,14 @@ for (const decision of ["approve", "reject"] as const) {
     .requiredOption("--by <actor>", "Decision maker")
     .option("--note <text>", "Decision note")
     .action(async (id, options) => {
-      const approval = await (await requireRuntimeClient()).decideApproval(id, {
+      const client = await requireRuntimeClient();
+      const current = await client.getApproval(id);
+      if (!current) throw new Error(`Approval not found: ${id}`);
+      const approval = await client.decideApproval(id, {
         decision,
         decidedBy: options.by,
+        expectedVersion: current.version,
+        channel: "cli",
         note: options.note
       });
       printApproval(approval);
@@ -1447,6 +1525,30 @@ swarmCmd
 const auditCmd = program.command("audit").description("View agent audit trail and policy violations");
 
 auditCmd
+  .command("verify")
+  .description("Verify the tamper-evident audit hash chain")
+  .option("--cwd <path>", "Workspace root", process.cwd())
+  .option("--json", "Output verification as JSON")
+  .action(async (options: { cwd?: string; json?: boolean }) => {
+    const { AuditLogger } = await import("./observability/audit.js");
+    const verification = await new AuditLogger().verify(options.cwd ?? process.cwd());
+    if (options.json) {
+      console.log(JSON.stringify(verification, null, 2));
+    } else if (verification.valid) {
+      console.log(
+        `Audit chain valid: ${verification.verifiedEntries} verified`
+        + (verification.legacyEntries ? `, ${verification.legacyEntries} legacy unsigned` : "")
+        + (verification.headHash ? `\nHead: ${verification.headHash}` : "")
+      );
+    } else {
+      console.error(
+        `Audit chain invalid at entry ${verification.brokenAt}: ${verification.reason}`
+      );
+      process.exitCode = 1;
+    }
+  });
+
+auditCmd
   .command("show")
   .description("Show audit log entries for a session")
   .option("-n, --limit <n>", "Max entries to show", "50")
@@ -1503,6 +1605,11 @@ initCmd
       forbiddenGlobs: [".env", ".env.", "id_rsa", "id_ed25519", ".pem", "credentials.json", ".oracle/policy.json"],
       forbiddenCommands: ["rm -rf /", "rm -rf c:", "rm -rf c:\\", "mkfs", "dd if=", ":(){ :|:& };:"],
       maxMutationsPerSession: 50,
+      approval: {
+        mode: "risky",
+        expiryMinutes: 30,
+        allowTelegramHighRisk: false
+      }
     };
     const defaultConfig = {
       provider: "codex",

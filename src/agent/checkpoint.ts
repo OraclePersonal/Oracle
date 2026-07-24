@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import type { AgentMessage } from "./types.js";
+import type { ApprovalRisk } from "../control/types.js";
+import type { AgentMessage, ToolCall, ToolResult } from "./types.js";
 
 const execAsync = promisify(exec);
 
@@ -22,6 +23,21 @@ export interface CheckpointRecord {
   turn: number;
   maxSteps: number;
   toolNames?: string[];
+  status?: "active" | "waiting_approval";
+  pendingToolBatch?: {
+    turn: number;
+    calls: ToolCall[];
+    nextIndex: number;
+    results: ToolResult[];
+    approval?: {
+      callId: string;
+      approvalId?: string;
+      payloadHash: string;
+      risk: ApprovalRisk;
+      reason: string;
+      error?: string;
+    };
+  };
   usage: { inputTokens: number; outputTokens: number };
   createdAt: string;
   updatedAt: string;
@@ -33,7 +49,13 @@ export interface CheckpointStoreInterface {
   load(id: string): Promise<CheckpointRecord | null>;
   save(record: CheckpointRecord): Promise<void>;
   delete(id: string): Promise<boolean>;
-  list(): Promise<Array<{ id: string; updatedAt: string }>>;
+  list(): Promise<Array<{
+    id: string;
+    updatedAt: string;
+    status: "active" | "waiting_approval";
+    approvalId?: string;
+    toolName?: string;
+  }>>;
 }
 
 export class FileCheckpointStore implements CheckpointStoreInterface {
@@ -77,16 +99,38 @@ export class FileCheckpointStore implements CheckpointStoreInterface {
     }
   }
 
-  async list(): Promise<Array<{ id: string; updatedAt: string }>> {
+  async list(): Promise<Array<{
+    id: string;
+    updatedAt: string;
+    status: "active" | "waiting_approval";
+    approvalId?: string;
+    toolName?: string;
+  }>> {
     try {
       const files = await fs.readdir(this.dir);
-      const list: Array<{ id: string; updatedAt: string }> = [];
+      const list: Array<{
+        id: string;
+        updatedAt: string;
+        status: "active" | "waiting_approval";
+        approvalId?: string;
+        toolName?: string;
+      }> = [];
       for (const f of files) {
         if (!f.endsWith(".json")) continue;
         try {
           const raw = await fs.readFile(path.join(this.dir, f), "utf8");
           const cp = JSON.parse(raw) as CheckpointRecord;
-          list.push({ id: cp.id, updatedAt: cp.updatedAt });
+          const waiting = cp.pendingToolBatch?.approval;
+          const waitingCall = cp.pendingToolBatch?.calls.find(
+            (call) => call.id === waiting?.callId
+          );
+          list.push({
+            id: cp.id,
+            updatedAt: cp.updatedAt,
+            status: cp.status ?? (waiting ? "waiting_approval" : "active"),
+            approvalId: waiting?.approvalId,
+            toolName: waitingCall?.name
+          });
         } catch { /* skip */ }
       }
       return list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

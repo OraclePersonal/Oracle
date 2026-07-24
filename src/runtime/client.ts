@@ -1,5 +1,6 @@
 import type { CreateTaskInput, CronTask, UpdateTaskInput } from "../scheduler/taskStore.js";
 import type {
+  ApprovalExecution,
   ApprovalDecision,
   ApprovalRequest,
   ApprovalStatus,
@@ -122,6 +123,32 @@ export class RuntimeClient {
       true,
       10_000
     )).approval;
+  }
+
+  async claimApprovalExecution(
+    id: string,
+    input: { payloadHash: string; claimedBy: string }
+  ): Promise<ApprovalExecution> {
+    return (await this.request<{ execution: ApprovalExecution }>(
+      "POST",
+      `/v1/control/approvals/${encodeURIComponent(id)}/execution/claim`,
+      input,
+      true,
+      10_000
+    )).execution;
+  }
+
+  async completeApprovalExecution(
+    executionId: string,
+    input: { status: "completed" | "failed"; result?: Record<string, unknown> }
+  ): Promise<ApprovalExecution> {
+    return (await this.request<{ execution: ApprovalExecution }>(
+      "POST",
+      `/v1/control/executions/${encodeURIComponent(executionId)}/complete`,
+      input,
+      true,
+      10_000
+    )).execution;
   }
 
   controlCenterUrl(): string {

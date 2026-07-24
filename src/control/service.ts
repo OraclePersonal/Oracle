@@ -1,6 +1,7 @@
 import { CoordinationService } from "../coordination/service.js";
 import { MemoryAdapter, type MemoryStoreEntry } from "../memory/adapter.js";
 import { MessageStore } from "../messaging/store.js";
+import { AgentRegistry } from "../messaging/registry.js";
 import { AuditLogger, type AuditRecord } from "../observability/audit.js";
 import { SwarmStore } from "../orchestrator/swarmStore.js";
 import type { RuntimeDatabase } from "../runtime/database.js";
@@ -11,10 +12,13 @@ import { VERSION } from "../version.js";
 import { ApprovalStore } from "./approvalStore.js";
 import { TelegramApprovalNotifier } from "./telegram.js";
 import type {
+  ApprovalExecution,
   ApprovalDecision,
   ApprovalRequest,
   ApprovalRisk,
   AuditVisualization,
+  ClaimApprovalExecutionInput,
+  CompleteApprovalExecutionInput,
   ControlCenterSnapshot,
   CreateApprovalInput,
   MemoryVisualization,
@@ -41,9 +45,12 @@ export class ControlCenterService {
   readonly approvals: ApprovalStore;
   private readonly tasks: TaskStore;
   private readonly coordination: CoordinationService;
+  private readonly agents: AgentRegistry;
   private readonly projectMemory: MemoryAdapter;
   private readonly globalMemory: MemoryAdapter;
   private readonly audit = new AuditLogger();
+  private readonly telegram: TelegramApprovalNotifier;
+  private expiryTimer?: NodeJS.Timeout;
 
   constructor(
     database: RuntimeDatabase,
@@ -62,13 +69,57 @@ export class ControlCenterService {
       new MessageStore(options.homeDir),
       new SwarmStore(options.homeDir)
     );
+    this.agents = new AgentRegistry(options.homeDir);
     this.projectMemory = new MemoryAdapter(options.workspaceRoot);
     this.globalMemory = new MemoryAdapter(options.homeDir, "memory");
+    this.telegram = options.telegram ?? new TelegramApprovalNotifier();
+  }
+
+  start(): void {
+    if (this.expiryTimer) return;
+    this.expiryTimer = setInterval(() => {
+      void this.expireApprovals();
+    }, 30_000);
+    this.expiryTimer.unref();
+    this.telegram.startCallbacks(async (callback) => {
+      const approval = this.approvals.getByTelegramToken(callback.token);
+      if (!approval) throw new Error("Approval not found or no longer available.");
+      if (approval.localOnly) throw new Error("This approval must be decided locally.");
+      const actor = `telegram:${callback.userId}`;
+      const updated = await this.decide(approval.id, {
+        decision: callback.decision,
+        decidedBy: actor,
+        expectedVersion: callback.expectedVersion,
+        channel: "telegram",
+        note: `Decision received from Telegram user ${callback.userId}.`
+      });
+      return updated.status === "pending"
+        ? `Vote recorded (${updated.approvalCount}/${updated.requiredApprovals}).`
+        : `Approval ${updated.status}.`;
+    });
+  }
+
+  stop(): void {
+    if (!this.expiryTimer) return;
+    clearInterval(this.expiryTimer);
+    this.expiryTimer = undefined;
+    this.telegram.stopCallbacks();
   }
 
   async snapshot(): Promise<ControlCenterSnapshot> {
+    await this.expireApprovals();
     await this.syncTaskApprovals();
-    const [tasks, projectStats, projectRecent, globalStats, globalRecent, audits, schedules] =
+    const [
+      tasks,
+      projectStats,
+      projectRecent,
+      globalStats,
+      globalRecent,
+      audits,
+      auditIntegrity,
+      schedules,
+      agents
+    ] =
       await Promise.all([
         this.tasks.list(),
         this.projectMemory.getStats(),
@@ -76,7 +127,9 @@ export class ControlCenterService {
         this.globalMemory.getStats(),
         this.globalMemory.recall({ limit: 12, touch: false }),
         this.audit.readRecords(this.options.workspaceRoot, 200),
-        this.scheduler.list()
+        this.audit.verify(this.options.workspaceRoot),
+        this.scheduler.list(),
+        this.agents.list()
       ]);
     const pending = this.approvals.list({ status: "pending", limit: 100 });
     return {
@@ -89,6 +142,12 @@ export class ControlCenterService {
         schedulerRunning: this.scheduler.isRunning,
         scheduledTasks: schedules.length
       },
+      agents: {
+        total: agents.length,
+        active: agents.filter((agent) => agent.active).length,
+        items: agents
+      },
+      schedules,
       approvals: {
         pending: pending.length,
         byRisk: this.countApprovalRisk(pending),
@@ -99,16 +158,20 @@ export class ControlCenterService {
         project: this.memoryVisualization(projectStats, projectRecent),
         global: this.memoryVisualization(globalStats, globalRecent)
       },
-      audit: this.auditVisualization(audits)
+      audit: this.auditVisualization(audits, auditIntegrity)
     };
   }
 
-  async listApprovals(status?: "pending" | "approved" | "rejected" | "cancelled"): Promise<ApprovalRequest[]> {
+  async listApprovals(
+    status?: "pending" | "approved" | "rejected" | "cancelled" | "expired"
+  ): Promise<ApprovalRequest[]> {
+    await this.expireApprovals();
     await this.syncTaskApprovals();
     return this.approvals.list({ status, limit: 200 });
   }
 
   getApproval(id: string): ApprovalRequest | null {
+    void this.expireApprovals();
     return this.approvals.get(id);
   }
 
@@ -130,13 +193,12 @@ export class ControlCenterService {
   }
 
   async decide(id: string, decision: ApprovalDecision): Promise<ApprovalRequest> {
-    const approval = this.approvals.get(id);
-    if (!approval) throw new Error(`Approval not found: ${id}`);
-    if (approval.status !== "pending") {
-      throw new Error(`Approval ${id} is already ${approval.status}.`);
-    }
+    await this.expireApprovals();
+    const approval = this.approvals.assertDecidable(id, decision);
+    const finalApprovalVote = decision.decision === "approve"
+      && approval.approvalCount + 1 >= approval.requiredApprovals;
 
-    if (approval.kind === "task_review" && approval.taskId) {
+    if (finalApprovalVote && approval.kind === "task_review" && approval.taskId) {
       const task = await this.tasks.get(approval.taskId);
       if (!task) throw new Error(`Linked task not found: ${approval.taskId}`);
       if (task.status !== "review") {
@@ -153,18 +215,85 @@ export class ControlCenterService {
     }
 
     const updated = this.approvals.decide(id, decision);
-    if (!updated) throw new Error(`Approval ${id} changed before the decision was recorded.`);
-    this.events.publish(
-      decision.decision === "approve" ? "approval.approved" : "approval.rejected",
-      {
+    const eventType = updated.status === "pending"
+      ? "approval.vote.recorded"
+      : updated.status === "approved"
+        ? "approval.approved"
+        : "approval.rejected";
+    this.events.publish(eventType, {
         approvalId: updated.id,
         decidedBy: decision.decidedBy,
         taskId: updated.taskId,
-        note: decision.note
-      }
+        note: decision.note,
+        channel: decision.channel ?? "api",
+        version: updated.version,
+        approvalCount: updated.approvalCount,
+        requiredApprovals: updated.requiredApprovals
+    });
+    await this.logDecision(
+      updated.status === "pending" ? "vote" : decision.decision,
+      updated,
+      decision.decidedBy,
+      decision.note
     );
-    await this.logDecision(decision.decision, updated, decision.decidedBy, decision.note);
     return updated;
+  }
+
+  async claimExecution(
+    id: string,
+    input: ClaimApprovalExecutionInput
+  ): Promise<ApprovalExecution> {
+    const execution = this.approvals.claimExecution(id, input.payloadHash, input.claimedBy);
+    this.events.publish("approval.execution.claimed", {
+      approvalId: id,
+      executionId: execution.id,
+      claimedBy: execution.claimedBy,
+      payloadHash: execution.payloadHash
+    });
+    await this.audit.log(this.options.workspaceRoot, {
+      action: "tool",
+      target: `approval-execution:${execution.id}`,
+      agentId: execution.claimedBy,
+      details: {
+        controlCenterAction: "execution_claimed",
+        approvalId: id,
+        payloadHash: execution.payloadHash
+      }
+    });
+    return execution;
+  }
+
+  async completeExecution(
+    input: CompleteApprovalExecutionInput
+  ): Promise<ApprovalExecution> {
+    const execution = this.approvals.completeExecution(input);
+    this.events.publish(`approval.execution.${input.status}`, {
+      approvalId: execution.approvalId,
+      executionId: execution.id,
+      claimedBy: execution.claimedBy
+    });
+    await this.audit.log(this.options.workspaceRoot, {
+      action: "tool",
+      target: `approval-execution:${execution.id}`,
+      agentId: execution.claimedBy,
+      details: {
+        controlCenterAction: `execution_${input.status}`,
+        approvalId: execution.approvalId,
+        result: input.result
+      }
+    });
+    return execution;
+  }
+
+  private async expireApprovals(): Promise<void> {
+    for (const approval of this.approvals.expireDue()) {
+      this.events.publish("approval.expired", {
+        approvalId: approval.id,
+        checkpointId: approval.checkpointId,
+        version: approval.version
+      });
+      await this.logDecision("expired", approval, "runtime-expiry");
+    }
   }
 
   async syncTaskApprovals(): Promise<void> {
@@ -238,10 +367,12 @@ export class ControlCenterService {
   }
 
   private async notify(approval: ApprovalRequest): Promise<void> {
-    const notifier = this.options.telegram ?? new TelegramApprovalNotifier();
-    if (!notifier.enabled || approval.notifiedAt) return;
+    if (!this.telegram.enabled || approval.notifiedAt) return;
     try {
-      if (await notifier.notify(approval)) this.approvals.markNotified(approval.id);
+      if (await this.telegram.notify(
+        approval,
+        this.approvals.telegramToken(approval.id) ?? undefined
+      )) this.approvals.markNotified(approval.id);
     } catch (error) {
       this.events.publish("approval.notification.failed", {
         approvalId: approval.id,
@@ -273,7 +404,10 @@ export class ControlCenterService {
     return { ...stats, recent };
   }
 
-  private auditVisualization(records: AuditRecord[]): AuditVisualization {
+  private auditVisualization(
+    records: AuditRecord[],
+    integrity: Awaited<ReturnType<AuditLogger["verify"]>>
+  ): AuditVisualization {
     const byAction: Record<string, number> = {};
     for (const record of records) {
       byAction[record.action] = (byAction[record.action] ?? 0) + 1;
@@ -282,7 +416,8 @@ export class ControlCenterService {
       total: records.length,
       policyDenials: records.filter((record) => record.action === "policy_denied").length,
       byAction,
-      recent: records.slice(0, 30)
+      recent: records.slice(0, 30),
+      integrity
     };
   }
 
@@ -307,6 +442,10 @@ export class ControlCenterService {
         approvalKind: approval.kind,
         risk: approval.risk,
         taskId: approval.taskId,
+        version: approval.version,
+        payloadHash: approval.payloadHash,
+        approvalCount: approval.approvalCount,
+        requiredApprovals: approval.requiredApprovals,
         note
       }
     });

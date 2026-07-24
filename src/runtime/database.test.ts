@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { RuntimeDatabase, SqliteCronTaskStore } from "./database.js";
 
@@ -23,7 +24,7 @@ describe("RuntimeDatabase", () => {
     expect(stat.mode & 0o777).toBe(0o600);
     expect(database.connection.prepare(
       "SELECT value FROM runtime_metadata WHERE key = 'schema_version'"
-    ).get()).toEqual({ value: "2" });
+    ).get()).toEqual({ value: "3" });
   });
 
   test("persists scheduler tasks and run history in SQLite", async () => {
@@ -84,5 +85,65 @@ describe("RuntimeDatabase", () => {
       "daemon.started",
       "scheduler.started"
     ]);
+  });
+
+  test("migrates a 0.2 approval database without losing pending requests", async () => {
+    database.close();
+    await fs.rm(home, { recursive: true, force: true });
+    await fs.mkdir(path.join(home, "runtime"), { recursive: true });
+    const file = path.join(home, "runtime", "oracle.db");
+    const legacy = new DatabaseSync(file);
+    legacy.exec(`
+      CREATE TABLE runtime_metadata (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO runtime_metadata VALUES ('schema_version', '2', '2026-01-01T00:00:00.000Z');
+      CREATE TABLE approval_requests (
+        id TEXT PRIMARY KEY,
+        source_key TEXT UNIQUE,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        requested_by TEXT NOT NULL,
+        assigned_to TEXT NOT NULL,
+        risk TEXT NOT NULL,
+        status TEXT NOT NULL,
+        task_id TEXT,
+        message_id TEXT,
+        workflow_id TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT,
+        decision_note TEXT,
+        notified_at TEXT
+      ) STRICT;
+      INSERT INTO approval_requests (
+        id, kind, title, requested_by, assigned_to, risk, status,
+        metadata_json, created_at, updated_at
+      ) VALUES (
+        'approval-legacy', 'custom', 'Legacy request', 'worker', 'lead',
+        'medium', 'pending', '{}', '2026-01-01T00:00:00.000Z',
+        '2026-01-01T00:00:00.000Z'
+      );
+    `);
+    legacy.close();
+
+    database = new RuntimeDatabase(home);
+    expect(database.connection.prepare(
+      "SELECT value FROM runtime_metadata WHERE key = 'schema_version'"
+    ).get()).toEqual({ value: "3" });
+    expect(database.connection.prepare(`
+      SELECT status, version, required_approvals, authorized_reviewers_json
+      FROM approval_requests WHERE id = 'approval-legacy'
+    `).get()).toEqual({
+      status: "pending",
+      version: 1,
+      required_approvals: 1,
+      authorized_reviewers_json: "[\"lead\"]"
+    });
   });
 });

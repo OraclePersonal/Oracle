@@ -35,11 +35,11 @@ npx -p @oraclepersonal/oracle oracle ask "review this" -f "src/**/*.ts"
 |---|---|
 | 🧠 **Remember** | Persistent memory across sessions, auto-ranked by recency, frequency, semantic match, and importance. Entity graph links related knowledge. Auto-consolidation kills duplicates. |
 | 💬 **Consult** | Ask a question with real project context — code files, memory, docs, web search/fetch — and get a grounded, cited answer. |
-| 🛠️ **Act** | An autonomous agent that reads/writes/edits files and runs shell commands to complete a task. **Shell + filesystem** — confined to the workspace, fully audited (every mutation and command hashed and logged). |
+| 🛠️ **Act** | An autonomous agent that reads/writes/edits files and runs policy-checked shell commands from the workspace. Risky actions pause for approval; use OS/container isolation for a host sandbox. |
 | 📨 **Coordinate** | A file-backed inter-agent message bus. Agents send, receive, reply in threads, broadcast, and track presence — with self-onboarding via MCP server instructions, so no one has to be told how to use it. |
 | ✅ **Verify** | A task tracker on top of the bus: assign work with a checklist, log progress, and submit for review — which **blocks** until every checklist item is actually checked off. The task creator is notified automatically. |
 | ⏰ **Runtime** | Persistent local daemon for scheduling, SQLite state, an authenticated loopback API, and WebSocket events. |
-| 🖥️ **Control** | Blue web dashboard and interactive TUI for approval inbox, task workflow, memory distribution, and audit activity. |
+| 🖥️ **Control** | Blue dashboard and Ink TUI for quorum approvals, guarded execution, workflow recovery, memory, and audit integrity. |
 
 ## Documentation
 

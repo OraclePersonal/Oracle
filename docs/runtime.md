@@ -20,7 +20,7 @@ an available port. The daemon writes state to
 `~/.oracle/runtime/daemon.json`, logs to `~/.oracle/runtime/daemon.log`, and
 SQLite data to `~/.oracle/runtime/oracle.db`.
 
-Runtime also serves Control Center 0.3.0 for the workspace from which the
+Runtime also serves Human Control Plane 0.4.0 for the workspace from which the
 daemon was started:
 
 ```bash
@@ -76,6 +76,8 @@ GET    /v1/control/approvals
 POST   /v1/control/approvals
 GET    /v1/control/approvals/:id
 POST   /v1/control/approvals/:id/decision
+POST   /v1/control/approvals/:id/execution/claim
+POST   /v1/control/executions/:id/complete
 ```
 
 The CLI reads the token internally. `oracle daemon status --json` deliberately
@@ -93,7 +95,10 @@ Event types include:
 - `scheduler.task.created`, `scheduler.task.updated`,
   `scheduler.task.removed`
 - `scheduler.run.started`, `scheduler.run.completed`
-- `approval.requested`, `approval.approved`, `approval.rejected`
+- `approval.requested`, `approval.vote.recorded`, `approval.approved`,
+  `approval.rejected`, `approval.expired`
+- `approval.execution.claimed`, `approval.execution.completed`,
+  `approval.execution.failed`
 - `approval.notification.failed`
 
 Use `oracle daemon events --after <id>` instead of handling the token
@@ -121,6 +126,7 @@ ORACLE_RUNTIME_PORT   API port (default 4777)
 ORACLE_WORKSPACE_ROOT Fixed Control Center project root (default startup cwd)
 ORACLE_TELEGRAM_BOT_TOKEN Optional approval notification bot
 ORACLE_TELEGRAM_CHAT_ID   Optional approval notification destination
+ORACLE_TELEGRAM_ALLOWED_USER_IDS Optional callback user allowlist
 ```
 
 ---

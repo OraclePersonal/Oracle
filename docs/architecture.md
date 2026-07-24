@@ -26,7 +26,7 @@ stores and does not replace their existing sources of truth.
 | **MCP Server** | Stdio MCP server exposing Oracle's full tool surface | `src/mcp/server.ts`, `src/mcp/runtime.ts` |
 | **Standalone coordination server** | `oracle-msg-mcp` binary — 21 messaging, task, consensus, and recovery tools without the provider/memory/agent stack | `src/mcp-messaging.ts` |
 | **Runtime daemon** | Long-lived Scheduler owner, SQLite backend, loopback API, WebSocket events | `src/runtime/`, `src/daemon.ts` |
-| **Control Center** | Web dashboard, TUI, approval inbox, task/memory/audit aggregation, optional Telegram notifications | `src/control/` |
+| **Control Center** | Web dashboard, Ink TUI, quorum/expiry approvals, execute-once gate, optional Telegram callbacks | `src/control/` |
 | **ConsultService** | Core loop: load files → build context (memory + docs + web) → call provider → answer | `src/core/consult.ts` |
 | **Provider layer** | Codex CLI, Anthropic, OpenAI, OpenCode | `src/providers/` |
 | **Agent sandbox** | Autonomous file read/write/edit loop with a bash tool for shell commands. Every mutation hashed and logged to an audit trail. | `src/agent/` |
@@ -115,15 +115,17 @@ for the full lifecycle.
 <project>/
 └── .oracle/
     ├── config.json         # per-project include/exclude, provider, model
-    ├── audit.jsonl         # immutable agent and approval audit events
+    ├── audit.jsonl         # tamper-evident agent and approval hash chain
     ├── docs/                # knowledge base source files
     └── skills/              # project-local skill overrides
 ```
 
 ## Security model
 
-The agent sandbox has a **bash tool** for running shell commands, confined to the
-workspace root with a timeout and audit trail. Every mutation is logged with a timestamp,
+The agent sandbox has a **bash tool** that starts commands in the workspace,
+applies command policy and human approval gates, and records a timeout-backed audit trail.
+Use OS or container isolation when host-level shell confinement is required.
+Every mutation is logged with a timestamp,
 agent name, SHA-256 content hash, and diff summary, so file changes and commands can be
 audited or reverted after the fact. The bash tool is disabled in readOnly mode.
 

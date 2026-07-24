@@ -46,6 +46,7 @@ oracle agent "fix login bug" --review
 oracle agent "add validation" --json
 oracle agent "continue" --resume cp-20260723-...
 oracle agent "investigate" --read-only
+oracle agent "deploy" --approval-mode risky
 ```
 
 | Flag | Purpose |
@@ -56,6 +57,7 @@ oracle agent "investigate" --read-only
 | `--resume <id>` | Resume from a saved checkpoint |
 | `--json` | Structured output with `finalText`, `steps`, `checkpointId` |
 | `--read-only` | No mutations; read-only investigation |
+| `--approval-mode <mode>` | Override approval policy: `off`, `risky`, or `all-mutations` |
 | `--max-steps <n>` | Cap the loop (default 20, max 50) |
 | `--provider <name>` | Override provider for this run |
 | `--model <name>` | Override model for this run |
@@ -196,6 +198,7 @@ Control Center TUI and local web dashboard.
 
 ```bash
 oracle control                       # interactive TUI
+oracle control --plain               # dependency-free ANSI fallback
 oracle control --once                # render once and exit
 oracle control --actor lead          # record TUI decisions as lead
 oracle control url                   # print authenticated dashboard URL
@@ -212,7 +215,8 @@ Persistent human approval inbox.
 oracle approval list [--status pending]
 oracle approval show <id>
 oracle approval request --title "Deploy" --requested-by builder \
-  --assigned-to lead --kind command --risk high
+  --assigned-to lead --reviewers lead,security --quorum 2 \
+  --expires-in 30 --kind command --risk high --local-only
 oracle approval approve <id> --by lead --note "verified"
 oracle approval reject <id> --by lead --note "needs changes"
 ```
@@ -243,8 +247,10 @@ oracle swarm recover
 View agent audit trail and policy violations.
 
 ```bash
-oracle audit --agent <name>
-oracle audit --since 2026-07-20
+oracle audit show --limit 50
+oracle audit violations
+oracle audit verify
+oracle audit verify --json
 ```
 
 ---
