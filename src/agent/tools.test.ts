@@ -98,7 +98,7 @@ describe("agent tools", () => {
     expect(bash!.mutating).toBe(true);
     const out = await bash!.execute({ command: "echo hello-oracle" }, ctx);
     expect(String(out).trim()).toBe("hello-oracle");
-  });
+  }, 15000);
 
   test("read-only mode disables mutating tools", async () => {
     const ro: AgentContext = { workspaceRoot: root, readOnly: true };

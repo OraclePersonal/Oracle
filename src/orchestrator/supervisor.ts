@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -86,9 +87,9 @@ export class ProcessSupervisor {
     service: "memory",
     lockPath: string
   ): Promise<{ endpoint: string; pid: number; port: number } | null> {
-    const STALE_MS = 30_000;
-    for (let waited = 0; waited < 15_000; waited += 300) {
-      await sleep(300);
+    const STALE_MS = 5_000;
+    for (let waited = 0; waited < 3_000; waited += 200) {
+      await sleep(200);
       const existing = await this.readLockFile(service);
       if (existing && (await this.healthCheck(service, existing.endpoint))) {
         return existing;
@@ -96,14 +97,11 @@ export class ProcessSupervisor {
       try {
         const stat = await fs.stat(lockPath);
         if (Date.now() - stat.mtimeMs > STALE_MS) {
-          // Sibling died mid-spawn without cleaning up its lock — break the
-          // deadlock and take over.
           await fs.unlink(lockPath).catch(() => undefined);
           return this.spawnServiceExclusive(service);
         }
       } catch {
-        // Lock file gone but no healthy lockfile appeared yet — sibling
-        // likely failed; fall through and retry the loop.
+        // Lock file gone but no healthy lockfile appeared yet
       }
     }
     return null;
@@ -161,7 +159,7 @@ export class ProcessSupervisor {
   private async healthCheck(service: "memory", endpoint: string): Promise<boolean> {
     try {
       const controller = new AbortController();
-      const timeoutHandle = setTimeout(() => controller.abort(), 3000);
+      const timeoutHandle = setTimeout(() => controller.abort(), 1000);
 
       const url = `${endpoint.replace("/mcp", "")}/health`;
 
@@ -178,44 +176,23 @@ export class ProcessSupervisor {
   }
 
   private async findFreePort(): Promise<number> {
-    // Simple heuristic: start from 9000, try until we find an open port
-    // In production, could use a library like `get-port`
-    for (let port = 9000; port < 10000; port++) {
-      if (!(await this.isPortInUse(port))) {
-        return port;
-      }
-    }
-    throw new Error("No free ports available");
-  }
-
-  private async isPortInUse(port: number): Promise<boolean> {
-    try {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), 100);
-      await fetch(`http://127.0.0.1:${port}/`, {
-        method: "HEAD",
-        signal: controller.signal as AbortSignal,
+    return new Promise<number>((resolve, reject) => {
+      const server = net.createServer();
+      server.unref();
+      server.on("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        server.close(() => resolve(port));
       });
-      return true; // Port is in use if we got any response
-    } catch {
-      return false; // Port is free
-    }
+    });
   }
 
   private async spawnService(service: "memory"): Promise<{ endpoint: string; pid: number; port: number } | null> {
     const port = await this.findFreePort();
     const command = process.env.ORACLE_MEMORY_BIN || "oracle-memory";
 
-    // Resolve how to actually launch the command cross-platform. A bare
-    // ".exe"/POSIX binary spawns directly, but two common install shapes need
-    // special handling — otherwise spawn() fails with no pid on Windows and
-    // orchestration silently falls back to the file adapter even though the
-    // sidecar *is* installed:
-    //   - A Node entry script (oracle-memory ships as dist/index.js): launch it
-    //     with the current node executable so a bare "*.js" path works when
-    //     ORACLE_MEMORY_BIN points straight at the built file.
-    //   - An npm shim (.cmd/.bat/.ps1 on Windows): modern Node refuses to spawn
-    //     these without a shell for security, so route them through a shell.
+    // Resolve how to launch cross-platform (.js entry scripts vs Windows .cmd/.ps1 shims).
     const lower = command.toLowerCase();
     let execCommand = command;
     let execArgs: string[] = [];
@@ -228,7 +205,9 @@ export class ProcessSupervisor {
     }
 
     try {
-      // oracle-memory takes zero CLI args and reads transport/port from env.
+      let spawnError: Error | null = null;
+      let exited = false;
+
       const proc = spawn(execCommand, execArgs, {
         detached: true,
         stdio: "ignore",
@@ -240,36 +219,28 @@ export class ProcessSupervisor {
         },
       });
 
-      // Attach the error handler BEFORE checking pid. spawn() failures (e.g.
-      // binary not found) emit 'error' asynchronously on the next tick — if
-      // no listener is attached yet, Node's default unhandled-'error'
-      // behavior is to throw and crash the whole process. This must be the
-      // very next line after spawn() returns, not after any check that
-      // could throw/return first.
-      proc.on("error", () => {
-        /* ignore spawn errors — surfaced via the health-check retry loop below */
+      proc.on("error", (err) => {
+        spawnError = err;
+      });
+      proc.on("exit", () => {
+        exited = true;
       });
 
       const pid = proc.pid;
       if (!pid) throw new Error("Failed to get process ID");
 
-      // Unref so parent doesn't wait for this process
       proc.unref();
       this.activeProcesses.set(service, { process: proc, startTime: Date.now() });
 
-      // Wait for health check to pass (with retry). The budget must cover a
-      // cold start, not just a warm ping: oracle-memory (Node + SQLite, with
-      // optional vector search) measurably takes ~3s to bind its HTTP server
-      // and answer /health, so the old 2s (10×200ms) window missed it by ~1s
-      // and orchestration fell back to the file adapter *every* time even
-      // though the sidecar was installed and starting fine. 60×200ms = 12s
-      // comfortably covers cold start; this cost is paid only on the very
-      // first spawn — the daemon then persists (idle-timeout) and later CLI
-      // invocations reconnect via the lockfile without re-spawning.
+      // Poll health check with fast fallback if process errors or exits early.
       const endpoint = `http://127.0.0.1:${port}/mcp`;
-      let retries = 60;
+      let retries = 25;
       while (retries > 0) {
-        await sleep(200);
+        await sleep(150);
+        if (spawnError || exited || proc.exitCode !== null) {
+          console.debug(`[orchestrator] ${service} failed or exited early — falling back immediately`);
+          return null;
+        }
         if (await this.healthCheck(service, endpoint)) {
           await this.writeLockFile(service, pid, port);
           return { endpoint, pid, port };
@@ -277,7 +248,6 @@ export class ProcessSupervisor {
         retries--;
       }
 
-      // Health check never passed
       return null;
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

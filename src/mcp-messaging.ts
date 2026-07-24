@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+console.log = console.error;
 import "dotenv/config";
 import os from "node:os";
 import path from "node:path";

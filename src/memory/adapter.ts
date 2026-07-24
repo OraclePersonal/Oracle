@@ -498,23 +498,23 @@ export class MemoryAdapter implements MemoryPort {
         // ── Consolidate ────────────────────────────────────────────
         const consolidateResult = await this.consolidate();
         if (consolidateResult.consolidated > 0) {
-          console.log(`[auto-maintenance] consolidated ${consolidateResult.consolidated} memories`);
+          console.error(`[auto-maintenance] consolidated ${consolidateResult.consolidated} memories`);
         }
 
         // ── Prune + promote ────────────────────────────────────────
         const maintResult = await this.runMaintenance();
         if (maintResult.pruned.length > 0) {
-          console.log(`[auto-maintenance] pruned ${maintResult.pruned.length} stale memories`);
+          console.error(`[auto-maintenance] pruned ${maintResult.pruned.length} stale memories`);
         }
         if (maintResult.promoted.length > 0) {
-          console.log(`[auto-maintenance] promoted ${maintResult.promoted.length} memories to insight`);
+          console.error(`[auto-maintenance] promoted ${maintResult.promoted.length} memories to insight`);
         }
 
         // ── Graph pruning (every N cycles) ─────────────────────────
         if (graphPruneEvery > 0 && this.maintenanceCycle % graphPruneEvery === 0) {
           const graphResult = await this.graphPrune(graphMaxAgeDays);
           if (graphResult.removedEntities > 0 || graphResult.removedEdges > 0) {
-            console.log(`[auto-maintenance] pruned graph: ${graphResult.removedEntities} entities, ${graphResult.removedEdges} edges`);
+            console.error(`[auto-maintenance] pruned graph: ${graphResult.removedEntities} entities, ${graphResult.removedEdges} edges`);
           }
         }
 
@@ -522,7 +522,7 @@ export class MemoryAdapter implements MemoryPort {
         if (reflectEvery > 0 && this.maintenanceCycle % reflectEvery === 0) {
           const reflections = await this.reflect();
           if (reflections.length > 0) {
-            console.log(`[auto-maintenance] generated ${reflections.length} new insights via reflection`);
+            console.error(`[auto-maintenance] generated ${reflections.length} new insights via reflection`);
           }
         }
       } catch (err) {
