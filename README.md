@@ -1,8 +1,5 @@
 # Oracle
 
-<p align="center">
-  <img src="docs/assets/banner.svg" alt="Oracle" width="800"/>
-</p>
 
 > **Oracle is a persistent coordination layer for AI coding agents — not a database, not a replacement for your agent, but a shared teammate that remembers everything and keeps everyone on the same page.**
 
