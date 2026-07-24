@@ -153,6 +153,10 @@ oracle task close <id> -a lead --reject --note "..."  # reject
 oracle task board --created-by lead
 ```
 
+Task lifecycle messages are linked persistently and can be replayed with
+`oracle swarm recover` if a process stops between the task write and message
+delivery.
+
 ---
 
 ### oracle schedule
@@ -174,8 +178,13 @@ oracle schedule remove <id>
 Autonomous multi-agent swarm workflow.
 
 ```bash
-oracle swarm --plan "Build the dashboard feature" \
-  --agents "lead:planner,fetcher:builder,tester:tester"
+oracle swarm create "Build the dashboard feature" \
+  --architect lead --coder builder --reviewer reviewer --qa tester
+oracle swarm propose <workflow-id> builder "Implement the dashboard"
+oracle swarm vote <proposal-id> reviewer approve "review passed"
+oracle swarm vote <proposal-id> tester approve "tests passed"
+oracle swarm status
+oracle swarm recover
 ```
 
 ---

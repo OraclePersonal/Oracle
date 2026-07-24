@@ -28,6 +28,27 @@ export interface TaskNote {
   text: string;
 }
 
+export type TaskCoordinationEventType =
+  | "task_assigned"
+  | "task_submitted"
+  | "task_approved"
+  | "task_rejected"
+  | "consensus_decided";
+
+export interface TaskCoordinationEvent {
+  id: string;
+  type: TaskCoordinationEventType;
+  from: string;
+  to: string;
+  subject: string;
+  body: string;
+  status: "pending" | "sent";
+  createdAt: string;
+  sentAt?: string;
+  messageId?: string;
+  workflowId?: string;
+}
+
 export interface TaskRecord {
   id: string;
   title: string;
@@ -38,6 +59,9 @@ export interface TaskRecord {
   checklist: ChecklistItem[];
   notes: TaskNote[];
   proposals: TaskProposal[];
+  messageIds: string[];
+  coordinationEvents: TaskCoordinationEvent[];
+  workflowId?: string;
   parentId?: string;
   createdAt: string;
   updatedAt: string;
@@ -70,6 +94,19 @@ export class TaskStore {
     return `${ts}-${crypto.randomBytes(4).toString("hex")}`;
   }
 
+  private newCoordinationEvent(
+    task: Pick<TaskRecord, "id" | "workflowId">,
+    event: Omit<TaskCoordinationEvent, "id" | "status" | "createdAt" | "workflowId">
+  ): TaskCoordinationEvent {
+    return {
+      ...event,
+      id: `event-${crypto.randomBytes(8).toString("hex")}`,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      workflowId: task.workflowId
+    };
+  }
+
   async create(opts: {
     title: string;
     description?: string;
@@ -77,6 +114,7 @@ export class TaskStore {
     assignee: string;
     checklist?: string[];
     parentId?: string;
+    workflowId?: string;
   }): Promise<TaskRecord> {
     await fs.mkdir(this.dir(), { recursive: true });
     const now = new Date().toISOString();
@@ -90,10 +128,24 @@ export class TaskStore {
       checklist: (opts.checklist ?? []).map((text) => ({ text, done: false })),
       notes: [],
       proposals: [],
+      messageIds: [],
+      coordinationEvents: [],
+      workflowId: opts.workflowId,
       parentId: opts.parentId,
       createdAt: now,
       updatedAt: now
     };
+    record.coordinationEvents.push(this.newCoordinationEvent(record, {
+      type: "task_assigned",
+      from: record.createdBy,
+      to: record.assignee,
+      subject: `Task assigned: ${record.title}`,
+      body: `New task ${record.id}: ${record.title}${record.description ? `\n${record.description}` : ""}${
+        record.checklist.length
+          ? `\nChecklist:\n- ${record.checklist.map((item) => item.text).join("\n- ")}`
+          : ""
+      }\nUse oracle_task_update to track progress, oracle_task_submit when done.`
+    }));
     await this.writeAtomic(this.filePath(record.id), record);
     return record;
   }
@@ -104,6 +156,8 @@ export class TaskStore {
       if (!Array.isArray(task.checklist)) task.checklist = [];
       if (!Array.isArray(task.notes)) task.notes = [];
       if (!Array.isArray(task.proposals)) task.proposals = [];
+      if (!Array.isArray(task.messageIds)) task.messageIds = [];
+      if (!Array.isArray(task.coordinationEvents)) task.coordinationEvents = [];
       return task;
     } catch {
       return null;
@@ -122,13 +176,20 @@ export class TaskStore {
     return tasks.filter((t): t is TaskRecord => t !== null);
   }
 
-  async list(opts: { assignee?: string; createdBy?: string; status?: TaskStatus; activeOnly?: boolean } = {}): Promise<TaskRecord[]> {
+  async list(opts: {
+    assignee?: string;
+    createdBy?: string;
+    status?: TaskStatus;
+    activeOnly?: boolean;
+    workflowId?: string;
+  } = {}): Promise<TaskRecord[]> {
     const all = await this.readAll();
     return all
       .filter((t) => (opts.assignee ? t.assignee === opts.assignee : true))
       .filter((t) => (opts.createdBy ? t.createdBy === opts.createdBy : true))
       .filter((t) => (opts.status ? t.status === opts.status : true))
       .filter((t) => (opts.activeOnly ? ACTIVE_STATUSES.includes(t.status) : true))
+      .filter((t) => (opts.workflowId ? t.workflowId === opts.workflowId : true))
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   }
 
@@ -170,6 +231,13 @@ export class TaskStore {
     }
     task.status = "review";
     task.notes.push({ ts: new Date().toISOString(), agent, text: `Submitted for review: ${summary}` });
+    task.coordinationEvents.push(this.newCoordinationEvent(task, {
+      type: "task_submitted",
+      from: agent,
+      to: task.createdBy,
+      subject: `Task ready for review: ${task.title}`,
+      body: `Task ${task.id} submitted by ${agent}.\n${summary}\nUse oracle_task_get to see the checklist and notes, then oracle_task_close to approve or send back.`
+    }));
     task.updatedAt = new Date().toISOString();
     await this.writeAtomic(this.filePath(id), task);
     return task;
@@ -185,6 +253,15 @@ export class TaskStore {
       agent,
       text: approved ? `Approved and closed.${note ? ` ${note}` : ""}` : `Sent back: ${note ?? "needs more work"}`
     });
+    task.coordinationEvents.push(this.newCoordinationEvent(task, {
+      type: approved ? "task_approved" : "task_rejected",
+      from: agent,
+      to: task.assignee,
+      subject: approved ? `Task approved: ${task.title}` : `Task sent back: ${task.title}`,
+      body: approved
+        ? `Task ${task.id} approved and closed.${note ? ` ${note}` : ""}`
+        : `Task ${task.id} needs more work: ${note ?? "see notes"}`
+    }));
     task.updatedAt = new Date().toISOString();
     await this.writeAtomic(this.filePath(id), task);
     return task;
@@ -220,11 +297,59 @@ export class TaskStore {
     for (const task of await this.readAll()) {
       const proposal = task.proposals.find((candidate) => candidate.id === proposalId);
       if (!proposal) continue;
+      const previousStatus = proposal.status;
       const updated = new ConsensusEngine().castVote(proposal, agentId, decision, justification);
+      if (previousStatus === "pending" && updated.status !== "pending") {
+        task.coordinationEvents.push(this.newCoordinationEvent(task, {
+          type: "consensus_decided",
+          from: agentId,
+          to: task.createdBy,
+          subject: `Consensus ${updated.status}: ${task.title}`,
+          body: `Proposal ${updated.id} for task ${task.id} was ${updated.status} after ${updated.votes.length} vote(s).\n${updated.proposedAction}`
+        }));
+      }
       task.updatedAt = new Date().toISOString();
       await this.writeAtomic(this.filePath(task.id), task);
       return { task, proposal: updated };
     }
     return null;
+  }
+
+  /** Add or replace a proposal while preserving TaskStore as the source of truth. */
+  async upsertProposal(taskId: string, proposal: TaskProposal): Promise<TaskRecord> {
+    const task = await this.get(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    const normalized = { ...proposal, taskId, votes: [...proposal.votes] };
+    const index = task.proposals.findIndex((candidate) => candidate.id === proposal.id);
+    if (index >= 0) task.proposals[index] = normalized;
+    else task.proposals.push(normalized);
+    task.updatedAt = new Date().toISOString();
+    await this.writeAtomic(this.filePath(taskId), task);
+    return task;
+  }
+
+  async pendingCoordinationEvents(taskId?: string): Promise<Array<{ task: TaskRecord; event: TaskCoordinationEvent }>> {
+    const tasks = taskId
+      ? [await this.get(taskId)].filter((task): task is TaskRecord => task !== null)
+      : await this.readAll();
+    return tasks.flatMap((task) =>
+      task.coordinationEvents
+        .filter((event) => event.status === "pending")
+        .map((event) => ({ task, event }))
+    );
+  }
+
+  async markCoordinationEventSent(taskId: string, eventId: string, messageId: string): Promise<TaskRecord> {
+    const task = await this.get(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    const event = task.coordinationEvents.find((candidate) => candidate.id === eventId);
+    if (!event) throw new Error(`Coordination event not found: ${eventId}`);
+    event.status = "sent";
+    event.sentAt = new Date().toISOString();
+    event.messageId = messageId;
+    if (!task.messageIds.includes(messageId)) task.messageIds.push(messageId);
+    task.updatedAt = new Date().toISOString();
+    await this.writeAtomic(this.filePath(taskId), task);
+    return task;
   }
 }

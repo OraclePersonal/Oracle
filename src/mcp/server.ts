@@ -12,6 +12,7 @@ import type { AgentService } from "../agent/service.js";
 import type { MessageStore } from "../messaging/store.js";
 import type { AgentRegistry } from "../messaging/registry.js";
 import type { TaskStore } from "../tasks/store.js";
+import type { CoordinationService } from "../coordination/service.js";
 import { registerMessagingTools } from "./messagingTools.js";
 import { registerTaskTools } from "./taskTools.js";
 import { registerAgentTools } from "./tools/agent.js";
@@ -40,6 +41,7 @@ interface OracleServerDependencies {
   messages: MessageStore;
   agentRegistry: AgentRegistry;
   tasks: TaskStore;
+  coordination?: CoordinationService;
   providerChecks?: typeof checkProvider;
   agent?: AgentService;
   agentUnavailableReason?: string;
@@ -71,6 +73,7 @@ export function registerOracleTools(deps: OracleServerDependencies): void {
     messages,
     agentRegistry,
     tasks,
+    coordination,
     providerChecks = checkProvider,
     agent,
     agentUnavailableReason,
@@ -106,7 +109,7 @@ export function registerOracleTools(deps: OracleServerDependencies): void {
   // ── Inter-agent messaging & tasks ─────────────────────────────────
   // (already separated — these register in their own category files)
   registerMessagingTools(server, messages, agentRegistry);
-  registerTaskTools(server, tasks, messages, agentRegistry);
+  registerTaskTools(server, tasks, messages, agentRegistry, coordination);
 
   // History tools (oracle_history_*)
   registerHistoryTools(server);

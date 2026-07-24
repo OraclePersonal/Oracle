@@ -35,6 +35,8 @@ try {
   ]);
   const workflowId = created.match(/swarm_[a-z0-9_]+/i)?.[0];
   if (!workflowId) throw new Error(`Could not parse workflow id:\n${created}`);
+  const taskId = created.match(/task:\s+([a-z0-9-]+)/i)?.[1];
+  if (!taskId) throw new Error(`Could not parse linked task id:\n${created}`);
 
   const proposalOutput = run([
     "swarm", "propose", workflowId, "coder-1", "Ship the stabilization change"
@@ -51,6 +53,22 @@ try {
   const status = run(["swarm", "status"]);
   if (!status.includes(workflowId) || !status.includes("approved")) {
     throw new Error(`Swarm state did not persist across CLI processes:\n${status}`);
+  }
+
+  const recovery = run(["swarm", "recover"]);
+  if (!recovery.includes("messages:  0 delivered")) {
+    throw new Error(`Settled workflow recovery was not idempotent:\n${recovery}`);
+  }
+
+  const [workflow, task] = await Promise.all([
+    fs.readFile(path.join(homeDir, "swarms", `${workflowId}.json`), "utf8").then(JSON.parse),
+    fs.readFile(path.join(homeDir, "tasks", `${taskId}.json`), "utf8").then(JSON.parse)
+  ]);
+  if (workflow.primaryTaskId !== taskId || task.workflowId !== workflowId) {
+    throw new Error("Swarm workflow and task were not linked.");
+  }
+  if (!task.messageIds?.length || workflow.messageIds?.[0] !== task.messageIds[0]) {
+    throw new Error("Task and workflow did not retain their linked messages.");
   }
 
   const oracleDir = path.join(workspaceRoot, ".oracle");

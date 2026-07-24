@@ -4,6 +4,7 @@ import { serializeOracleError } from "../errors.js";
 import type { TaskStore, TaskStatus } from "../tasks/store.js";
 import type { MessageStore } from "../messaging/store.js";
 import type { AgentRegistry } from "../messaging/registry.js";
+import { CoordinationService } from "../coordination/service.js";
 
 function success(text: string, structuredContent: Record<string, unknown>) {
   return { content: [{ type: "text" as const, text }], structuredContent };
@@ -32,6 +33,7 @@ export const TASK_INSTRUCTIONS = [
   "Before reporting done: call oracle_task_submit. It blocks if any checklist item is unchecked, then auto-notifies the creator.",
   "As a reviewer: oracle_task_get shows the full checklist and notes; oracle_task_close with approved=true finishes it, or approved=false sends it back.",
   "For decisions requiring multiple reviewers: create a persistent proposal with oracle_task_propose, then vote with oracle_task_vote.",
+  "If a process stopped between a task update and notification delivery, call oracle_coordination_recover. It safely replays pending linked messages without duplicates.",
   "Use oracle_task_list to see open work. Leads use oracle_task_board for an ASCII board view."
 ].join(" ");
 
@@ -78,7 +80,13 @@ export function formatTaskBoard(
   ].join("\n");
 }
 
-export function registerTaskTools(server: McpServer, tasks: TaskStore, messages: MessageStore, registry: AgentRegistry): void {
+export function registerTaskTools(
+  server: McpServer,
+  tasks: TaskStore,
+  messages: MessageStore,
+  registry: AgentRegistry,
+  coordination: CoordinationService = new CoordinationService(tasks, messages)
+): void {
   server.registerTool(
     "oracle_task_board",
     {
@@ -123,15 +131,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     },
     async ({ title, description, createdBy, assignee, checklist, parentId }) => {
       try {
-        const task = await tasks.create({ title, description, createdBy, assignee, checklist, parentId });
-        await messages.send({
-          from: createdBy,
-          to: assignee,
-          subject: `Task assigned: ${title}`,
-          body: `New task ${task.id}: ${title}${description ? `\n${description}` : ""}${
-            checklist?.length ? `\nChecklist:\n- ${checklist.join("\n- ")}` : ""
-          }\nUse oracle_task_update to track progress, oracle_task_submit when done.`
-        });
+        const task = await coordination.createTask({ title, description, createdBy, assignee, checklist, parentId });
         return success(`Created ${task.id}, assigned to ${assignee}.`, { task: task as unknown as Record<string, unknown> });
       } catch (error) { return failure(error); }
     }
@@ -236,13 +236,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     },
     async ({ id, agent, summary }) => {
       try {
-        const task = await tasks.submitForReview(id, agent, summary);
-        await messages.send({
-          from: agent,
-          to: task.createdBy,
-          subject: `Task ready for review: ${task.title}`,
-          body: `Task ${task.id} submitted by ${agent}.\n${summary}\nUse oracle_task_get to see the checklist and notes, then oracle_task_close to approve or send back.`
-        });
+        const task = await coordination.submitTask(id, agent, summary);
         return success(`Submitted ${id} for review; ${task.createdBy} notified.`, { task: task as unknown as Record<string, unknown> });
       } catch (error) { return failure(error); }
     }
@@ -263,15 +257,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     },
     async ({ id, agent, approved, note }) => {
       try {
-        const task = await tasks.close(id, agent, approved, note);
-        await messages.send({
-          from: agent,
-          to: task.assignee,
-          subject: approved ? `Task approved: ${task.title}` : `Task sent back: ${task.title}`,
-          body: approved
-            ? `Task ${task.id} approved and closed.${note ? ` ${note}` : ""}`
-            : `Task ${task.id} needs more work: ${note ?? "see notes"}`
-        });
+        const task = await coordination.closeTask(id, agent, approved, note);
         return success(approved ? `Closed ${id} as done.` : `Sent ${id} back to in_progress.`, {
           task: task as unknown as Record<string, unknown>
         });
@@ -319,7 +305,7 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
     },
     async ({ proposalId, agentId, decision, justification }) => {
       try {
-        const result = await tasks.castProposalVote(proposalId, agentId, decision, justification);
+        const result = await coordination.castTaskProposalVote(proposalId, agentId, decision, justification);
         if (!result) return failure(new Error(`Proposal not found: ${proposalId}`));
         const updated = result.proposal;
         const activeVotes = updated.votes.filter((vote) => vote.decision !== "abstain").length;
@@ -334,6 +320,27 @@ export function registerTaskTools(server: McpServer, tasks: TaskStore, messages:
           voteCount: updated.votes.length,
           taskId: result.task.id
         });
+      } catch (error) { return failure(error); }
+    }
+  );
+
+  server.registerTool(
+    "oracle_coordination_recover",
+    {
+      title: "Recover Coordination Workflows",
+      description:
+        "Reconcile persistent workflow/task/proposal links and replay pending task notifications idempotently after interruption.",
+      inputSchema: {}
+    },
+    async () => {
+      try {
+        const report = await coordination.recover();
+        const text = [
+          `Recovery complete: ${report.messagesDelivered} message(s) delivered.`,
+          `${report.workflowsScanned} workflow(s) scanned, ${report.workflowsRepaired} repaired, ${report.tasksCreated} task(s) recreated.`,
+          report.errors.length ? `${report.errors.length} workflow error(s).` : "No recovery errors."
+        ].join(" ");
+        return success(text, { report: report as unknown as Record<string, unknown> });
       } catch (error) { return failure(error); }
     }
   );

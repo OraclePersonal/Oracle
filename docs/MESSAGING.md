@@ -17,7 +17,8 @@ network — just atomic JSON files.
   `claude-main`, `codex-worker`). Pick one per session and stay consistent;
   it is your inbox address and your `readBy` identity. There is no registry —
   names exist by being used.
-- **Message** — `{ id, ts, from, to, subject?, body, replyTo?, readBy[] }`.
+- **Message** — `{ id, ts, from, to, subject?, body, replyTo?, taskId?,
+  workflowId?, coordinationEventId?, readBy[] }`.
 - **Broadcast** — `to: "*"` reaches every agent except the sender.
 - **Read state is per-agent** — acking as `codex` doesn't mark it read for
   `gemini`. Broadcasts stay "unread" for each agent until *they* ack.
@@ -109,6 +110,9 @@ gate, and automatic reporting, all riding on the same message bus.
 | `oracle_task_checklist` | `oracle task check <id> <index> [--undo]` | Check off (or uncheck) one verification item by its 0-based index |
 | `oracle_task_submit` | `oracle task submit <id> -a me --summary "..."` | **Verification gate.** Fails if any checklist item is unchecked. On success, auto-messages the task creator — you never have to separately say "I'm done" |
 | `oracle_task_close` | `oracle task close <id> -a me [--reject] [--note "..."]` | Reviewer's call: approve → `done`, or reject → bounces to `in_progress` with your note. Auto-messages the assignee either way |
+| `oracle_task_propose` | `oracle swarm propose <workflow-id> <agent-id> "<action>"` | Persist a consensus proposal in TaskStore and project it into the linked Swarm workflow |
+| `oracle_task_vote` | `oracle swarm vote <proposal-id> <agent-id> approve\|reject\|abstain ["reason"]` | Persist/replace an agent vote and notify the task creator once consensus resolves |
+| `oracle_coordination_recover` | `oracle swarm recover` | Reconcile workflow/task/proposal links and replay pending lifecycle messages without duplicates |
 
 **Workflow, as a lead breaking down work:**
 ```
@@ -205,12 +209,20 @@ oracle setup-mcp --client claude-code   # register MCP server (per workspace)
 ```
 
 Store location: `~/.oracle/messages/*.json` (messages), `~/.oracle/tasks/*.json`
-(tasks), and `~/.oracle/dead-letter/*.json` (pruned messages) — safe to
+(tasks), `~/.oracle/swarms/*.json` (workflows), and
+`~/.oracle/dead-letter/*.json` (pruned messages) — safe to
 inspect or delete old entries by hand; each file is one record, writes are
 atomic (tmp+rename).
 
 ## Resilience features
 
+- **Durable coordination outbox**: each task transition persists a pending
+  event before message delivery. The message id is deterministic from
+  `taskId + coordinationEventId`, so recovery after a crash is idempotent.
+  Run `oracle swarm recover` (CLI) or `oracle_coordination_recover` (MCP).
+- **Workflow reconciliation**: recovery links legacy SwarmStore records to a
+  primary Task, imports their proposals into persistent TaskStore consensus,
+  and refreshes linked message ids and recovery metadata.
 - **I/O retry**: all message store operations (`writeAtomic`, `readAll`, `get`)
   retry on transient system errors (EBUSY, EIO, ENOSPC, ETIMEDOUT, …) with
   exponential backoff + jitter. Logical errors (ENOENT, JSON parse failures)

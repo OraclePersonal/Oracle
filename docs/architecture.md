@@ -21,14 +21,15 @@ under `~/.oracle/`. No database, no daemon.
 | Component | Responsibility | Source |
 |---|---|---|
 | **CLI** | Commander-based CLI: `ask`, `agent`, `memory`, `wiki`, `docs`, `web`, `msg`, `task`, `identity`, `github`, `session`, `skill` | `src/cli.ts` |
-| **MCP Server** | Stdio MCP server exposing 60 tools | `src/mcp/server.ts`, `src/mcp/runtime.ts` |
-| **Standalone coordination server** | `oracle-msg-mcp` binary — just `oracle_msg_*` + `oracle_task_*` (14 tools), no provider/memory/agent stack | `src/mcp-messaging.ts` |
+| **MCP Server** | Stdio MCP server exposing Oracle's full tool surface | `src/mcp/server.ts`, `src/mcp/runtime.ts` |
+| **Standalone coordination server** | `oracle-msg-mcp` binary — 21 messaging, task, consensus, and recovery tools without the provider/memory/agent stack | `src/mcp-messaging.ts` |
 | **ConsultService** | Core loop: load files → build context (memory + docs + web) → call provider → answer | `src/core/consult.ts` |
 | **Provider layer** | Codex CLI, Anthropic, OpenAI, OpenCode | `src/providers/` |
 | **Agent sandbox** | Autonomous file read/write/edit loop with a bash tool for shell commands. Every mutation hashed and logged to an audit trail. | `src/agent/` |
 | **Memory system** | BM25 + vector search + entity knowledge graph + auto-consolidation + background maintenance | `src/memory/` |
 | **Messaging bus** | Atomic file-backed message store, presence registry, real-time watcher, Stop-hook wake-up | `src/messaging/` |
 | **Task tracker** | Plan/assign/verify/report on top of the messaging bus; checklist-gated review | `src/tasks/` |
+| **Coordination service** | Durable Task↔Message outbox, Swarm linkage, consensus reconciliation, recovery | `src/coordination/` |
 | **Docs knowledge base** | BM25-indexed local doc retrieval | `src/docs/` |
 | **Web providers** | Brave, Tavily, Firecrawl, AgentQL with auto-fallback | `src/web/` |
 | **Skills** | Built-in + custom skill loading | `src/skills/` |
@@ -43,6 +44,14 @@ Every `oracle-mcp` process and every `oracle msg`/`oracle task` CLI call on
 one machine shares the same file-backed bus at `~/.oracle/`. There is no
 server to run and no network hop — writes are atomic (tmp file + rename), so
 concurrent readers never see a partial message.
+
+Coordination 0.1.0 connects those stores through a durable outbox. A task
+transition first persists a pending coordination event, then delivers a
+message carrying `taskId`, `workflowId`, and `coordinationEventId`. Delivery
+uses a deterministic message id, so `oracle swarm recover` or
+`oracle_coordination_recover` can replay an interrupted transition without
+duplicating the message. Swarm workflows persist their primary task,
+consensus projection, linked messages, and recovery metadata.
 
 **Wake-up has four tiers**, weakest to strongest:
 
@@ -85,6 +94,7 @@ for the full lifecycle.
 ~/.oracle/
 ├── messages/           # inter-agent message store (atomic JSON per message)
 ├── tasks/               # task tracker (atomic JSON per task)
+├── swarms/              # workflow state + Task/Message/consensus links
 ├── agents/               # presence registry (one JSON per registered agent)
 ├── memory/               # facts · insights · wiki · entity graph
 ├── skills/                # custom skill definitions

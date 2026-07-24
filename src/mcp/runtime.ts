@@ -11,6 +11,8 @@ import { ProfileStore } from "../identity/profile.js";
 import { MessageStore } from "../messaging/store.js";
 import { AgentRegistry } from "../messaging/registry.js";
 import { TaskStore } from "../tasks/store.js";
+import { SwarmStore } from "../orchestrator/swarmStore.js";
+import { CoordinationService } from "../coordination/service.js";
 import { MESSAGING_INSTRUCTIONS } from "./messagingTools.js";
 import { TASK_INSTRUCTIONS } from "./taskTools.js";
 import { OrchestratorFactory } from "../orchestrator/factory.js";
@@ -79,6 +81,10 @@ export async function createOracleMcpServer(
     agentUnavailableReason = error instanceof Error ? error.message : String(error);
   }
 
+  const messages = new MessageStore(homeDir);
+  const tasks = new TaskStore(homeDir);
+  const coordination = new CoordinationService(tasks, messages, new SwarmStore(homeDir));
+
   registerOracleTools({
     server,
     service: new ConsultService(createProvider(config.provider)),
@@ -90,9 +96,10 @@ export async function createOracleMcpServer(
     memory,
     globalMemory,
     profile: new ProfileStore(homeDir),
-    messages: new MessageStore(homeDir),
+    messages,
     agentRegistry: new AgentRegistry(homeDir),
-    tasks: new TaskStore(homeDir),
+    tasks,
+    coordination,
     agent,
     agentUnavailableReason
   });

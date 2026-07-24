@@ -115,4 +115,31 @@ describe("TaskStore", () => {
     expect(second?.proposal.status).toBe("approved");
     expect(second?.proposal.votes.map((vote) => vote.agentId)).toEqual(["reviewer", "qa"]);
   });
+
+  test("persists task-message outbox events and linked message ids", async () => {
+    const task = await store.create({
+      title: "Coordinate release",
+      createdBy: "lead",
+      assignee: "builder",
+      workflowId: "swarm_1234_abcd"
+    });
+    const pending = await new TaskStore(home).pendingCoordinationEvents(task.id);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].event).toMatchObject({
+      type: "task_assigned",
+      status: "pending",
+      workflowId: "swarm_1234_abcd"
+    });
+
+    const updated = await store.markCoordinationEventSent(
+      task.id,
+      pending[0].event.id,
+      "coord-message-1"
+    );
+    expect(updated.messageIds).toEqual(["coord-message-1"]);
+    expect(updated.coordinationEvents[0]).toMatchObject({
+      status: "sent",
+      messageId: "coord-message-1"
+    });
+  });
 });

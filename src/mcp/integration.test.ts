@@ -92,6 +92,7 @@ describe("Oracle MCP tools", () => {
     expect(tools).toContain("oracle_task_close");
     expect(tools).toContain("oracle_task_propose");
     expect(tools).toContain("oracle_task_vote");
+    expect(tools).toContain("oracle_coordination_recover");
   });
 
   test("keeps project and global memory scopes separate", async () => {
@@ -360,6 +361,28 @@ describe("Oracle MCP tools", () => {
       status: "approved",
       voteCount: 2
     });
+  });
+
+  test("coordination recovery delivers pending task messages idempotently", async () => {
+    const task = await new TaskStore(root).create({
+      title: "Recover MCP notification",
+      createdBy: "lead",
+      assignee: "recovery-worker"
+    });
+
+    const first = await client.callTool({ name: "oracle_coordination_recover", arguments: {} });
+    const second = await client.callTool({ name: "oracle_coordination_recover", arguments: {} });
+    const firstReport = (first.structuredContent as { report: { messagesDelivered: number } }).report;
+    const secondReport = (second.structuredContent as { report: { messagesDelivered: number } }).report;
+    expect(firstReport.messagesDelivered).toBe(1);
+    expect(secondReport.messagesDelivered).toBe(0);
+
+    const inbox = await client.callTool({
+      name: "oracle_msg_inbox",
+      arguments: { agent: "recovery-worker" }
+    });
+    const messages = (inbox.structuredContent as { messages: Array<{ taskId?: string }> }).messages;
+    expect(messages.filter((message) => message.taskId === task.id)).toHaveLength(1);
   });
 
   test("inbox wait:true returns immediately when a message is already queued", async () => {

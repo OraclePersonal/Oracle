@@ -30,6 +30,8 @@ import { DEFAULT_SYSTEM_PROMPT } from "./context/bundle.js";
 import { ProfileStore } from "./identity/profile.js";
 import { MessageStore } from "./messaging/store.js";
 import { TaskStore } from "./tasks/store.js";
+import { CoordinationService } from "./coordination/service.js";
+import { SwarmStore } from "./orchestrator/swarmStore.js";
 import * as gh from "./github/gh.js";
 import type { PRFile } from "./github/types.js";
 import { listDocs, searchDocs, addDoc, removeDoc } from "./docs/reader.js";
@@ -732,6 +734,17 @@ function printTask(t: import("./tasks/store.js").TaskRecord): void {
     ? "\n  " + t.checklist.map((c, i) => `${i}: [${c.done ? "x" : " "}] ${c.text}`).join("\n  ")
     : "";
   console.log(`${t.id} | ${t.status} | ${t.title} | ${t.createdBy} -> ${t.assignee}${checklist}`);
+  if (t.workflowId) console.log(`  workflow: ${t.workflowId}`);
+  if (t.messageIds.length) console.log(`  messages: ${t.messageIds.join(", ")}`);
+}
+
+function makeCoordination(includeSwarms: boolean = false): CoordinationService {
+  const root = homeDir();
+  return new CoordinationService(
+    new TaskStore(root),
+    new MessageStore(root),
+    includeSwarms ? new SwarmStore(root) : undefined
+  );
 }
 
 taskCmd
@@ -744,21 +757,13 @@ taskCmd
   .option("--checklist <items...>", "Verification steps required before submit")
   .option("--parent <id>", "Parent task id")
   .action(async (options) => {
-    const tasks = new TaskStore(homeDir());
-    const messages = new MessageStore(homeDir());
-    const task = await tasks.create({
+    const task = await makeCoordination().createTask({
       title: options.title,
       description: options.description,
       createdBy: options.createdBy,
       assignee: options.assignee,
       checklist: options.checklist,
       parentId: options.parent
-    });
-    await messages.send({
-      from: options.createdBy,
-      to: options.assignee,
-      subject: `Task assigned: ${task.title}`,
-      body: `New task ${task.id}: ${task.title}${task.description ? `\n${task.description}` : ""}`
     });
     console.log(`Created ${task.id}, assigned to ${task.assignee}.`);
   });
@@ -828,16 +833,8 @@ taskCmd
   .requiredOption("-a, --agent <name>", "Your agent name")
   .requiredOption("--summary <text>", "What you did, for the reviewer")
   .action(async (id, options) => {
-    const tasks = new TaskStore(homeDir());
-    const messages = new MessageStore(homeDir());
     try {
-      const task = await tasks.submitForReview(id, options.agent, options.summary);
-      await messages.send({
-        from: options.agent,
-        to: task.createdBy,
-        subject: `Task ready for review: ${task.title}`,
-        body: `Task ${task.id} submitted by ${options.agent}.\n${options.summary}`
-      });
+      const task = await makeCoordination().submitTask(id, options.agent, options.summary);
       console.log(`Submitted ${id} for review; ${task.createdBy} notified.`);
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
@@ -853,18 +850,8 @@ taskCmd
   .option("--reject", "Reject instead of approve", false)
   .option("--note <text>", "Reason, especially when rejecting")
   .action(async (id, options) => {
-    const tasks = new TaskStore(homeDir());
-    const messages = new MessageStore(homeDir());
     const approved = !options.reject;
-    const task = await tasks.close(id, options.agent, approved, options.note);
-    await messages.send({
-      from: options.agent,
-      to: task.assignee,
-      subject: approved ? `Task approved: ${task.title}` : `Task sent back: ${task.title}`,
-      body: approved
-        ? `Task ${task.id} approved and closed.${options.note ? ` ${options.note}` : ""}`
-        : `Task ${task.id} needs more work: ${options.note ?? "see notes"}`
-    });
+    await makeCoordination().closeTask(id, options.agent, approved, options.note);
     console.log(approved ? `Closed ${id} as done.` : `Sent ${id} back to in_progress.`);
   });
 
@@ -977,7 +964,6 @@ schedCmd
 const swarmCmd = program.command("swarm").description("Autonomous multi-agent swarm workflow");
 
 async function makeSwarmStore(): Promise<import("./orchestrator/swarmStore.js").SwarmStore> {
-  const { SwarmStore } = await import("./orchestrator/swarmStore.js");
   return new SwarmStore(homeDir());
 }
 
@@ -990,17 +976,14 @@ swarmCmd
   .requiredOption("-r, --reviewer <id>", "Reviewer agent id")
   .requiredOption("-q, --qa <id>", "QA agent id")
   .action(async (title: string, options) => {
-    const { SwarmOrchestrator } = await import("./orchestrator/swarm.js");
-    const orch = new SwarmOrchestrator();
-    const store = await makeSwarmStore();
-    const workflow = orch.createSwarmWorkflow(title, [
+    const { workflow, task } = await makeCoordination(true).createSwarmWorkflow(title, [
       { id: options.architect, name: options.architect, role: "architect", capabilities: [] },
       { id: options.coder, name: options.coder, role: "coder", capabilities: [] },
       { id: options.reviewer, name: options.reviewer, role: "reviewer", capabilities: [] },
       { id: options.qa, name: options.qa, role: "qa", capabilities: [] },
     ]);
-    await store.save(workflow);
     console.log(`Swarm workflow created: ${workflow.id}`);
+    console.log(`  task:     ${task.id}`);
     console.log(`  title:    ${title}`);
     console.log(`  architect: ${options.architect}`);
     console.log(`  coder:    ${options.coder}`);
@@ -1015,19 +998,19 @@ swarmCmd
   .argument("<agent-id>", "Proposing agent id")
   .argument("<action>", "Proposed action description")
   .action(async (workflowId: string, agentId: string, action: string) => {
-    const store = await makeSwarmStore();
-    const wf = await store.get(workflowId);
-    if (!wf) { console.error(`Workflow not found: ${workflowId}`); process.exitCode = 1; return; }
-    const { SwarmOrchestrator } = await import("./orchestrator/swarm.js");
-    const orch = new SwarmOrchestrator();
-    const proposal = orch.initiateProposal(wf, workflowId, agentId, action);
-    await store.save(wf);
-    console.log(`Proposal submitted: ${proposal.id}`);
-    console.log(`  proposer:  ${agentId}`);
-    console.log(`  action:    ${action}`);
-    console.log(`  status:    ${proposal.status}`);
-    console.log(`  quorum:    ${proposal.requiredQuorum}`);
-    console.log(`  threshold: ${(proposal.approvalThresholdRatio * 100).toFixed(0)}%`);
+    try {
+      const { task, proposal } = await makeCoordination(true).proposeSwarmAction(workflowId, agentId, action);
+      console.log(`Proposal submitted: ${proposal.id}`);
+      console.log(`  task:      ${task.id}`);
+      console.log(`  proposer:  ${agentId}`);
+      console.log(`  action:    ${action}`);
+      console.log(`  status:    ${proposal.status}`);
+      console.log(`  quorum:    ${proposal.requiredQuorum}`);
+      console.log(`  threshold: ${(proposal.approvalThresholdRatio * 100).toFixed(0)}%`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
   });
 
 swarmCmd
@@ -1043,18 +1026,14 @@ swarmCmd
       process.exitCode = 1;
       return;
     }
-    const store = await makeSwarmStore();
-    const stored = await store.findProposal(proposalId);
-    if (!stored) { console.error(`Proposal not found: ${proposalId}`); process.exitCode = 1; return; }
-    const { SwarmOrchestrator } = await import("./orchestrator/swarm.js");
-    const orch = new SwarmOrchestrator();
-    const updated = orch.reviewProposal(
-      stored.proposal,
+    const result = await makeCoordination(true).voteOnSwarmProposal(
+      proposalId,
       agentId,
       decision as import("./tasks/consensus.js").VoteDecision,
       justification ?? ""
     );
-    await store.save(stored.workflow);
+    if (!result) { console.error(`Proposal not found: ${proposalId}`); process.exitCode = 1; return; }
+    const updated = result.proposal;
     console.log(`Vote recorded: ${agentId} → ${decision}`);
     console.log(`  proposal:  ${proposalId}`);
     console.log(`  votes:     ${updated.votes.length}`);
@@ -1066,6 +1045,22 @@ swarmCmd
   });
 
 swarmCmd
+  .command("recover")
+  .description("Recover interrupted workflows and replay pending linked messages without duplicates")
+  .action(async () => {
+    const report = await makeCoordination(true).recover();
+    console.log(`Recovery complete.`);
+    console.log(`  workflows: ${report.workflowsScanned} scanned, ${report.workflowsRepaired} repaired`);
+    console.log(`  tasks:     ${report.tasksCreated} recreated`);
+    console.log(`  proposals: ${report.proposalsReconciled} reconciled`);
+    console.log(`  messages:  ${report.messagesDelivered} delivered`);
+    if (report.errors.length) {
+      for (const error of report.errors) console.log(`  error ${error.workflowId}: ${error.error}`);
+      process.exitCode = 1;
+    }
+  });
+
+swarmCmd
   .command("status")
   .description("Show active swarm workflows and their proposals")
   .action(async () => {
@@ -1073,6 +1068,7 @@ swarmCmd
     if (!workflows.length) { console.log("No active swarm workflows."); return; }
     for (const wf of workflows) {
       console.log(`\nWorkflow: ${wf.id}  (${wf.title})`);
+      console.log(`  status: ${wf.status}${wf.primaryTaskId ? `  task: ${wf.primaryTaskId}` : ""}`);
       console.log(`  roles: ${Object.entries(wf.assignedRoles).map(([r, a]) => `${r}=${a}`).join(", ")}`);
       if (!wf.proposals.length) { console.log("  proposals: (none)"); continue; }
       for (const p of wf.proposals) {

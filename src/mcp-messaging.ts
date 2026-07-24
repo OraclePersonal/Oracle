@@ -8,6 +8,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { MessageStore } from "./messaging/store.js";
 import { AgentRegistry } from "./messaging/registry.js";
 import { TaskStore } from "./tasks/store.js";
+import { SwarmStore } from "./orchestrator/swarmStore.js";
+import { CoordinationService } from "./coordination/service.js";
 import { registerMessagingTools, MESSAGING_INSTRUCTIONS } from "./mcp/messagingTools.js";
 import { registerTaskTools, TASK_INSTRUCTIONS } from "./mcp/taskTools.js";
 import { VERSION } from "./version.js";
@@ -30,7 +32,14 @@ const server = new McpServer(
   { instructions: `${MESSAGING_INSTRUCTIONS} ${TASK_INSTRUCTIONS}` }
 );
 const messages = new MessageStore(homeDir);
+const tasks = new TaskStore(homeDir);
 const registry = new AgentRegistry(homeDir);
 registerMessagingTools(server, messages, registry);
-registerTaskTools(server, new TaskStore(homeDir), messages, registry);
+registerTaskTools(
+  server,
+  tasks,
+  messages,
+  registry,
+  new CoordinationService(tasks, messages, new SwarmStore(homeDir))
+);
 await server.connect(new StdioServerTransport());

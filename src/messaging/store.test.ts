@@ -129,4 +129,25 @@ describe("MessageStore", () => {
     const acked = await store.ack("b", ["20260722000000000-deadbeef"]);
     expect(acked).toEqual(["20260722000000000-deadbeef"]);
   });
+
+  test("coordination events create one deterministic task-linked message", async () => {
+    const input = {
+      from: "lead",
+      to: "builder",
+      body: "assigned",
+      taskId: "task-1",
+      workflowId: "swarm_1",
+      coordinationEventId: "event-1"
+    };
+    const first = await store.send(input);
+    const replay = await new MessageStore(home).send(input);
+
+    expect(replay.id).toBe(first.id);
+    expect(await store.listForTask("task-1")).toHaveLength(1);
+    expect(replay).toMatchObject({
+      taskId: "task-1",
+      workflowId: "swarm_1",
+      coordinationEventId: "event-1"
+    });
+  });
 });

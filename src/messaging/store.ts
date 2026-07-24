@@ -29,6 +29,10 @@ export interface AgentMessage {
   body: string;
   /** id of the message this replies to, for threading. */
   replyTo?: string;
+  /** Task/workflow linkage used by the durable coordination outbox. */
+  taskId?: string;
+  workflowId?: string;
+  coordinationEventId?: string;
   /** Agent names that have acknowledged this message. */
   readBy: string[];
 }
@@ -39,6 +43,9 @@ export interface SendInput {
   body: string;
   subject?: string;
   replyTo?: string;
+  taskId?: string;
+  workflowId?: string;
+  coordinationEventId?: string;
 }
 
 function generateId(timestamp: string): string {
@@ -69,19 +76,32 @@ export class MessageStore {
 
   async send(input: SendInput): Promise<AgentMessage> {
     await fs.mkdir(this.dir(), { recursive: true });
+    const deterministicId = input.coordinationEventId
+      ? `coord-${crypto.createHash("sha256")
+        .update(`${input.taskId ?? ""}:${input.coordinationEventId}`)
+        .digest("hex")
+        .slice(0, 24)}`
+      : undefined;
+    if (deterministicId) {
+      const existing = await this.get(deterministicId);
+      if (existing) return existing;
+    }
     // Preserve call order even when several messages are created within the
     // same millisecond. This keeps inbox tail/limit behavior deterministic.
     const timestampMs = Math.max(Date.now(), this.lastTimestampMs + 1);
     this.lastTimestampMs = timestampMs;
     const timestamp = new Date(timestampMs).toISOString();
     const msg: AgentMessage = {
-      id: generateId(timestamp),
+      id: deterministicId ?? generateId(timestamp),
       ts: timestamp,
       from: input.from,
       to: input.to,
       subject: input.subject,
       body: input.body,
       replyTo: input.replyTo,
+      taskId: input.taskId,
+      workflowId: input.workflowId,
+      coordinationEventId: input.coordinationEventId,
       readBy: [],
     };
     await this.writeAtomic(this.filePath(msg.id), msg);
@@ -180,6 +200,11 @@ export class MessageStore {
       .filter((m) => !q || m.body.toLowerCase().includes(q) || (m.subject ?? "").toLowerCase().includes(q))
       .slice(-limit)
       .reverse(); // newest first — recency matters when recalling
+  }
+
+  /** All messages linked to a task, oldest first. */
+  async listForTask(taskId: string): Promise<AgentMessage[]> {
+    return (await this.readAll()).filter((message) => message.taskId === taskId);
   }
 
   /** Full thread for a message: walk up to the root, then collect all replies below it. */

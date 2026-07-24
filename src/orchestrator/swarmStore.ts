@@ -40,6 +40,10 @@ export class SwarmStore {
     try {
       const workflow = JSON.parse(await fs.readFile(this.filePath(id), "utf8")) as SwarmWorkflow;
       if (!Array.isArray(workflow.proposals)) workflow.proposals = [];
+      if (!Array.isArray(workflow.taskIds)) workflow.taskIds = [];
+      if (!Array.isArray(workflow.messageIds)) workflow.messageIds = [];
+      if (!workflow.status) workflow.status = workflow.taskIds.length ? "active" : "initializing";
+      if (!workflow.recovery) workflow.recovery = { attempts: 0 };
       return workflow;
     } catch {
       return null;
@@ -69,5 +73,9 @@ export class SwarmStore {
       if (proposal) return { workflow, proposal };
     }
     return null;
+  }
+
+  async findByTask(taskId: string): Promise<SwarmWorkflow | null> {
+    return (await this.list()).find((workflow) => workflow.taskIds.includes(taskId)) ?? null;
   }
 }

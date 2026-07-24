@@ -60,7 +60,7 @@ npx -p @oraclepersonal/oracle oracle ask "review this" -f "src/**/*.ts"
 | 14 | [Changelog](/CHANGELOG.md) | Release notes and version history |
 | 15 | [Init](getting-started.md#initialize-the-workspace) | Bootstrap `.oracle/` for a new project |
 
-## MCP Tools (49)
+## MCP Tools
 
 Memory (18) · Docs & web (7) · Task tracking (8) · Messaging (8) ·
 Consultation & agent (5) · Identity & config (3) · Oracle profiles & skills (4) ·

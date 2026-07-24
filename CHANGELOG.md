@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-24
+
 ### Added
+- Durable coordination outbox linking every task lifecycle notification to its persisted message
+- Persistent swarm-to-task linkage through `primaryTaskId`, `taskIds`, and `messageIds`
+- `oracle swarm recover` and `oracle_coordination_recover` for idempotent workflow recovery
+- Automatic migration of legacy swarm proposals into the TaskStore consensus source of truth
 - Persistent cron task system (`oracle schedule`) with `list`, `add`, `remove`, `run`, `watch`, `--once` commands
 - Agent checkpoint store with list/resume/delete support
 - Agent plan mode (`--plan`) for read-only investigation before execution
@@ -36,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `docs/index.md` as a real GitHub Pages landing page
 
 ### Changed
+- TaskStore is now the canonical consensus store; SwarmStore keeps a recoverable workflow projection
+- Coordination messages carry `taskId`, `workflowId`, and `coordinationEventId`
+- Package version advanced to Coordination 0.1.0
 - `docs/AGENT.md` — rewritten with current CLI flags, checkpoint/resume, self-review, source map
 - `docs/MCP-STANDARDS.md` — rewritten with 49 tools, new categories, error handling checklist
 - `docs/index.md` — fixed duplicate entries, added CLI Reference and Troubleshooting links
@@ -57,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README and docs links updated to use `docs/` relative paths
 
 ### Fixed
+- Interrupted task notifications resume without duplicate messages
+- Legacy swarm workflows recover missing linked tasks and proposal ownership
 - `oracle_msg_inbox` wait mode timeout and re-arm behavior
 - Agent `stdout` pollution breaking MCP protocol framing
 - Fast-fallback orchestrator supervisor timeouts

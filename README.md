@@ -73,7 +73,7 @@ Session B: Claude Code → Oracle
 | 💬 **Consult** | Ask a question with your real project context (code files + memory + docs + web search/fetch). Get a cited answer back. | MCP: `oracle_ask`. CLI: `oracle ask "question" -f "src/**/*.ts"`. Agent can search memory, read files, fetch URLs, then answer. |
 | 🛠️ **Act** | Autonomous agent with bash tool + file R/W + plan mode + self-review + resume. **Sandbox: shell + filesystem, confined to workspace.** Full audit trail of every mutation (who, when, what changed, hash). | MCP: `oracle_agent`. CLI: `oracle agent "write a test for X" --plan --review`. Agent loops until done; logs all file changes. |
 | 📨 **Coordinate** | Inter-agent message bus on one machine. Agents send/receive messages, reply in threads, mark as read. Broadcasts. Presence roster (who's active). One-call onboarding (register → see who else is there + your unread work). | MCP: `oracle_msg_*`. CLI: `oracle msg send/inbox/ack/watch`. Auto-injected instructions tell every agent to register before starting work. Presence is automatic (every action updates lastSeen). |
-| ✅ **Verify** | Task tracker on top of the message bus: create + assign work with a checklist, log progress notes, and submit for review — which **blocks** if any checklist item is unchecked and auto-reports to the task creator. Reviewer approves (done) or rejects with a note (bounces back). | MCP: `oracle_task_*`. CLI: `oracle task create/update/check/submit/close/list`. |
+| ✅ **Verify** | Durable task/message coordination: lifecycle notifications are persisted before delivery, linked back to their Task and Swarm, and recover safely without duplicates. Checklist submit still **blocks** while verification is incomplete. | MCP: `oracle_task_*`, `oracle_coordination_recover`. CLI: `oracle task ...`, `oracle swarm .../recover`. |
 | ⏰ **Schedule** | Persistent cron task system — define, list, run, and watch scheduled tasks. Tasks survive restarts and run via `oracle schedule watch` daemon. | MCP: `oracle_schedule_*`. CLI: `oracle schedule list/add/remove/run/watch`. |
 
 ---
@@ -264,9 +264,12 @@ oracle task submit <id> -a builder --summary "limiter implemented, tested, docum
 oracle task close <id> -a lead                        # approve
 oracle task close <id> -a lead --reject --note "..."  # send back
 oracle task list --assignee builder --active
+oracle swarm recover                                  # replay interrupted notifications
 ```
 
-**Storage:** `~/.oracle/tasks/` (atomic JSON, one file per task).
+**Storage:** `~/.oracle/tasks/` and `~/.oracle/swarms/` (atomic JSON, one file
+per task/workflow) linked to deterministic coordination messages in
+`~/.oracle/messages/`.
 
 #### ASCII work board
 
@@ -285,7 +288,7 @@ assigned tasks to a larger Lead-created TODO.
 
 ---
 
-## MCP Tools (49 Total)
+## MCP Tools
 
 ### Memory (18 tools)
 `oracle_memory_*` — remember, search, scored_search, list, update, clear, consolidate,
@@ -295,12 +298,15 @@ query/path/prune/stats.
 ### Consultation & Agent (5 tools)
 `oracle_ask`, `oracle_agent`, `oracle_sessions`, `oracle_session_get`, `oracle_doctor`
 
-### Messaging & Coordination (8 tools)
-`oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`, `oracle_msg_ack`, `oracle_msg_thread`, `oracle_msg_search`, `oracle_msg_heartbeat`
+### Messaging & Coordination (10 tools)
+`oracle_msg_register`, `oracle_msg_agents`, `oracle_msg_send`, `oracle_msg_inbox`,
+`oracle_msg_ack`, `oracle_msg_thread`, `oracle_msg_search`, `oracle_msg_heartbeat`,
+`oracle_msg_stale`, `oracle_msg_unregister`
 
-### Task Planning & Tracking (8 tools)
+### Task Planning, Consensus & Recovery (11 tools)
 `oracle_task_create`, `oracle_task_board`, `oracle_task_list`, `oracle_task_get`, `oracle_task_update`,
-`oracle_task_checklist`, `oracle_task_submit`, `oracle_task_close`
+`oracle_task_checklist`, `oracle_task_submit`, `oracle_task_close`, `oracle_task_propose`,
+`oracle_task_vote`, `oracle_coordination_recover`
 
 ### Identity & Config (3 tools)
 `oracle_identity_setup`, `oracle_identity_show`, `oracle_persona_set`
@@ -360,7 +366,9 @@ Oracle MCP Server (src/mcp/)
 ├─ Messaging Bus (src/messaging/)
 │  └─ File-backed store + registry + watcher + CLI + onboarding hooks
 ├─ Task Tracker (src/tasks/)
-│  └─ File-backed store: plan/assign/verify/report, layered on messaging
+│  └─ File-backed store + durable notification outbox
+├─ Coordination Service (src/coordination/)
+│  └─ Links Task ↔ Message ↔ Swarm, reconciles consensus, recovers workflows
 ├─ Agent Sandbox (src/agent/)
 │  └─ File R/W, bash tool, audit trail, plan mode, self-review, resume, checkpoints
 ├─ Scheduler (src/scheduler/)
@@ -380,7 +388,7 @@ CLI (src/cli.ts)
 └─ designed for scripting & local use
 
 Standalone Coordination Server (src/mcp-messaging.ts)
-├─ The 6 oracle_msg_* + 8 oracle_task_* tools
+├─ 10 oracle_msg_* + 10 oracle_task_* + oracle_coordination_recover
 ├─ No provider/memory/agent stack
 └─ for agents that only need to coordinate, not consult or act
 ```
@@ -390,6 +398,7 @@ Standalone Coordination Server (src/mcp-messaging.ts)
 ~/.oracle/
 ├─ messages/              # Inter-agent message store (atomic JSON per message)
 ├─ tasks/                 # Task tracker (atomic JSON per task, one file each)
+├─ swarms/                # Workflow, task/message links, recovery metadata
 ├─ scheduler/             # Cron tasks (atomic JSON per task)
 ├─ agents/                # Presence registry (one JSON per registered agent)
 ├─ memory/                # Persistent memory (facts, insights, wiki, graph)

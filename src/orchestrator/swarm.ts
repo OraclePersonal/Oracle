@@ -14,6 +14,15 @@ export interface SwarmWorkflow {
   title: string;
   assignedRoles: Record<AgentRole, string>; // Role -> Agent ID
   proposals: TaskProposal[];
+  status: "initializing" | "active" | "blocked" | "completed";
+  taskIds: string[];
+  messageIds: string[];
+  primaryTaskId?: string;
+  recovery: {
+    attempts: number;
+    lastRecoveredAt?: string;
+    lastError?: string;
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -39,6 +48,10 @@ export class SwarmOrchestrator {
       title,
       assignedRoles: assignedRoles as Record<AgentRole, string>,
       proposals: [],
+      status: "initializing",
+      taskIds: [],
+      messageIds: [],
+      recovery: { attempts: 0 },
       createdAt: now,
       updatedAt: now,
     };
